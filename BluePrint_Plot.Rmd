@@ -1,0 +1,79 @@
+---
+title: "BluePrint_data_Plot"
+author: "Mengshu"
+date: "4/11/2019"
+output: html_document
+---
+
+Plotting BluePrint Blueprint data, controlling for sample order and axes 
+
+```{r}
+library(limma)
+library(dplyr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+library(magrittr)
+library(tidyr)
+library(data.table) # %like% function
+```
+
+```{r}
+C3AR1 <- read.table("BP-DataPortal_Gene C3AR1.csv",sep="\t",header=TRUE)
+C5AR1 <- read.table("BP-DataPortal_Gene C5AR1.csv",sep="\t",header=TRUE)
+CX3CR1 <- read.table("BP-DataPortal_Gene CX3CR1.csv",sep="\t",header=TRUE)
+GPR34 <- read.table("BP-DataPortal_Gene GPR34.csv",sep="\t",header=TRUE)
+P2RY12 <- read.table("BP-DataPortal_Gene P2RY12.csv",sep="\t",header=TRUE)
+AQP1 <- read.table("BP-DataPortal_Gene Expression AQP1.csv",sep="\t",header=TRUE)
+AQP4 <- read.table("BP-DataPortal_Gene Expression AQP4.csv",sep="\t",header=TRUE)
+HCK <- read.table("BP-DataPortal_Gene HCK.csv",sep="\t",header=TRUE)
+head(C3AR1)
+targets <- rbind(C3AR1,C5AR1,CX3CR1,GPR34,P2RY12,HCK,AQP1,AQP4)
+targets_df <- data.frame(targets) %>% dplyr::filter(gene.name !="AQP4-AS1") %>% dplyr::filter (gene.name !="RP5-877J2.1")
+targets_df %>% dplyr::select(gene.name) %>% table
+targets_df
+```
+
+```{r fig.height=6, fig.width=10}
+library(ggplot2)
+targets_filter <- targets_df %>% group_by(Cell.Types) %>% mutate(mean_RPKM=mean(FPKM)) %>% ungroup() %>% dplyr::filter(mean_RPKM >= 5) %>% dplyr::select(-mean_RPKM)
+
+ggplot(targets_df, aes(x= Cell.Types,y=FPKM,fill=Cell.Types, legend=FALSE)) +
+  geom_point() +
+  geom_boxplot() +
+  facet_wrap("gene.name",ncol=1, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) 
+
+ggplot(targets_filter %>% dfilter(gene.name=="HCK"), aes(x= Cell.Types,y=FPKM,fill=Cell.Types, legend=FALSE)) + # | gene.name=="C5AR1"
+  geom_point() +
+  geom_boxplot() +
+  scale_x_discrete(position = "top") +
+  facet_wrap("gene.name",ncol=1, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 0),legend.position = "none",plot.margin = unit(c(1,5,1,1), "cm")) 
+
+ggplot(targets_filter %>% dplyr::filter(gene.name=="AQP1"), aes(x= Cell.Types,y=FPKM,fill=Cell.Types, legend=FALSE)) +
+  geom_point() +
+  geom_boxplot() +
+  scale_x_discrete(position = "top") +
+  coord_flip() +
+  #facet_wrap("gene.name",ncol=2, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), legend.position = "none",plot.margin = unit(c(1,5,1,1), "cm")) 
+ggsave("BluePrint_C3AR1_C5AR1.jpg", width= 12, height=12, dpi=600, plot= last_plot(), units = "in")
+
+targets_filter %>% dfilter(gene.name=="P2RY12") %>% group_by(Cell.Types) %>% summarize(meanFPKM=mean(FPKM)) %>% arrange(meanFPKM)
+
+ggplot(targets_filter, aes(x= Cell.Types,y=FPKM,fill=Cell.Types, legend=FALSE)) +
+  geom_point() +
+  geom_boxplot() +
+  scale_x_discrete(position = "top") +
+  facet_wrap("gene.name",ncol=1, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 0),legend.position = "none",plot.margin = unit(c(1,5,1,1), "cm")) 
+ggsave("BluePrint_AQP1.jpg", width= 10, height=6, dpi=600, plot= last_plot(), units = "in")
+targets_filter
+```
+
+Load Silpa's BluePrint data
+```{r}
+load("immQ.batchCorrected.rdata")
+head(immuneSample)
+str(immuneSample)
+```
+

@@ -1,0 +1,265 @@
+---
+title: "combineImmuneCellData.Rmd"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Combine Immune Cell Data
+We generated/obtained RNA-Seq data from many different immune cell subsets which were generated in-house as well as from public datasets.  In this document, we note the steps taken to combine the corresponding datasets and preforming batch correction. The final product of this analysis is generating an rdata object that has the expression of all the associated datasets which can be interogated for specific gene expression
+
+**Load Libraries**
+```{r}
+library(data.table)
+library(tidyverse)
+
+```
+
+**Load Blueprint Data**
+We downloaded the fastq files from EGA for Blueprint.  These data were then quantified using our RNA-Seq analysis pipeline.  Here, we load the quantified data and create a corresponding sample metadata file that can be used for further analysis
+```{r}
+samples_bp <- fread(file.path("/Volumes/extra/publicDataSets/BluePrint/metadata/sample.info"), header = TRUE,sep="\t")
+head(samples_bp)
+files_bp <- file.path("/Volumes/extra/publicDataSets/BluePrint/kallistoSampleMap/", samples_bp$Sample, "abundance.tsv")
+names(files_bp) <- samples_bp$Sample
+all(file.exists(files_bp))
+
+data_bp = data.table(sapply(samples_bp$Sample, function (x)   log2(fread(paste0("/Volumes/extra/publicDataSets/BluePrint/kallistoSampleMap/",as.character(x),"/abundance.tsv"))[,tpm]+0.001) ))
+data_bp[,Transcript:=fread(paste0("/Volumes/extra/publicDataSets/BluePrint/kallistoSampleMap/",samples_bp$Sample[1],"/abundance.tsv"))$target_id,]
+
+#Add Dataset column
+samples_bp[,Dataset:="BLUEPRINT",]
+
+```
+
+**Load Old Sample Info File For Blueprint**
+```{r}
+load("/Volumes/data/landdump/ByGene/BLUEPRINT.byGene.20160425.rdata")
+sample.info=data.table(sample.info)
+bp.sample = unique(sample.info[,c("Cell.Type","Group"),with=FALSE])
+rm(countByGene)
+rm(fpkmByGene)
+rm(genes)
+rm(sample.info)
+
+samples_bp = samples_bp[,c("Sample","CellType","Dataset"),with=FALSE]
+setkey(bp.sample,"Cell.Type")
+samples_bp[,CellGroup:=bp.sample[CellType]$Group,]
+
+#Fill in Group Values for NAs
+samples_bp[CellType == "neutrophilic myelocyte",Group:="Myelocyte",]
+samples_bp[CellType == "naive B cell",Group:="Naive-B-cell",]
+samples_bp[CellType == "effector memory CD8-positive, alpha-beta T cell, terminally differentiated",Group:="EM-CD8-pos",]
+samples_bp[CellType == "plasma cell",Group:="Plasma cell",]
+samples_bp[CellType == "mature eosinophil",Group:="Eosinophil",]
+samples_bp[CellType == "blast forming unit erythroid",Group:="Erythroid",]
+samples_bp[CellType == "neutrophilic metamyelocyte",Group:="Metamyelocyte",]
+samples_bp[CellType == "segmented neutrophil of bone marrow",Group:="Neutrophil",]
+samples_bp[CellType == "late basophilic and polychromatophilic erythroblast",Group:="Erythroblast",]
+samples_bp[CellType == "unswitched memory B cell",Group:="Memory-B-cell",]
+samples_bp[CellType == "CD3-negative, CD4-positive, CD8-positive, double positive thymocyte",Group:="Thymocyte",]
+samples_bp[CellType == "band form neutrophil",Group:="Neutrophil",]
+samples_bp[CellType == "germinal center B cell",Group:="B-cell",]
+samples_bp[CellType == "mature conventional dendritic cell",Group:="DC-conventional",]
+samples_bp[CellType == "mesenchymal stem cell of the bone marrow",Group:="Progenitor",]
+samples_bp[CellType == "CD3-positive, CD4-positive, CD8-positive, double positive thymocyte",Group:="Thymocyte",]
+samples_bp[CellType == "immature conventional dendritic cell",Group:="DC-conventional",]
+
+#Modify Group Assingments..so that they match cofactor data
+samples_bp[CellType == "CD14-positive, CD16-negative classical monocyte",Group:="Monocyte",]
+samples_bp[CellType == "CD34-negative, CD41-positive, CD42-positive megakaryocyte cell",Group:="Megakaryocyte",]
+samples_bp[CellType == "CD38-negative naive B cell",Group:="Naive-B-cell",]
+samples_bp[CellType == "CD4-positive, alpha-beta T cell",Group:="CD4-pos",]
+samples_bp[CellType == "CD8-positive, alpha-beta T cell",Group:="CD8-pos",]
+samples_bp[CellType == "alternatively activated macrophage",Group:="Macrophage",]
+samples_bp[CellType == "central memory CD4-positive, alpha-beta T cell",Group:="CM-CD4-pos",]
+samples_bp[CellType == "central memory CD8-positive, alpha-beta T cell",Group:="CM-CD8-pos",]
+samples_bp[CellType == "class switched memory B cell",Group:="Memory-B-cell",]
+samples_bp[CellType == "common lymphoid progenitor",Group:="Progenitor",]
+samples_bp[CellType == "common myeloid progenitor",Group:="Progenitor",]
+samples_bp[CellType == "conventional dendritic cell",Group:="DC-conventional",]
+samples_bp[CellType == "cytotoxic CD56-dim natural killer cell",Group:="NK cell",]
+samples_bp[CellType == "effector memory CD4-positive, alpha-beta T cell",Group:="EM-CD4-pos",]
+samples_bp[CellType == "effector memory CD8-positive, alpha-beta T cell",Group:="EM-CD8-pos",]
+samples_bp[CellType == "endothelial cell of umbilical vein (proliferating)",Group:="Endothelial",]
+samples_bp[CellType == "endothelial cell of umbilical vein (resting)",Group:="Endothelial",]
+samples_bp[CellType == "erythroblast",Group:="Erythroblast",]
+samples_bp[CellType == "granulocyte monocyte progenitor cell",Group:="Monocyte",]
+samples_bp[CellType == "hematopoietic multipotent progenitor cell",Group:="Progenitor",]
+samples_bp[CellType == "hematopoietic stem cell",Group:="Progenitor",]
+samples_bp[CellType == "inflammatory macrophage",Group:="Macrophage",]
+samples_bp[CellType == "macrophage",Group:="Macrophage",]
+samples_bp[CellType == "mature neutrophil",Group:="Neutrophil",]
+samples_bp[CellType == "megakaryocyte-erythroid progenitor cell",Group:="Progenitor",]
+samples_bp[CellType == "memory B cell",Group:="Memory-B-cell",]
+samples_bp[CellType == "monocyte",Group:="Monocyte",]
+samples_bp[CellType == "myeloid cell",Group:="Myeloid",]
+samples_bp[CellType == "regulatory T cell",Group:="Tregs",]
+
+```
+
+
+**Load Cofactor Immune Cell Data**
+```{r}
+samples1 <- fread(file.path("/Volumes/data/internal/20161219_Cofactor_collaboration/samples.metadata.filtered"), header = TRUE,sep="\t")
+head(samples1)
+
+#Remove B-Cell , NK, DC cells samples.  Contamination issue..use new datset
+rmvTerms = c("Plasma-B-cells-D1","Plasma-B-cells-D2","Plasma-B-cells-D3","Nk-D1","Nk-D2","Nk-D3","Naive-B-cell-D1","Naive-B-cell-D2","Naive-B-cell-D3","Memory-B-cell-D1","Memory-B-cell-D2",
+             "Memory-B-cell-D3","DCs-D1","DCs-D2","DCs-D3","Activated-B-cells-D1","Activated-B-cells-D2","Activated-B-cells-D3")
+
+samples1 = samples1[!(SampleName %in% rmvTerms)]
+
+files1 <- file.path("/Volumes/data/internal/20161219_Cofactor_collaboration/kallisto/", samples1$SampleName, "abundance.tsv")
+names(files1) <- samples1$SampleName
+all(file.exists(files1))
+
+samples2 <- fread(file.path("/Volumes/extra/20170815_Cofactor/samples.metadata"), header = TRUE,sep="\t")
+head(samples2)
+samples2[CellType == "B-Activated" ]$CellType = "Activated-B-cells"
+samples2[CellType == "B-Memory" ]$CellType = "Memory-B-cell"
+samples2[CellType == "B-Na\xefve" ]$CellType = "Naive-B-cell"
+
+files2 <- file.path("/Volumes/extra/20170815_Cofactor/kallisto/", samples2$SampleName, "abundance.tsv")
+names(files2) <- samples2$SampleName
+all(file.exists(files2))
+
+cofac1 = data.table(sapply(samples1$SampleName, function (x)   log2(fread(paste0("/Volumes/data/internal/20161219_Cofactor_collaboration/kallisto/",as.character(x),"/abundance.tsv"))[,tpm] +0.001)))
+
+cofac2 = data.table(sapply(samples2$SampleName, function (x)   log2(fread(paste0("/Volumes/extra/20170815_Cofactor/kallisto/",as.character(x),"/abundance.tsv"))[,tpm]+0.001) ))
+
+# Merge data
+mergedCofac = cbind(cofac1,cofac2)
+gmp = fread("/Volumes/data/internal/20161219_Cofactor_collaboration/kallisto/Activated-B-cells-D1/abundance.tsv")
+mergedCofac[,Transcript:=gmp$target_id,]
+
+#Combine sample info
+samples_cofac = rbind(samples1,samples2)
+setnames(samples_cofac,"SampleName","Sample")
+setnames(samples_cofac,"CellType","Group")
+setnames(samples_cofac,"CellDetailedType","CellType")
+
+```
+
+**Merge the two datasets**
+```{r}
+immuneCell = merge(mergedCofac,data_bp,by="Transcript")
+immuneSample = rbind(samples_bp[,c("Sample","CellType","Group","Dataset"),with=FALSE],samples_cofac[,c("Sample","CellType","Group","Dataset"),with=FALSE])
+immuneSample[CellType == "B-Na\xefve"]$CellType = "B-Naive"
+
+#Convert to original scale from log2 scale
+s=immuneCell$Transcript
+immuneCell[,Transcript:=NULL,]
+immuneCell[,(names(immuneCell)[1:dim(immuneCell)[2]]):= lapply(.SD, function(x) return(2^as.numeric(x))),]
+immuneCell[,Transcript:=s,]
+
+#Map Transcript to Gene
+geneMap = fread("/Volumes/extra/UCSC_XENA_PublicDataHub/UCSC_Toil_Pipeline/gencode.v23.annotation.transcript.probemap")
+head(geneMap)
+setkey(geneMap,`#id`)
+
+immuneCell[,Gene:=geneMap[Transcript]$gene,]
+immuneGeneData = immuneCell[,lapply(.SD,sum,na.rm=TRUE),.SDcols = -("Transcript"),by=Gene]
+g=immuneGeneData$Gene
+immuneGeneData[,Gene:=NULL,]
+immuneGeneData = immuneGeneData[,(names(immuneGeneData)):= lapply(.SD, function(x) return(log2(as.numeric(x)+0.001))),]
+immuneGeneData[,Gene:=g,]
+
+```
+
+**Quantile Normalize Data**
+```{r}
+#Quantile Normalization
+library(preprocessCore)
+r=immuneGeneData$Gene
+immuneGeneData[,Gene:=NULL,]
+
+immuneQ=normalize.quantiles(data.matrix(immuneGeneData))
+rownames(immuneQ)=r
+colnames(immuneQ) = names(immuneGeneData)
+immuneGeneData[,Gene:=r,]
+
+immuneQ=immuneQ[!is.na(rownames(immuneQ)),]
+
+```
+
+**Batch Correct for Dataset**
+```{r}
+library(sva)
+pheno = data.frame(immuneSample[,c("Dataset"),with=FALSE])
+rownames(pheno)=immuneSample$Sample
+
+#ComBat "Dataset"
+batch = pheno$Dataset
+modcombat = model.matrix(~1, data=pheno)
+combat_edata = ComBat(dat=immuneQ, batch=batch, mod=modcombat)
+
+g=rownames(combat_edata)
+immQ = data.table(combat_edata)
+immQ[,Gene:=g,]
+
+```
+
+
+**PCA Plot**
+We will use ggfortify and ggiraph
+```{r}
+source("~/Documents/code/pcaPlot.R")
+g=immQ$Gene
+immQ[,Gene:=NULL,]
+c=names(immQ)
+
+I = data.matrix(t(immQ))
+rownames(I)=c
+colnames(I)=g
+#immQ[,Gene:=g,]
+
+pheno = data.frame(immuneSample)
+rownames(pheno)=immuneSample$Sample
+
+#BP samples
+bps = immuneSample[Dataset == "BLUEPRINT"]$Sample
+I_bps = I[bps,]
+
+#FLX Samples
+flxs = immuneSample[Dataset != "BLUEPRINT"]$Sample
+I_flxs = I[flxs,]
+
+#Macrophage
+macS = immuneSample[Group == "Macrophage"]$Sample
+
+#CD8
+cd8 = immuneSample[Group %like% "CD8"]$Sample
+
+library(ggiraph)
+PC = prcomp(data.matrix(I),scale. = TRUE,center = TRUE)
+PCi = data.frame(cbind(PC$x,pheno))
+
+percentage <- round((PC$sdev) / sum((PC$sdev)) * 100, 2)
+percentage <- paste( colnames(PCi), "(", paste( as.character(percentage), "%", ")", sep="") )
+
+
+p=ggplot(PCi,aes(x=PC1,y=PC2,col=Dataset))
+p=p+geom_point_interactive(aes(tooltip = CellType), size = 2) 
+p=p+theme(legend.position = "none") + xlab(percentage[1]) + ylab(percentage[2])
+ggiraph(code = print(p) )
+
+immQ[,Gene:=g,]
+  
+```
+
+The PCA above shows that COMBAT batch correction doesn't completely remove all batch effects.  There is also donor to donor variability in the data in both BLUEPRINT as well as our in-house data
+
+For now, we will combine and use both the datasets
+
+**Save File**
+```{r}
+save(immQ,file="immQ.batchCorrected.rdata")
+save(immuneSample,file="immuneSample.rdata")
+```
+
+
+
+

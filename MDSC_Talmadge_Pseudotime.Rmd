@@ -1,0 +1,2655 @@
+---
+title: "MDSC_Talmadge"
+author: "Mengshu"
+date: "10/14/2019"
+output: html_document
+---
+
+Sequencing library pooling calculations: 10:1 sample ratio, accounting for fragment size
+" ,"cDNA" ,"CITE" ,"Ratio" ,"
+" ,"" ,"" ,"" ,"
+Size (bp)" ,"400" ,"210" ,"1.9 to 1" ,"
+Read pairs" ,"30000" ,"5000" ,"6 to 1" ,"
+" ,"" ,"" ,"Final Ratio (ng/ng)" ,"11.4 to 1
+
+```{r}
+library(Seurat)
+#install.packages("Seurat", lib="/Library/Frameworks/R.framework/Versions/3.5/Resources/library")
+#install.packages("Seurat")
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+#library(limma) #quantileNormalization
+library(tibble)
+#library("DESeq2")
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("D:/FLX/Files_from_Gene/R_functions.r")
+install.packages("hdf5r")
+devtools::install_github("hhoeflin/hdf5r")
+```
+
+#####################
+Use Monocle2
+Monocle3 is still buggy and has fewer features
+2.10.1 is loaded by default
+2.99.2 are installed
+#####################
+
+####################
+Seurat 3.1.4: this doesn't have the function AddSample that is available in Seurat 2, so I'm updating to 3.1.5 in order to Add in Batch2 to Batch1 without starting over from scratch for data analysis: April 23, 2020
+###################
+```{r}
+library(monocle3)
+sessionInfo()
+```
+batch1 now looks wrong when I load it!
+Try to update it?
+UpdateSeuratObject worked. Now it has the normal branching structure instead of just 3 assays
+```{r}
+batch1_update <- UpdateSeuratObject(batch1)
+```
+
+#######################
+Save and Load data
+#######################
+
+
+```{r}
+# batch 1
+save(batch1,file="/Volumes/Enterprise/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/batch1p.Robj")
+save(batch1_update,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/batch1_update.Robj")
+save(batch1,file="D:/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/batch1p.Robj")
+save(batch1_batch2, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/batch1_batch2.Robj")
+save(batch3, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/batch3.Robj")
+save(batch3b, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/batch3b.Robj")
+save(batch3c, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/batch3c.Robj")
+save(batch4, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/batch3c.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/batch1p.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/batch1_update.Robj")
+load("D:/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/batch1p.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+load("D:/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/batch3c.Robj")
+# These are seurat objects
+save(pbmc1,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/pbmc1.Robj")
+save(pbmc2,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/pbmc2.Robj")
+save(pdac1,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/pdac1.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/pbmc1.Robj") 
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/pbmc2.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/pdac1.Robj")
+
+# batch 2 these are raw objects
+save(cancer_pdac2,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/pdac2.Robj")
+save(cancer_aml1,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/aml1.Robj")
+save(normal_pbmc3,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/pbmc3.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/pdac2.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/aml1.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/pbmc3.Robj")
+#batch3
+save(cancer_pdac3,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/pdac3.Robj")
+save(cancer_aml2, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/aml2.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/pdac3.Robj")
+
+
+#myeloid
+save(batch4_myeloid, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_myeloid.Robj") 
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_myeloid.Robj") 
+load("D:/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_myeloid.Robj")
+```
+
+
+#######################
+Load in Cellranger data
+#######################
+
+
+Three files for each sample needs to be in a folder, with the exact names: "barcodes.tsv.gz" "features.tsv.gz" "matrix.mtx.gz"  
+Also, for 3.0.0, the files have to be gz (2.0.0 can be non-gz)
+
+How to load more than cDNA data
+https://satijalab.org/seurat/v3.0/multimodal_vignette.html
+
+Read10X message:
+"10X data contains more than one type and is being returned as a list containing matrices of each type."
+Within the object, there are two matrices: "Gene Expression" and "Antibody Capture" accessible with $
+```{r}
+list.files("/Volumes/Enterprise/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/Seurat_input/NPB1/")
+normal_pbmc1 <- Read10X(data.dir="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/Seurat_input/NPB1/") 
+normal_pbmc2 <- Read10X(data.dir="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/Seurat_input/NPB2/") 
+cancer_pdac1 <- Read10X(data.dir="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0/Seurat_input/PDAC1/") 
+```
+batch 2
+```{r}
+list.files("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/filtered_matrix")
+cancer_pdac2 <- Read10X_h5("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/filtered_matrix/CPB06DEC19-GEX_filtered_feature_bc_matrix.h5")
+cancer_aml1 <- Read10X_h5("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/filtered_matrix/CPB20DEC19-GEX_filtered_feature_bc_matrix.h5")
+normal_pbmc3 <- Read10X_h5("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch2/filtered_matrix/KCNPB20DEC19-GEX_filtered_feature_bc_matrix.h5")
+```
+Batch 3   
+```{r}
+cancer_aml2 <- Read10X_h5("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/cDNA3_13_20J_filtered_feature_bc_matrix.h5") 
+cancer_pdac3 <- Read10X_h5("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/cDNAPDAC3_6_20_filtered_feature_bc_matrix.h5") 
+
+```
+Batch 4  
+```{r}
+cancer_aml3 <- Read10X_h5("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/CPB04MAY20_CITE_filtered_feature_bc_matrix.h5") 
+```
+
+#######################
+Get rid of the mouse genes
+#######################
+
+Seurat suggests keeping the top 100, but since we didn't spike in any mouse genes, there's no point, filter them all out
+This automatically gets rid of the GRCh38_ prefix in front of all of the gene names as well. 
+```{r}
+normal_pbmc1$'Gene Expression' <- CollapseSpeciesExpressionMatrix(normal_pbmc1$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+normal_pbmc2$'Gene Expression' <- CollapseSpeciesExpressionMatrix(normal_pbmc2$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+cancer_pdac1$'Gene Expression' <- CollapseSpeciesExpressionMatrix(cancer_pdac1$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+```
+batch2
+```{r}
+cancer_pdac2$'Gene Expression' <- CollapseSpeciesExpressionMatrix(cancer_pdac2$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+cancer_aml1$'Gene Expression' <- CollapseSpeciesExpressionMatrix(cancer_aml1$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+normal_pbmc3$'Gene Expression' <- CollapseSpeciesExpressionMatrix(normal_pbmc3$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+```
+batch3
+```{r}
+cancer_aml2$'Gene Expression' <- CollapseSpeciesExpressionMatrix(cancer_aml2$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+cancer_pdac3$'Gene Expression' <- CollapseSpeciesExpressionMatrix(cancer_pdac3$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+```
+batch4
+```{r}
+cancer_aml3$'Gene Expression' <- CollapseSpeciesExpressionMatrix(cancer_aml3$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+```
+
+#######################
+Create Seurat Object
+#######################
+This has to be done in two steps, add the cDNA data first with CreateSeuratObject; the first assay is named "RNA"
+Then add the second type of data with CreateAssayObject as "CITE"
+
+
+CreateAssayObject message:
+"Feature names cannot have underscores ('_'), replacing with dashes ('-')"
+The CITE genes are named "gene-human", which is not very useful. Change "human" into "CITE"  
+https://github.com/satijalab/seurat/issues/1940 # This fixes the issue of filtering in the cDNA data loading, causing different cells to be present when adding the CITE data
+Lower the min.features to 50 from 200 default
+```{r fig.height=6, fig.width=8}
+pbmc1 <- CreateSeuratObject(counts= normal_pbmc1$'Gene Expression', project= "pbmc1", min.cells=1, min.features=50, assay="RNA") #Went from 6M cells to 1036 cells
+pbmc2 <- CreateSeuratObject(counts= normal_pbmc2$'Gene Expression', project= "pbmc2", min.cells=1, min.features=50, assay="RNA")
+pdac1 <- CreateSeuratObject(counts= cancer_pdac1$'Gene Expression', project= "pdac1", min.cells=1, min.features=50, assay="RNA")
+#normal_pbmc1$'Gene Expression'[1:5,1:5]
+#table(pbmc1$orig.ident)
+pbmc1[["CITE"]] <- CreateAssayObject(counts= normal_pbmc1$'Antibody Capture'[,colnames(x=pbmc1)])
+pbmc2[["CITE"]] <- CreateAssayObject(counts= normal_pbmc2$'Antibody Capture'[,colnames(x=pbmc2)])
+pdac1[["CITE"]] <- CreateAssayObject(counts= cancer_pdac1$'Antibody Capture'[,colnames(x=pdac1)])
+
+pbmc1$CITE@data@Dimnames[[1]]
+new_CITE_names <- rownames(pbmc1$CITE) %>% str_replace("human","CITE")
+#rownames(pbmc1$CITE) <- new_CITE_names #this gives the same gene names, but isn't the correct address to the slot
+pbmc1$CITE@data@Dimnames[[1]] <- new_CITE_names
+pbmc1$CITE@counts@Dimnames[[1]] <- new_CITE_names
+
+pbmc2$CITE@data@Dimnames[[1]] <- new_CITE_names
+pbmc2$CITE@counts@Dimnames[[1]] <- new_CITE_names
+
+pdac1$CITE@data@Dimnames[[1]] <- new_CITE_names
+pdac1$CITE@counts@Dimnames[[1]] <- new_CITE_names
+```
+
+batch 2
+
+```{r}
+pdac2  <- CreateSeuratObject(counts= cancer_pdac2$'Gene Expression', project= "pdac2", min.cells=1, min.features=50, assay="RNA")
+aml1  <- CreateSeuratObject(counts= cancer_aml1$'Gene Expression', project= "aml1", min.cells=1, min.features=50, assay="RNA")
+pbmc3 <- CreateSeuratObject(counts= normal_pbmc3$'Gene Expression', project= "pbmc3", min.cells=1, min.features=50, assay="RNA")
+
+pdac2[["CITE"]] <- CreateAssayObject(counts= cancer_pdac2$'Antibody Capture'[,colnames(x=pdac2)])
+aml1[["CITE"]] <- CreateAssayObject(counts= cancer_aml1$'Antibody Capture'[,colnames(x=aml1)])
+pbmc3[["CITE"]] <- CreateAssayObject(counts= normal_pbmc3$'Antibody Capture'[,colnames(x=pbmc3)])
+
+pdac2$CITE@data@Dimnames[[1]]
+new_CITE_names <- rownames(pdac2$CITE) %>% str_replace("human","CITE")
+#rownames(pbmc1$CITE) <- new_CITE_names #this gives the same gene names, but isn't the correct address to the slot
+pdac2$CITE@data@Dimnames[[1]] <- new_CITE_names
+pdac2$CITE@counts@Dimnames[[1]] <- new_CITE_names
+
+aml1$CITE@data@Dimnames[[1]] <- new_CITE_names
+aml1$CITE@counts@Dimnames[[1]] <- new_CITE_names
+
+pbmc3$CITE@data@Dimnames[[1]] <- new_CITE_names
+pbmc3$CITE@counts@Dimnames[[1]] <- new_CITE_names
+```
+
+batch3
+```{r}
+pdac3 <- CreateSeuratObject(counts= cancer_pdac3$'Gene Expression', project= "pdac3", min.cells=1, min.features=50, assay="RNA")
+#aml2 <- CreateSeuratObject(counts= cancer_aml2$'Gene Expression', project= "aml2", min.cells=1, min.features=200, assay="RNA")
+
+pdac3[["CITE"]] <- CreateAssayObject(counts= cancer_pdac3$'Antibody Capture'[,colnames(x=pdac3)])
+#aml2[["CITE"]] <- CreateAssayObject(counts= cancer_aml2$'Antibody Capture'[,colnames(x=aml2)])
+
+pdac3$CITE@data@Dimnames[[1]]
+new_CITE_names <- rownames(pdac3$CITE) %>% str_replace("human","CITE")
+pdac3$CITE@data@Dimnames[[1]] <- new_CITE_names
+pdac3$CITE@counts@Dimnames[[1]] <- new_CITE_names
+aml2$CITE@data@Dimnames[[1]] <- new_CITE_names
+aml2$CITE@counts@Dimnames[[1]] <- new_CITE_names
+```
+batch4
+```{r}
+aml3 <- CreateSeuratObject(counts= cancer_aml3$'Gene Expression', project= "aml3", min.cells=1, min.features=100, assay="RNA")
+
+aml3[["CITE"]] <- CreateAssayObject(counts= cancer_aml3$'Antibody Capture'[,colnames(x=aml3)])
+
+aml3$CITE@data@Dimnames[[1]]
+new_CITE_names <- rownames(aml3$CITE) %>% str_replace("human","CITE")
+aml3$CITE@data@Dimnames[[1]] <- new_CITE_names
+```
+
+####################
+
+Figure out the nFeature_RNA cutoff to catch neutrophils but not include non-cells
+
+####################
+
+
+```{r fig.height=4.5, fig.width=7}
+library(scales)
+VlnPlot(pbmc2, features=c("nFeature_RNA","nCount_RNA"),ncol =2,pt.size = 0.1, slot="counts")
+VlnPlot(batch4, features=c("nFeature_RNA","nCount_RNA"),ncol =2,pt.size = 0.1, slot="counts")
+FeatureScatter(pbmc2, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",pt.size=0.05)
+FetchData(pbmc2, vars= c("nCount_RNA","nFeature_RNA")) %>% ggplot(aes(nCount_RNA,nFeature_RNA,alpha=0.05,colour="orange")) + geom_jitter() + xlim(0,200) + ylim(0,200)
+
+FetchData(pbmc2, vars= c("nCount_RNA","nFeature_RNA")) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=150) + scale_fill_continuous(type="viridis", trans="log") + xlim(0,1000) + ylim(0,500)
+
+FetchData(pbmc2, vars= c("nCount_RNA","nFeature_RNA")) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,1000),oob=squish) 
+
+pbmc2[["nCount_RNA"]] %>% ggplot(aes(nCount_RNA)) + geom_histogram(breaks=c(seq(from=6,to=10000, by=1))) + scale_y_log10() 
+
+#Get a cell with 15 features
+cells_n15 <- FetchData(pbmc2, vars= "nCount_RNA") %>% tibble::rownames_to_column("Cell") %>% dfilter(nCount_RNA==15) %>% pull(Cell)
+GetAssayData(pbmc2, cells= cells_n15, slot="counts") %>% data.frame
+
+pbmc2[[pbmc2@meta.data$nCount_RNA==15]]
+pbmc2[["nCount_RNA"]] %>% ggplot(aes(nCount_RNA)) + geom_freqpoly(breaks=c(seq(from=60,to=1000, by=10)))
+pbmc2[["nFeature_RNA"]] %>% ggplot(aes(nFeature_RNA)) + geom_freqpoly(breaks=c(seq(from=60,to=500, by=10))) + coord_flip()
+pbmc2[["nCount_RNA"]] %>% ggplot(aes(nCount_RNA)) + geom_freqpoly(breaks=c(seq(from=6,to=50, by=1)))
+pbmc2[["nCount_RNA"]] %>% ggplot(aes(nCount_RNA)) + geom_freqpoly(breaks=c(seq(from=6,to=50, by=1))) 
+
+# all cells
+FetchData(batch3b, vars= c("nFeature_RNA","nCount_RNA","ident")) %>% dfilter(ident %in% c(2)) %>% ggplot(aes(nCount_RNA,nFeature_RNA, colour=ident)) + geom_point() + scale_y_log10() + scale_x_log10()
+
+# the side cluster of cells
+FetchData(batch3b, vars= c("nFeature_RNA","nCount_RNA","ident")) %>% dfilter(ident %in% c(0,2,16,17,19)) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=150) + scale_fill_continuous(type="viridis") + scale_y_log10() + scale_x_log10()
+#main cluster CD8 and NK
+FetchData(batch3b, vars= c("nFeature_RNA","nCount_RNA","ident")) %>% dfilter(ident %in% c(5,6)) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=150) + scale_fill_continuous(type="viridis") + scale_y_log10() + scale_x_log10()
+#neutrophils
+FetchData(batch3b, vars= c("nFeature_RNA","nCount_RNA","ident")) %>% dfilter(ident %in% c(1,3,4,8,12,13,14,15)) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=150) + scale_fill_continuous(type="viridis") + scale_y_log10() + scale_x_log10()
+# cut off neutrophils?
+FetchData(batch3b, vars= c("nFeature_RNA","nCount_RNA","ident")) %>% dfilter(ident %in% c(8,14,12,13)) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=150) + scale_fill_continuous(type="viridis") + scale_y_log10() + scale_x_log10()
+
+# all samples, only the low RNA count clusters
+FetchData(batch3b, vars= c("nFeature_RNA","nCount_RNA", "ident")) %>% dfilter(ident %in% c(1,3,4,8,12,13,14,15,18,20)) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis") + scale_y_log10() + scale_x_log10() # +xlim(0,200) + ylim(0,200)
+
+FetchData(batch3b, vars= c("nFeature_RNA","nCount_RNA", "ident")) %>% dfilter(ident %in% c(1,3,4,8,12,13,14,15,18,20)) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis") + scale_y_log10() + scale_x_log10() # +xlim(0,200) + ylim(0,200)
+
+FetchData(batch3c, vars= c("nFeature_RNA","nCount_RNA", "ident")) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis") + xlim(0,40000) + ylim(100,NA)
+FetchData(batch3c, vars= c("nFeature_RNA","nCount_RNA", "ident")) %>% ggplot(aes(nCount_RNA,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis") + scale_x_log10() + ylim(1,4000)  + scale_y_log10()
+
+FetchData(batch3c, vars= c("nFeature_RNA","nCount_RNA", "ident")) %>% dfilter(nFeature_RNA >= 75) %>% count
+```
+
+Calculate the Gini coefficient for each cell
+
+Downloaded the DescTools package, which has a Gini tool, but discovered that EdgeR tool that calculated Gini for a whole matrix by column
+```{r}
+library(viridis)
+library(edgeR)
+pbmc2_matrix <- as.matrix(pbmc2$RNA@data)
+pbmc1_matrix <- as.matrix(pbmc1$RNA@data)
+pdac1_matrix <- as.matrix(pdac1$RNA@data)
+batch3c_matrix <- as.matrix(batch3c$RNA@data)
+save(rna_matrix,file = "batch3b_data_matrix.rdata")
+load("batch3b_data_matrix.rdata")
+rna_matrix[1:5,1:5]
+pbmc2[["Gini_coeff"]] <- gini(pbmc2_matrix)
+pbmc1[["Gini_coeff"]] <- gini(pbmc1_matrix)
+pdac1[["Gini_coeff"]] <- gini(pdac1_matrix)
+batch3c[["Gini_coeff"]] <- gini(batch3c_matrix)
+
+pbmc2_gini <- gini(pbmc2_matrix)
+hist(gini(pbmc1_matrix))
+
+gMDSC_subset <- subset(batch3b, idents= 18)
+gMDSC_gini <-  gini(as.matrix(gMDSC_subset$RNA@data))
+hist(gMDSC_gini, breaks=18)
+plot.histogram
+
+
+FetchData(pbmc2, vars= c("nFeature_RNA","Gini_coeff")) %>% ggplot(aes(Gini_coeff,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", trans="log") + scale_y_log10() + ylim(0,NA) + xlim(0.9,1)
+
+FetchData(pbmc2, vars= c("nFeature_RNA","Gini_coeff")) %>% ggplot(aes(Gini_coeff,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", trans="log") + scale_y_log10() + ylim(0,300) + xlim(0.99,1)
+
+FetchData(pbmc1, vars= c("nFeature_RNA","Gini_coeff")) %>% ggplot(aes(Gini_coeff,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", trans="log") + scale_y_log10() + ylim(0,300) + xlim(0.99,1)
+
+FetchData(pdac1, vars= c("nFeature_RNA","Gini_coeff")) %>% ggplot(aes(Gini_coeff,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", trans="log") + scale_y_log10() + ylim(0,300) + xlim(0.99,1)
+
+FetchData(batch3c, vars= c("nFeature_RNA","Gini_coeff")) %>% ggplot(aes(Gini_coeff,nFeature_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", trans="log") + scale_y_log10() + ylim(0,300) + xlim(0.99,1)
+```
+Histogram
+```{r fig.height=1.5, fig.width=6}
+pbmc2[["nFeature_RNA"]] %>% ggplot(aes(nFeature_RNA)) + geom_freqpoly(breaks=c(seq(from=0,to=300, by=10))) + coord_flip()
+pbmc2[["Gini_coeff"]] %>% ggplot(aes(Gini_coeff)) + geom_freqpoly(breaks=c(seq(from=0.99,to=1, by=0.0001)))
+
+pbmc1[["nFeature_RNA"]] %>% ggplot(aes(nFeature_RNA)) + geom_freqpoly(breaks=c(seq(from=0,to=300, by=10))) + coord_flip()
+pbmc1[["Gini_coeff"]] %>% ggplot(aes(Gini_coeff)) + geom_freqpoly(breaks=c(seq(from=0.99,to=1, by=0.0001)))
+
+pdac1[["nFeature_RNA"]] %>% ggplot(aes(nFeature_RNA)) + geom_freqpoly(breaks=c(seq(from=0,to=300, by=10))) + coord_flip()
+pdac1[["Gini_coeff"]] %>% ggplot(aes(Gini_coeff)) + geom_freqpoly(breaks=c(seq(from=0.99,to=1, by=0.0001)))
+```
+
+
+
+######################
+Merge data from multiple experiments
+#######################
+
+Create the individual Seurat objects first
+Merge takes the raw counts, or raw counts and normalized data and merges them, creating a new Seurat Object. 
+To label the experiment, set add.cell.ids with c(x, y, z), which prepends the tag to the barcode name of cells. 
+Technically the function merges two things x and y together; to merge multiple things, just add a vector to the y term.
+
+https://satijalab.org/seurat/v3.1/merge_vignette.html
+```{r}
+batch1 <- merge(x=pbmc1,y=c(pbmc2, pdac1),add.cell.ids = c("pbmc1","pbmc2","pdac1"), merge.data= TRUE, project = "MDSC_merge")   
+merge.Seurat
+```
+
+#####################
+Add in Batch 2 data, preserving the info in the original
+Add in Batch 3 data April 30 2020
+Added in Batch 3 but left out AML2 on May 1 2020: Batch3b
+ aml1  aml2 pbmc1 pbmc2 pbmc3 pdac1 pdac2 pdac3 
+ 6382 23851   998  2447  4630  3076  4046  2603 
+ 
+Don't use SubsetData(), use subset(). It's not a Seurat tool and has better functionality
+#####################
+
+
+```{r}
+batch1_batch2 <- merge(x=batch1_update,y=c(pdac2,aml1,pbmc3), add.cell.ids=c("","pdac2","aml1","pdac1"), merge.data= TRUE, project = "MDSC_batch1and2")
+batch1_batch2$orig.ident %>% table
+
+# April 30 2020
+batch3 <- merge(x=batch1_batch2,y=c(pdac3,aml2), add.cell.ids=c("","pdac3","aml2"), merge.data= TRUE, project = "MDSC_batch1and2and3")
+# May 1 2020
+batch3b <- merge(x=batch1_batch2,y=c(pdac3), add.cell.ids=c("","pdac3"), merge.data= TRUE, project = "MDSC_batch3b")
+
+#this doesn't work?? They are subsets from batch1, how can they be 
+test<- merge(x=pbmc1_proc,y=c(pbmc2_proc,pdac1_proc)) # apparently the cell.id is not needed when it's already present from before, add.cell.ids=c("pbmc1","pbmc2","pdac1")
+```
+
+######################
+Create Batch3c
+This is a fresh threshold at nFeature_RNA >50
+Start over again
+May 11 2020
+#######################
+```{r}
+batch3c <- merge(x=pbmc1,y=c(pbmc2,pdac1,pdac2,aml1,pbmc3,pdac3),add.cell.ids = c("pbmc1","pbmc2","pdac1","pdac2","aml1","pbmc3","pdac3"), merge.data= TRUE, project = "MDSC_merge")   
+batch3c <- subset(batch3c, subset = nFeature_RNA >= 100)
+```
+
+#######################
+Merge Batch 4 (AML3) into batch3c
+#######################
+```{r}
+batch4 <- merge(x=batch3c,y=aml3, add.cell.ids=c("","aml3"), merge.data=FALSE,project="MDSC_batch4")
+```
+
+
+
+######################
+Normalize CITE seq data
+#######################
+
+ aml1 pbmc1 pbmc2 pbmc3 pdac1 pdac2 
+ 6411   998  2447  4667  3076  4098 
+
+```{r}
+batch1 <- NormalizeData(batch1,assay="CITE",normalization.method = "CLR")
+batch1 <- ScaleData(batch1, assay="CITE")
+tail(colnames(batch1))
+table(batch1$orig.ident)
+
+batch1_batch2 <- NormalizeData(batch1_batch2,assay="CITE",normalization.method = "CLR")
+batch1_batch2 <- ScaleData(batch1_batch2, assay="CITE")
+tail(colnames(batch1_batch2))
+table(batch1_batch2$orig.ident)
+
+batch3 <- NormalizeData(batch3,assay="CITE",normalization.method = "CLR")
+batch3 <- ScaleData(batch3, assay="CITE")
+tail(colnames(batch3))
+table(batch3$orig.ident)
+length(batch3$orig.ident)
+
+batch3b <- NormalizeData(batch3b,assay="CITE",normalization.method = "CLR")
+batch3b <- ScaleData(batch3b, assay="CITE")
+tail(colnames(batch3b))
+table(batch3b$orig.ident)
+length(batch3b$orig.ident)
+
+batch3c <- NormalizeData(batch3c,assay="CITE",normalization.method = "CLR")
+batch3c <- ScaleData(batch3c, assay="CITE")
+tail(colnames(batch3c))
+table(batch3c$orig.ident)
+
+batch4 <- NormalizeData(batch4,assay="CITE",normalization.method = "CLR")
+batch4 <- ScaleData(batch4, assay="CITE")
+tail(colnames(batch4))
+table(batch4$orig.ident)
+```
+
+https://satijalab.org/seurat/v3.1/pbmc3k_tutorial.html
+
+
+######################
+Mitochondrial gene expression
+Check Apoptosis
+nCount_RNA is # of unique UMIs I think
+Cut off percent.mt at < 30
+#######################
+```{r fig.height=8, fig.width=16}
+batch4[["percent.mt"]] <- PercentageFeatureSet(batch4, pattern = "^MT")
+batch4$percent.mt
+batch4[["percent.HLA.D"]] <- PercentageFeatureSet(batch4, pattern = "^HLA-D")
+batch4[["percent.HLA.DR"]] <- PercentageFeatureSet(batch4, pattern = "^HLA-DR")
+batch4[["RNA.Per.Feature"]] <- batch4[["nCount_RNA"]] / batch4[["nFeature_RNA"]]
+batch4[["percent.ribo"]] <- PercentageFeatureSet(batch4, pattern = c("^RPL","^RPS"))
+batch4$percent.ribo
+
+VlnPlot(batch4, features=c("nFeature_RNA","nCount_RNA"),ncol =2,pt.size = 0.1, slot="counts", sort=TRUE, log=TRUE) # ,"percent.mt","percent.ribo"
+
+VlnPlot(batch4, features=c("nFeature_RNA","nCount_RNA","percent.mt","percent.ribo" ),ncol =2,pt.size = 0.1, slot="counts", sort=TRUE, log=TRUE) # ,"percent.mt","percent.ribo" 
+VlnPlot(batch3b, features=c("nCount_RNA"),pt.size = 0.1, slot="counts", y.max=20000)
+VlnPlot(batch3c, features=c("nCount_RNA","nFeature_RNA","percent.mt"),ncol =3,pt.size = 0.1, log=TRUE, group.by="orig.ident")
+
+
+VlnPlot(batch4, features=c("BCL2","BAX","MLKL","HMGB1"),ncol=4,pt.size = 0.1, log=TRUE, group.by="orig.ident") # DR5
+VlnPlot(batch4, features=c("CD63","FCGR3B","LTF","S100A9","percent.ribo"),ncol =5,pt.size = 0.1, log=TRUE)
+## Cell cycle
+VlnPlot(batch4, features=c("MKI67","CCNA2","CCNB1","GAPDH"),ncol =5,pt.size = 0.1, log=TRUE, group.by="orig.ident", slot="counts")
+
+plot1 <- FeatureScatter(batch3b, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(batch3c, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot3 <- FeatureScatter(batch3b, feature1 = "nCount_RNA", feature2 = "percent.ribo")
+CombinePlots(plots = list(plot1, plot2, plot3))
+```
+
+Plot nFeature_RNA as a heatmap
+
+```{r fig.height=5, fig.width=7}
+library(viridis)
+library(scales)
+batch4$umap[[1:31306]] %>% cbind(nFeature=FetchData(batch4, vars= c("nFeature_RNA"))) %>% data.frame %>% mutate(nFeature_log = log(nFeature_RNA,10)) %>% ggplot(aes(UMAP_1,UMAP_2, colour=nFeature_log)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="inferno", limits=c(2,5), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+
+##Upper range: Monocytes
+batch4$umap[[1:31306]] %>% cbind(nFeature=FetchData(batch4, vars= c("nFeature_RNA"))) %>% data.frame %>% ggplot(aes(UMAP_1,UMAP_2, colour=nFeature_RNA)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="magma", limits=c(2000,4000), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+
+##Mid range: Lymphocytes
+batch4$umap[[1:31306]] %>% cbind(nFeature=FetchData(batch4, vars= c("nFeature_RNA"))) %>% data.frame %>% mutate(nFeature_log = log(nFeature_RNA,10)) %>% ggplot(aes(UMAP_1,UMAP_2, colour=nFeature_RNA)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="magma", limits=c(1000,3000), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+
+#Lower range: Neutrophils
+batch4$umap[[1:31306]] %>% cbind(nFeature=FetchData(batch4, vars= c("nFeature_RNA"))) %>% data.frame %>% mutate(nFeature_log = log(nFeature_RNA,10)) %>% ggplot(aes(UMAP_1,UMAP_2, colour=nFeature_RNA)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="magma", limits=c(50,1000), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+```
+
+
+Batch1 Batch2
+
+```{r fig.height=10, fig.width=18}
+batch1_batch2[["percent.mt"]] <- PercentageFeatureSet(batch1_batch2, pattern = "^MT")
+batch1_batch2$percent.mt
+batch1_batch2[["percent.HLA-D"]] <- PercentageFeatureSet(batch1_batch2, pattern = "^HLA-D")
+batch1_batch2[["percent.HLA-DR"]] <- PercentageFeatureSet(batch1_batch2, pattern = "^HLA-DR")
+batch1_batch2[["RNA.Per.Feature"]] <- batch1_batch2[["nCount_RNA"]] / batch1_batch2[["nFeature_RNA"]]
+batch1_batch2[["CD8_T_s2"]] 
+batch1_batch2[["percent.ribo"]] <- PercentageFeatureSet(batch1_batch2, pattern = c("^RPL","^RPS"))
+batch1_batch2$percent.ribo
+
+#rownames(batch1) %>% data.frame %>% rename(genes = '.') %>% dfilter(genes == "RP*")
+VlnPlot(batch1_batch2, features=c("nFeature_RNA","nCount_RNA","RNA.Per.Feature","percent.mt","percent.ribo"),ncol =2,pt.size = 0.1,log=TRUE)
+
+VlnPlot(batch1, features=c("nCount_RNA"),ncol =4,pt.size = 0.1, y.max=20000)
+VlnPlot(batch1_update, features=c("nCount_RNA","nFeature_RNA","percent.mt"),ncol =3,pt.size = 0.1, log=TRUE, group.by=orig.ident)
+
+VlnPlot(batch1, features=c("BCL2","BAX","MLKL","HMGB1"),ncol=4,pt.size = 0.1, log=TRUE) # DR5
+VlnPlot(batch1, features=c("CD63","FCGR3B","LTF","S100A9","percent.ribo"),ncol =5,pt.size = 0.1, log=TRUE)
+## Cell cycle
+VlnPlot(batch1, features=c("MKI67","CCNA2","CCNB1","GAPDH"),ncol =5,pt.size = 0.1, log=TRUE)
+
+plot1 <- FeatureScatter(batch1_batch2, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(batch1_batch2, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot3 <- FeatureScatter(batch1_batch2, feature1 = "nCount_RNA", feature2 = "percent.ribo")
+CombinePlots(plots = list(plot1, plot2, plot3))
+```
+
+
+Look at average number of RNAs per cell by pulling it out of the batch1 data
+
+```{r}
+#FetchData(batch3, vars= "nFeature_RNA", cells="orig.ident"=="aml2") %>% summary
+batch3[[c("nFeature_RNA","orig.ident")]] %>% dfilter(orig.ident=="aml2") %>% dselect(nFeature_RNA) %>% summary
+```
+
+
+######################
+Normalize data: @data slot calculation
+#######################
+By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. Normalized values are stored in pbmc[["RNA"]]@data
+```{r}
+batch3 <- NormalizeData(batch3,normalization.method = "LogNormalize",scale.factor=10000) # this goes into the @data slot
+batch3b <- NormalizeData(batch3b,normalization.method = "LogNormalize",scale.factor=10000) # this goes into the @data slot
+batch3c <- NormalizeData(batch3c,normalization.method = "LogNormalize",scale.factor=10000) # this goes into the @data slot
+batch4 <- NormalizeData(batch4,normalization.method = "LogNormalize",scale.factor=10000)
+```
+
+######################
+Feature Selection
+#######################
+Top variable genes: these are mostly Myeloid markers: PPBP and DEFA3 are both gMDSC markers
+ [1] "CAMP","PPBP","LTF"      "DEFA3"    "PF4"      "PTGDS"    "FCER1A","HLA-DQA1" "DEFA4"    "JCHAIN"  
+```{r fig.height=5, fig.width=12}
+batch3 <- FindVariableFeatures(batch3, selection.method = "vst", nfeatures = 2000)
+top30 <- head(VariableFeatures(batch3),30)
+
+plot1 <- VariableFeaturePlot(batch3)
+plot2 <- LabelPoints(plot = plot1, points = top30, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+
+batch3b <- FindVariableFeatures(batch3b, selection.method = "vst", nfeatures = 2000)
+top30 <- head(VariableFeatures(batch3b),30)
+
+plot1 <- VariableFeaturePlot(batch3b)
+plot2 <- LabelPoints(plot = plot1, points = top30, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+
+batch3c <- FindVariableFeatures(batch3c, selection.method = "vst", nfeatures = 2000)
+top30 <- head(VariableFeatures(batch3c),30)
+
+plot1 <- VariableFeaturePlot(batch3c)
+plot2 <- LabelPoints(plot = plot1, points = top30, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+
+batch4 <- FindVariableFeatures(batch4, selection.method = "vst", nfeatures = 2000)
+top30 <- head(VariableFeatures(batch4),30)
+
+plot1 <- VariableFeaturePlot(batch4)
+plot2 <- LabelPoints(plot = plot1, points = top30, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+```
+
+######################
+Data scaling to median = 0
+Z-score
+Stored in @scale.data
+#######################
+```{r}
+all.genes <- rownames(batch3)
+batch3 <- ScaleData(batch3,features = all.genes, assay = "RNA")
+
+all.genes <- rownames(batch3b)
+batch3b <- ScaleData(batch3b,features = all.genes, assay = "RNA")
+
+all.genes <- rownames(batch3c)
+batch3c <- ScaleData(batch3c,features = all.genes, assay = "RNA")
+
+all.genes <- rownames(batch4)
+batch4 <- ScaleData(batch4,features = all.genes, assay = "RNA")
+```
+
+######################
+scTransform
+
+This step supersedes NormalizeData, ScaleData and FindVariableFeatures
+Regularized negative binomial regression to normalize UMI counts: saved in SCT, and this becomes marked default
+Optional step to regress out confounding conditions: sctransform
+https://satijalab.org/seurat/v3.0/sctransform_vignette.html
+I should regress out the mt percentage, because they vary between samples, and shouldn't be biologically relevant
+Also regress out RPL/RPS ribosomal protein %, which removed the RPL and RPS genes from the PCA feature selection
+#######################
+
+```{r}
+# run sctransform
+batch1_batch2 <- SCTransform(batch1_batch2, vars.to.regress = c("percent.mt","percent.ribo"), verbose = FALSE, assay="RNA")
+batch1_batch2$SCT_snn_res.0.5 %>% table
+
+batch3 <- SCTransform(batch3, vars.to.regress = c("percent.mt","percent.ribo"), verbose = FALSE, assay="RNA")
+#this did not finish, also still not sure that I need to run this
+batch3b <- SCTransform(batch3b, vars.to.regress = c("percent.mt","percent.ribo"), verbose = FALSE, assay="RNA")
+```
+####################################
+PCA analysis
+I will choose variable RNA features, and all CITE features
+Noticed some RPL and RPS genes in there, go back to scTransform and regress out percent.ribo
+####################################
+
+```{r}
+
+batch3 <- RunPCA(batch3, features =c(VariableFeatures(object=batch3)))
+??RunPCA()
+#batch1_batch2 <- RunPCA(batch1_batch2, features =c(VariableFeatures(object=batch1_batch2)), assay="CITE") #the run excluded CITE
+print(batch1_batch2[["pca"]], dims = 1:15, nfeatures = 5)
+
+batch3b <- RunPCA(batch3b, features =c(VariableFeatures(object=batch3b)))
+
+batch3c <- RunPCA(batch3c, features =c(VariableFeatures(object=batch3c)))
+
+batch4 <- RunPCA(batch4, features =c(VariableFeatures(object=batch4)))
+```
+
+
+#################################
+Visualize PCA
+################################
+
+```{r fig.height=5, fig.width=10}
+VizDimLoadings(batch1_batch2, dims=1:2, reduction ="pca")
+DimPlot(batch4, reduction="pca", dims= 1:2)
+DimPlot(batch4, reduction="pca", dims= 2:3)
+DimPlot(batch4, reduction="pca", dims= 3:4)
+```
+
+
+Cut off should be at 20 from this plot
+```{r fig.height=14, fig.width=9}
+DimHeatmap(batch4, dims=1:24, cells=500, balanced = TRUE)
+#Looks like cut-off at 20
+```
+
+####################################
+JackStraw permutation test for significance of PCs
+This is confusing, graphically it looks like all 20 are significant, but the P values indicate only the first 7 are. 
+Elbowplot shows first ~10 are significant
+DimHeatMap shows first ~24 are distinguishible as groups; I'm going to include 24 PCs
+With Batch 1 & Batch 2 data, also 24 PCs
+Batch3b: choosing 20 PC as cutoff
+####################################
+```{r}
+batch1_batch2 <- JackStraw(batch1_batch2, num.replicate=100, assay="RNA")
+Jack
+batch1 <- ScoreJackStraw(batch1, dims=1:20)
+JackStrawPlot(batch1, dims=1:20)
+ElbowPlot(batch3b,ndims=30)
+ElbowPlot(batch3c,ndims=30)
+ElbowPlot(batch4,ndims=30)
+```
+###################################
+###################################
+
+Graph-based clustering : embed cells in a graph structure, like a KNN graph
+
+Take many groups, and then merge them later if necessary
+PCs: 24
+Resolution: 1.2
+21 Groups
+
+Batch3 resolution 1.0: 28 clusters
+0.9 -> 28 clusters
+0.8 -> 25
+
+Batch3b 20 PCs
+resolution 
+0.8 -> 23 clusters
+##################################
+###################################
+```{r}
+batch3b <- FindNeighbors(batch3b, dims=1:20)
+batch3b <- FindClusters(batch3b, resolution=0.8,random.seed=42) #finds 15 communities
+FindCluster
+table(Idents(batch3b))
+
+
+batch3c <- FindNeighbors(batch3c, dims=1:24)
+batch3c <- FindClusters(batch3c, resolution=1,random.seed=42) # 0.8, finds 26 communities, 1.0 communities 29 
+batch3c@active.ident %>% table
+batch3c$orig.ident %>% table
+
+batch4 <- FindNeighbors(batch4, dims=1:24)
+batch4 <- FindClusters(batch4, resolution=1,random.seed=42) # 0.8, finds 26 communities, 1.0 communities 29 
+batch4@active.ident %>% table
+batch4$orig.ident %>% table
+```
+
+
+UMAP and tSNE
+
+Make an experimenting Seurat object called Batch_Exp. I don't want to change the UMAP version to a new one 
+But then accidentally ran the analysis in batch1, so now batch_exp is the permanent one and batch1 is the test
+```{r fig.height=6, fig.width=9}
+batch3c <- RunUMAP(batch3c, dims=1:24, min.dist = 0.5,random.seed=42)
+batch3c <- RunUMAP(batch3c, features=VariableFeatures(batch3c), min.dist = 0.5, random.seed=42) #this doesn't separate cluters within major clusters, it moves superclusters apart
+VariableFeatures
+batch3b <- RunTSNE(batch3b, dims=1:20, min.dist = 0.5, random.seed=42)
+
+batch4 <- RunUMAP(batch4, dims=1:24, min.dist = 0.5,random.seed=42)
+
+UMAPPlot(batch3c, label=TRUE) #+ ggsave("UMAP_batch3b.jpg", width=10, height=6, dpi=300, plot= last_plot(), units = "in")
+UMAPPlot(batch4, label=TRUE) 
+TSNEPlot(batch1_batch2, label=TRUE) #+ ggsave("TSNE_batch2_mindist.jpg", width=10, height=6, dpi=300, plot= last_plot(), units = "in")
+
+DimPlot(batch3c, reduction="umap",label=TRUE, cols=c("#00BF76","#EC823C","#DD8D00","#2FB600" ,"#B3A000","#97A900","#71B000","#CA9700","#00BB4B","#F8766D","#00C098","#00C0B7","#00BDD1","#00B7E8","#00AEFA","#3DA1FF", "#8F91FF", "#BE80FF", "#DE71F9","#F265E7","#FE61CF","#FF64B3","#FF6C92", "#BE80FF", "#DE71F9","#F265E7","#FE61CF","#FF64B3","#FF6C92"), label.size = 4) # + ggsave("UMAP_Batch3.jpg", width=10, height=6, dpi=300, plot= last_plot(), units = "in")
+
+DimPlot(batch4, reduction="umap",label=FALSE, group.by="orig.ident", cols=c("red","firebrick2","green4","green3","blue","magenta3","orange1","violet"))
+
+DimPlot(batch3b, reduction="tsne",label=TRUE) #+ ggsave("TSNE_Batch3.jpg", width=10, height=6, dpi=300, plot= last_plot(), units = "in")
+library(scales)
+my_color_palette <- scales::hue_pal()
+hue <- scales::hue_pal(c(0, 360) + 15, c = 100, l = 65, h.start = 0, direction = 1)
+hue(23)
+
+```
+Try the GF-ICF method
+https://github.com/dibbelab/gficf
+Can only be installed from source, but it's not happening despite R and Rstudio upgrades
+Need to upgrade R. My Current version is 3.5.1. Current version is 4.0.0
+```{r}
+install.packages(pkgs = "gficf",repos = c("https://dibbelab.github.io/Rrepo/","https://cloud.r-project.org")) #doesn't work
+install.packages("gficf") #doesn't work, says not available
+devtools::install_github("dibbelab/gficf")
+```
+
+#############
+Scrutinize the AML samples
+Subset the data by the two aml samples
+Compare markers that should be mutually exclusive: considering that most of the cells in AML are myeloid: Look at Myeloid vs CD8 T cell markers (don't use CD4 because that is expressed in myeloid cells)
+##############
+```{r fig.height=3, fig.width=9}
+aml2_proc <- subset(batch3, subset= orig.ident=="aml2")
+aml1_proc <- subset(batch3, subset= orig.ident=="aml1")
+pdac2_proc <- subset(batch3, subset= orig.ident=="pdac2")
+DimPlot(aml2_proc, reduction="umap",label=TRUE) 
+DimPlot(aml1_proc, reduction="umap",label=TRUE) 
+DimPlot(pdac2_proc, reduction="umap",label=TRUE) 
+
+FeaturePlot(aml2_proc,slot = "scale.data",features = c("CD8A","GZMB","CD4","HLA-DRA","GZMA","ITGAX"), ncol=3, cols=c("grey80","red")) 
+FeaturePlot(aml1_proc,slot = "scale.data",features = c("CD8A","GZMB","CD4","HLA-DRA","GZMA","ITGAX"), ncol=3, cols=c("grey80","red"))
+FeaturePlot(pdac2_proc,slot = "scale.data",features = c("CD8A","GZMB","CD4","HLA-DRA","GZMA","ITGAX"), ncol=3, cols=c("grey80","red"))
+
+a <- FeatureScatter(aml2_proc, feature1 = "CD8A", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+b <- FeatureScatter(aml2_proc, feature1 = "GZMB", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+c <- FeatureScatter(aml2_proc, feature1 = "GZMA", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+
+d <- FeatureScatter(aml1_proc, feature1 = "CD8A", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+e <- FeatureScatter(aml1_proc, feature1 = "GZMB", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+f <- FeatureScatter(aml1_proc, feature1 = "GZMA", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+
+g <- FeatureScatter(pdac2_proc, feature1 = "CD8A", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+h <- FeatureScatter(pdac2_proc, feature1 = "GZMB", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+i <- FeatureScatter(pdac2_proc, feature1 = "GZMA", feature2 = "HLA-DRA", group.by ="ident") + NoLegend()
+grid.arrange(a,b,c,d,e,f,ncol=3)
+grid.arrange(g,h,i,ncol=3)
+
+##Count number of cells with expression of both 
+WhichCells(aml2_proc, expression = CD8A > 0 & `HLA-DRA` > 0) %>% length #685
+WhichCells(aml2_proc, expression = GZMB > 0 & `HLA-DRA` > 0) %>% length #1769
+WhichCells(aml2_proc, expression = GZMA > 0 & `HLA-DRA` > 0) %>% length #2721
+
+WhichCells(aml1_proc, expression = CD8A > 0 & `HLA-DRA` > 0) %>% length #120
+WhichCells(aml1_proc, expression = GZMB > 0 & `HLA-DRA` > 0) %>% length #185
+WhichCells(aml1_proc, expression = GZMA > 0 & `HLA-DRA` > 0) %>% length #314
+
+WhichCells(pdac2_proc, expression = CD8A > 0 & `HLA-DRA` > 0) %>% length #63
+WhichCells(pdac2_proc, expression = GZMB > 0 & `HLA-DRA` > 0) %>% length #96
+WhichCells(pdac2_proc, expression = GZMA > 0 & `HLA-DRA` > 0) %>% length #147
+```
+
+#########
+Remove AML2 from analysis and re-normalize and re-cluster
+Went back to beginning of code to merge batch1_batch2 with pdac3, leaving out aml2
+#########
+
+######################
+######################
+Identify cells by Donor
+
+
+######################
+#######################
+```{r fig.height=10, fig.width=14}
+library(grid)
+library(gridExtra)
+unique(batch3$orig.ident)
+  p1 <- DimPlot(batch3c, cells.highlight = WhichCells(batch3c,expression= orig.ident =="pdac1"),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+  p2 <- DimPlot(batch3c, cells.highlight = WhichCells(batch3c,expression= orig.ident =="pdac2"),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+  p3 <- DimPlot(batch3c, cells.highlight = WhichCells(batch3c,expression= orig.ident =="pdac3"),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+  n1 <- DimPlot(batch3c, cells.highlight = WhichCells(batch3c,expression= orig.ident =="pbmc1"),cols.highlight="blue",sizes.highlight=0.2) + NoLegend()
+  n2 <- DimPlot(batch3c, cells.highlight = WhichCells(batch3c,expression= orig.ident =="pbmc2"),cols.highlight="blue",sizes.highlight=0.2) + NoLegend()
+  n3 <- DimPlot(batch3c, cells.highlight = WhichCells(batch3c,expression= orig.ident =="pbmc3"),cols.highlight="blue",sizes.highlight=0.2) + NoLegend()
+  a1 <- DimPlot(batch3c, cells.highlight = WhichCells(batch3c,expression= orig.ident =="aml1"),cols.highlight="red",sizes.highlight=0.05) + NoLegend()
+
+grid.arrange(p1,p2,p3,n1,n2,n3,a1, ncol=3)
+
+ggsave("CITE_feature_counts.jpg", width=20, height=10, dpi=300, plot= last_plot(), units = "in")
+
+unique(batch4$orig.ident)
+  p1 <- DimPlot(batch4, cells.highlight = WhichCells(batch4,expression= orig.ident =="pdac1"),cols.highlight="darkorchid2",sizes.highlight=0.2) + NoLegend()
+  p2 <- DimPlot(batch4, cells.highlight = WhichCells(batch4,expression= orig.ident =="pdac2"),cols.highlight="darkorchid2",sizes.highlight=0.2) + NoLegend()
+  p3 <- DimPlot(batch4, cells.highlight = WhichCells(batch4,expression= orig.ident =="pdac3"),cols.highlight="darkorchid2",sizes.highlight=0.2) + NoLegend()
+  n1 <- DimPlot(batch4, cells.highlight = WhichCells(batch4,expression= orig.ident =="pbmc1"),cols.highlight="dodgerblue2",sizes.highlight=0.2) + NoLegend()
+  n2 <- DimPlot(batch4, cells.highlight = WhichCells(batch4,expression= orig.ident =="pbmc2"),cols.highlight="dodgerblue2",sizes.highlight=0.2) + NoLegend()
+  n3 <- DimPlot(batch4, cells.highlight = WhichCells(batch4,expression= orig.ident =="pbmc3"),cols.highlight="dodgerblue2",sizes.highlight=0.2) + NoLegend()
+  a1 <- DimPlot(batch4, cells.highlight = WhichCells(batch4,expression= orig.ident =="aml1"),cols.highlight="firebrick1",sizes.highlight=0.05) + NoLegend()
+  a3 <- DimPlot(batch4, cells.highlight = WhichCells(batch4,expression= orig.ident =="aml3"),cols.highlight="firebrick1",sizes.highlight=0.05) + NoLegend()
+
+grid.arrange(p1,p2,p3,n1,n2,n3,a1,a3, ncol=3)
+
+purple "#FE61CF"
+blue "#00BF76"
+red "#FF6C92"
+```
+#########################
+Change the orig-ident names
+Original: 
+ aml1 pbmc1 pbmc2 pbmc3 pdac1 pdac2 pdac3 
+ 6382   998  2447  4630  3076  4046  2603 
+ New: 
+  aml1 pbmc1 pbmc2 pbmc3 pdac1 pdac2 pdac3 
+ 6382   998  2447  4046  3076  4630  2603 
+ SWITCH BACK
+  aml1 pbmc1 pbmc2 pbmc3 pdac1 pdac2 pdac3 
+ 6382   998  2447  4630  3076  4046  2603
+##########################
+
+CHANGE THE ORIG-IDENT NAMES BACK, BECAUSE THEY WERE NOT SWITCHED AFTERALL
+RUN THE CODE BLOCK BELOW AGAIN TO SWITCH BACK
+
+
+```{r}
+library(Hmisc)
+batch3b$orig.ident %>% table
+old <- batch3b$orig.ident %>% data.frame %>% rename(orig=.data$.)
+new <- old %>% mutate(new=sedit(orig,"pbmc3","not_pbmc3")) %>% mutate(new=sedit(new,"pdac2","not_pdac2")) %>% mutate(new=sedit(new,"not_pbmc3","pdac2")) %>% mutate(new= sedit(new,"not_pdac2","pbmc3"))
+new %>% table
+new %>% dselect(new) %>% table
+batch3b$orig.ident <- new$new
+
+```
+
+
+#######
+Identify Clusters by Top markers
+#######
+
+```{r}
+pbmc.markers <- FindAllMarkers(batch4, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.5)
+#save(pbmc.markers, file="MDSC_all_vs_all_DE_batch2.rdata")
+save(pbmc.markers, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/All_vs_all_DE_batch4.rdata")
+
+write.table(pbmc.markers, file="Talmadge_scRNA_cluster_markers_batch4.txt", sep="\t", quote=FALSE,row.names = FALSE)
+
+pbmc.markers %>% dfilter(cluster == 20) %>% top_n(n = 100, wt = avg_logFC) %>% arrange(-avg_logFC)
+pbmc.markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_logFC)
+
+gMDSC_0vs5 <- FindMarkers(batch1, ident.1="0 gMDSC", ident.2="5 gMDSC SELL+",only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+gMDSC_0vs5 %>% tibble::rownames_to_column("Gene") %>% dfilter(p_val <= 0.05, avg_logFC > 1) %>% arrange(desc(avg_logFC)) %>% dselect(Gene) %>% .[,1]
+
+gMDSC_5vs0 <- FindMarkers(batch1, ident.1="5 gMDSC SELL+", ident.2="0 gMDSC",only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+gMDSC_5vs0 %>% tibble::rownames_to_column("Gene") %>% dfilter(p_val <= 0.05, avg_logFC > 1) %>% arrange(desc(avg_logFC)) %>% dselect(Gene) %>% .[,1]
+
+gMDSC_16vs0a5 <- FindMarkers(batch1, ident.1="16 gMDSC DEFA3+", ident.2=c("0 gMDSC","5 gMDSC SELL+"),only.pos = TRUE, min.pct = 0.25, logfc.threshold = 1)
+gMDSC_16vs0a5 %>% tibble::rownames_to_column("Gene") %>% dfilter(p_val <= 0.05, avg_logFC > 1) %>% arrange(desc(avg_logFC))
+
+gMDSC_0a5vs16 <- FindMarkers(batch1, ident.2="16 gMDSC DEFA3+", ident.1=c("0 gMDSC","5 gMDSC SELL+"),only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.2)
+gMDSC_0a5vs16 %>% tibble::rownames_to_column("Gene") %>% dfilter(p_val <= 0.05, avg_logFC > 0.2) %>% arrange(desc(avg_logFC))
+gMDSC_0a5vs16 %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% gMDSC_Talmadge_h)
+
+# Cluster 8 has markers CXCR4 and KLF2
+gMDSC_8vs7a9 <- FindMarkers(batch1, ident.1="8 Granulocyte", ident.2=c("7 mMDSC CD15+","9 mMDSC CD14+/- CD34 med"),only.pos = FALSE, min.pct = 0.25, logfc.threshold = 0.25)
+gMDSC_8vs7a9 %>% tibble::rownames_to_column("Gene") %>% dfilter(p_val <= 0.05, avg_logFC > 1) %>% arrange(desc(avg_logFC)) %>% dselect(Gene) %>% .[,1]
+
+mRNA_ident <- c("0 gMDSC","1 T cell CD4+ TCF7+","2 NK","3 T cell CD4 CCR7+","4 T cell CD4 CCR7+ TCF7+","5 gMDSC SELL+","6 T cell CD8+","7 mMDSC CD15+","8 Granulocyte","9 mMDSC CD14+/- CD34 med","10 Platelet","11 B cell","12 T cell CD4 RPhigh","13 mMDSC CD15+ CSF1R+","14 Granulocyte CD16+","15 Granulocyte CD16+","16 gMDSC DEFA3+","17 Apoptotic","18 Unknown GAPDH++","19 DC","20 NK XCL+")
+
+DimPlot(batch1, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+
+pbmc.markers %>% dfilter(cluster == 1) %>% top_n(n = 100, wt = avg_logFC)
+
+CD4_markers <- pbmc.markers %>% dfilter(cluster == 2) %>% dfilter(avg_logFC > 0.5) %>% pull(gene)
+```
+
+Differentiate TAN from Normal Neutrophils
+```{r}
+TAN_cells <- FetchData(batch4, vars= c("orig.ident","ident")) %>% tibble::rownames_to_column("cells") %>% dfilter(ident==5 & orig.ident=="pdac1") %>% pull(cells) #1143
+Neu_cells <- FetchData(batch4, vars= c("orig.ident","ident")) %>% tibble::rownames_to_column("cells") %>% dfilter(ident %in% c(2,3,8) & orig.ident=="pbmc3") %>% pull(cells) #1369
+gMDSC_cells <- FetchData(batch4, vars= c("orig.ident","ident")) %>% tibble::rownames_to_column("cells") %>% dfilter(ident %in% c(20) & orig.ident=="pdac1") %>% pull(cells) #1369
+
+Tan_markers <- FindMarkers(batch4, ident.1=TAN_cells, ident.2=NULL, logfc.threshold=1,only.pos = TRUE) %>% tibble::rownames_to_column("Gene") #80
+Neu_markers <- FindMarkers(batch4, ident.1=Neu_cells, ident.2=NULL, logfc.threshold=1,only.pos = TRUE) %>% tibble::rownames_to_column("Gene") #41
+gMDSC_markers <- FindMarkers(batch4, ident.1=gMDSC_cells, ident.2=NULL, logfc.threshold=1,only.pos = TRUE) %>% tibble::rownames_to_column("Gene") #41
+
+Tan <- Tan_markers  %>% pull(Gene)
+Neu <- Neu_markers  %>% pull(Gene)
+gMDSC <- gMDSC_markers %>% pull(Gene)
+
+TAN_sig_Talmadge <- Tan_markers %>% dfilter(Gene %nin% c(Neu,gMDSC)) %>% arrange(-avg_logFC) %>% dfilter(avg_logFC > 1.2) %>% pull(Gene)#24
+Neutrophil_sig_Talmadge <- Neu_markers %>% dfilter(Gene %nin% c(Tan,gMDSC)) %>% arrange(-avg_logFC) %>% dfilter(avg_logFC > 1.1) %>% pull(Gene)  #15
+gMDSC_sig_Talmadge <- gMDSC_markers %>% dfilter(Gene %nin% c(Tan,Neu)) %>% arrange(-avg_logFC) %>% dfilter(avg_logFC > 1.4) %>% pull(Gene)  #15
+load("/Volumes/Picard/FLX/Reference_tables/mouse_human_gene.rdata")
+mouseAnnot
+
+TAN_sig_Talmadge_m <- mouseAnnot %>% dfilter(HumanName %in% TAN_sig) %>% pull(GENE.SYMBOL)
+save(TAN_sig_m, file="/Volumes/Picard/FLX/Reference_tables/TAN_sig_m.rdata")
+save(TAN_sig, file="/Volumes/Picard/FLX/Reference_tables/TAN_sig_h.rdata")
+Neutrophil_sig_Talmadeg_m <- mouseAnnot %>% dfilter(HumanName %in% Neutrophil_sig) %>% pull(GENE.SYMBOL)
+save(Neutrophil_sig_m, file="/Volumes/Picard/FLX/Reference_tables/Neutrophil_sig_m.rdata")
+save(Neutrophil_sig, file="/Volumes/Picard/FLX/Reference_tables/Neutrophil_sig_h.rdata")
+gMDSC_sig_Talmadge_m <- mouseAnnot %>% dfilter(HumanName %in% gMDSC_sig) %>% pull(GENE.SYMBOL)
+save(gMDSC_sig_m, file="/Volumes/Picard/FLX/Reference_tables/gMDSC_Talmadge_sig_m.rdata")
+save(gMDSC_sig, file="/Volumes/Picard/FLX/Reference_tables/gMDSC_Talmadge_sig_h.rdata")
+```
+
+
+T cell CD4
+0
+CCR7
+RPS27
+TCF7
+16 Proliferatubg CD8
+CD8
+RPS
+CCR7
+13 Proliferating T cell
+MT-
+RP-
+IL7R
+TCF7
+2
+IL7R
+IL32
+mMDSC
+EIF2A
+CXCR2
+FCGR3B
+3
+S100P
+S100A8
+4 
+MMP8
+5 NK
+GNLY CD8
+20 NK mt high 
+6 GZMK
+7 normal myeloid (HLA_DRA+)
+LYZ
+VST
+CST3
+HLA_DRA
+CD14+
+8 gMDSC bottom
+TXNIP
+CSF3R
+9 Monocyte-macrophage
+CD36
+VCAN
+CD163
+MARCH1
+
+10
+11 granulocytic, APC
+C1Q3
+FCGR3A; CD16a
+HLA-DR
+12 platelet
+PPBP
+PF4
+14 Proliferating APC
+RPS23
+HLA-DR
+15 macrophage bacterial response
+IFIT1, 2, 3, 
+17 B cell
+CD79
+19 B cell IG Kappa positive
+IGKxx
+
+18 Neutrophil : only PDAC1 and AML1 have neutrophils
+DEFA
+CAECAM8
+
+21 DC
+FCER1A
+LILRA4
+CD1C
+CLEC10A 
+
+22
+Mitotic markers: DSB repair
+CD3 CD8
+
+Calculate overlaps in significantly DE markers between the clusters
+These markers all pass the p_val cutoff, but not necessarily the p_val_adj cutoff
+```{r}
+c0 <- pbmc.markers %>% dfilter(cluster == 0) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c1 <- pbmc.markers %>% dfilter(cluster == 1) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c2 <- pbmc.markers %>% dfilter(cluster == 2) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c3 <- pbmc.markers %>% dfilter(cluster == 3) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c4 <- pbmc.markers %>% dfilter(cluster == 4) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c5 <- pbmc.markers %>% dfilter(cluster == 5) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c6 <- pbmc.markers %>% dfilter(cluster == 6) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c7 <- pbmc.markers %>% dfilter(cluster == 7) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c8 <- pbmc.markers %>% dfilter(cluster == 8) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c9 <- pbmc.markers %>% dfilter(cluster == 9) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c10 <- pbmc.markers %>% dfilter(cluster == 10) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c11 <- pbmc.markers %>% dfilter(cluster ==11) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c12 <- pbmc.markers %>% dfilter(cluster ==12) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c13 <- pbmc.markers %>% dfilter(cluster == 13) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c14 <- pbmc.markers %>% dfilter(cluster == 14) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c15 <- pbmc.markers %>% dfilter(cluster == 15) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c16 <- pbmc.markers %>% dfilter(cluster == 16) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c17 <- pbmc.markers %>% dfilter(cluster == 17) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c18 <- pbmc.markers %>% dfilter(cluster == 18) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c19 <- pbmc.markers %>% dfilter(cluster == 19) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c20 <- pbmc.markers %>% dfilter(cluster == 20) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c21 <- pbmc.markers %>% dfilter(cluster == 21) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+c22 <- pbmc.markers %>% dfilter(cluster == 22) %>% dfilter(p_val_adj < 0.01) %>% dselect(gene) %>% .[,1]
+
+# gMDSC vs CD4 T
+length(intersect(c0,c1)) #(156,194) 73
+# gMDSC vs gMDSC
+length(intersect(c0,c2))/length(c2) # 69%
+length(intersect(c1,c3))/length(c3) # 67%
+length(intersect(c4,c3))/length(c4) # 78%
+#gMDSC vs Cluster 16 gMDSC
+length(intersect(c1,c18))/length(union(c1,c18)) # 4%
+intersect
+length(intersect(c9,c10))/length(union(c9,c10)) # 45 %
+length(intersect(c7,c10))/length(union(c7,c10)) # 45 %
+length(intersect(c17,c19))/length(union(c17,c10)) # 36 %
+length(intersect(intersect(c0,c5),c16)) #(119,115) 15
+
+#NK vs NKT
+length(intersect(c2,c20)) #(399,237) 111
+#CD8 T vs NKT
+length(intersect(c6,c20)) #(179,366) 61
+# CD8 T vs NK
+length(intersect(c6,c2)) #(179,399) 104
+length(c6)
+
+
+pbmc.markers %>% data.frame %>% group_by(cluster) %>% dselect(cluster,gene) %>% reshape2::melt() #map(cor(gene))
+melt
+xx = data.frame(group = rep(1:4, 100), a = rnorm(400) , b = rnorm(400))
+gp = group_by(xx, group)
+all <- pbmc.markers %>% data.frame %>% dselect(cluster,gene) %>% split(.$cluster) %>% map(intersect)
+gather()
+pivot_wider(names_from=cluster, values_from=gene)
+mtcars
+```
+
+
+Heatmap of top markers
+```{r fig.height=20, fig.width=15}
+
+top.markers <- pbmc.markers %>% group_by(cluster) %>% top_n(n=5, wt= avg_logFC) 
+DoHeatmap(batch3c, features= top.markers$gene) + NoLegend()
+top.markers_all <- pbmc.markers %>% group_by(cluster) %>% top_n(n=15, wt= avg_logFC) 
+top.markers_myeloid <- pbmc.markers %>% group_by(cluster) %>% dfilter(cluster %in% c(0,5,7,8,9,13,14,15,16)) %>% top_n(n=30, wt= avg_logFC) 
+top.markers_gMDSC <- pbmc.markers %>% group_by(cluster) %>% dfilter(cluster %in% c(0)) %>% top_n(n=100, wt= avg_logFC) 
+top.markers_16 <- pbmc.markers %>% group_by(cluster) %>% dfilter(cluster == 16) %>% top_n(n=33, wt= avg_logFC) 
+top.markers_8 <- pbmc.markers %>% group_by(cluster) %>% dfilter(cluster == 8) %>% top_n(n=100, wt= avg_logFC) 
+DoHeatmap(batch1, features= top.markers_all$gene)# + NoLegend()
+
+```
+
+Plot CITE markers
+
+```{r fig.height=10, fig.width=15}
+FeaturePlot(batch3c,slot = "data",features = c("CD11b-CITE","CD11c-CITE","CD14-CITE","CD33-CITE","BPI","CD15-CITE","CSF-1R-CITE","CD34-CITE","FCGR3B","CD45RA-CITE","CD45RO-CITE"))
+rownames(batch3c$CITE@data) %>% table 
+
+FeaturePlot(batch4,slot = "data",features = c("CD4-CITE","CCR4-CITE","CCR6-CITE","CD11b-CITE","CD11c-CITE","CD14-CITE","CD15-CITE","CD33-CITE" ,"CD34-CITE"," CD4-CITE","CD45RA-CITE", "CD45RO-CITE", "CSF-1R-CITE","CXCR3-CITE","LAG-3-CITE","PD-1-CITE","PD-L1-CITE"), cols=c("grey80","red"))
+
+```
+
+
+Plot markers for major immune groups
+Plot Lineage markers to check for doublets
+
+```{r fig.height=10, fig.width=20}
+FeaturePlot(batch4,slot = "data",cols=c("grey90","red"),features = c("ITGAM","ITGAX","CD11c-CITE","CD14","CD14-CITE","CD33-CITE","CD4","CD4-CITE","FUT4","CD15-CITE","CD8A","CD79A","LYZ","GZMB","HLA-DRA","DEFA4","CD34-CITE","ARG1","CXCR2","S100A9","CEBPE","GAPDH","FCGR3B","nFeature_RNA"), ncol=6) 
+
+FeaturePlot(batch4,slot = "data",cols=c("grey90","red"),features = c("CSF1R","CXCR2"), ncol=1) 
+
+FeaturePlot(batch3,slot = "data",cols=c("grey90","red"),features = c("SIGLEC6","CD33-CITE","CD4","CD4-CITE"), ncol=2) 
+batch3b@active.ident %>% table
+batch3b@active.ident %>% count
+
+FetchData(batch3c, vars= c("orig.ident","ident")) %>% dfilter(ident==20) %>% dselect(orig.ident) %>% table %>% t %>% t
+FetchData(batch3b, vars= c("orig.ident","ident")) %>% dfilter(ident==18) %>% dselect(orig.ident) %>% table %>% t %>% t
+
+```
+
+C/EBPE and GAPDH markers in the LDF Neutrophil paper that reports that LDF Neutrophils express all gMDSC surface markers, but don't prevent T cell proliferation, but promote tumor cell metastasis. They also express higher levels of C/EBPE than high density HDF neutrophils, and this was measured by RT-PCR by normalizing to GAPDH
+```{r fig.height=8, fig.width=12}
+FeaturePlot(batch4,slot = "data",cols=c("grey90","red"),features = c("CEBPE","GAPDH","nCount_RNA","CD36","FATP2","ABCA1","ABCG1","MSR1","NCAM1","GNLY","TPT1","UXT"), ncol=4, max.cutoff=8000) 
+```
+
+Compare cDNA to CITE markers
+```{r fig.height=12, fig.width=20}
+FeaturePlot(batch1_batch2,slot = "data",cols=c("grey90","blue"),features = c("ITGAM","CD11b-CITE","ITGAX","CD11c-CITE","CD14","CD14-CITE","SIGLEC6","CD33-CITE","CD4","CD4-CITE","FUT4","CD15-CITE"), ncol=4) 
+ggsave("mRNA_CITE_comparison_myeloid_data.jpg", width=20, height=10, dpi=300, plot= last_plot(), units = "in")
+
+FeaturePlot(batch1,slot = "data",cols=c("grey90","blue"),features = c("ITGAM","CD11b-CITE","ITGAX","CD11c-CITE","CD14","CD14-CITE","SIGLEC6","CD33-CITE","CD4","CD4-CITE","FUT4","CD15-CITE","CD34","CD34-CITE","CSF1R","CSF-1R-CITE"), ncol=4) +
+ggsave("mRNA_CITE_comparison_myeloid_data.jpg", width=20, height=15, dpi=300, plot= last_plot(), units = "in")
+
+VlnPlot(batch1,slot = "counts",group.by= "orig.ident",pt.size=0.5,log=TRUE,features = c("ITGAM","CD11b-CITE","ITGAX","CD11c-CITE","CD14","CD14-CITE","SIGLEC6","CD33-CITE","CD4","CD4-CITE","FUT4","CD15-CITE","CD34","CD34-CITE","CSF1R","CSF-1R-CITE")) + 
+ggsave("Violin_mRNA_CITE_comparison_counts.jpg", width=20, height=15, dpi=300, plot= last_plot(), units = "in")
+
+
+
+#FeatureScatter(batch1, feature1 = "RNA@count", feature2 = "CITEcount")
+CXCR4 and KLF2
+FeaturePlot(batch1,slot = "scale.data",features = c("FCGR3A","MARCO","KLF2","HLA-DRA","CD4","CD45RA-CITE","CD45RO-CITE","DEFA3","DEFA4","ARG1","KYNU","CCR7","SELL"), ncol=3) 
+
+FeaturePlot(batch1,slot = "scale.data",features = c("CCR4","CCR4-CITE","CCR6","CCR6-CITE", "LAG-3-CITE","PD-L1-CITE","PD-1-CITE","CXCR3-CITE","CD45RA-CITE","CD45RO-CITE", ), ncol=3)
+
+```
+Check CD4 markers for Gene
+
+```{r fig.height=6, fig.width=15}
+FeaturePlot(batch4,slot = "counts",cols=c("grey90","blue"),features = c("CXorf58","DACT1","AKR1E2","FAM184A","EDAR","TSHZ2","ANKRD55","PCED1B","CACNA1I"), ncol=5) 
+
+FeaturePlot(batch4,slot = "data",cols=c("grey90","blue"),features = c("GAPDH","HBA1","HBA2","RPL10","HIST1H4C","JCHAIN","KLRG1"), ncol=4) 
+```
+
+
+
+
+```{r fig.height=10, fig.width=16}
+FeaturePlot(batch4,slot = "data",cols=c("grey90","blue"),features = c("ITGAM","CD11b-CITE","ITGAX","CD11c-CITE","CD14","CD14-CITE","SIGLEC6","CD33-CITE","CD4","CD4-CITE","FUT4","CD15-CITE","CD34","CD34-CITE","CSF1R","CSF-1R-CITE","KCNK6","CCR4-CITE"), ncol=4) +
+ggsave("mRNA_CITE_comparison_myeloid_counts.jpg", width=20, height=10, dpi=300, plot= last_plot(), units = "in")
+
+FeaturePlot(batch3c,slot = "data",cols=c("grey90","red"),features = c("CD8A","CD4","CD4-CITE","CCR4-CITE")) 
+```
+
+Talmadge Markers
+NOS2 not detected
+OLR1 = LOX1
+CD115 = CSF1R
+```{r fig.height=8, fig.width=16}
+FeaturePlot(batch4,slot = "counts",cols=c("grey90","blue"),features = c("NOS2","ARG1","OLR1","CD34","IL4R","CSF3R","CXCR2","ROCK1"), ncol=4) 
+ggsave("mRNA_CITE_comparison_myeloid_counts.jpg", width=20, height=10, dpi=300, plot= last_plot(), units = "in")
+
+```
+
+Deepa markers from Luminex DIFF
+
+```{r fig.height=8,fig.width=15}
+FeaturePlot(batch1,slot = "scale.data",cols=c("grey90","red"),features = c("IL8","CXCL3","CCL7","IL1R1","IL6","CCL17","CCL22","CD86"), ncol=3) 
+ggsave("mRNA_CITE_comparison_myeloid_counts.jpg", width=20, height=10, dpi=300, plot= last_plot(), units = "in")
+```
+Checking markers from 20-RENCA-010 30mpk analysis for differentiating Macrophage from MDSC/M2
+```{r fig.height=4,fig.width=6}
+FeaturePlot(batch1,slot = "scale.data",cols=c("grey90","red"),features = c("CD86","CD52","CD74","CD83"), ncol=2) 
+ggsave("mRNA_CITE_comparison_myeloid_counts.jpg", width=20, height=10, dpi=300, plot= last_plot(), units = "in")
+
+FeaturePlot(batch1,slot = "scale.data",cols=c("grey90","red"),features = c("CX3CR1","CCL5","HCK","CCR2"), ncol=2) 
+
+FeaturePlot(batch1,slot = "data",cols=c("grey90","blue"),features = c("CD36"), ncol=3)
+
+FeaturePlot(batch1,slot = "scale.data",cols=c("grey90","red"),features = c("S100A8","S100A9","MMP8","PTGS2","CSF3R","NEAT1"), ncol=3) 
+```
+
+###################
+RidgePlot
+####################
+
+```{r fig.height=17, fig.width=20}
+RidgePlot(batch3c,features = c("HLA-DRA","CD11b-CITE","CD11c-CITE","CD14-CITE","CD33-CITE","CD15-CITE","FCGR3B","FCGR3A","CD34-CITE","CSF-1R-CITE","ARG1","nFeature_RNA","CSF3R","CD3A","CD4","CCR4-CITE"), ncol =5, idents=c(1,2,5,7,21,12,14,9,16,17,20,27,8,15,11,13,6,25))
+
+RidgePlot(batch4,features = c("HLA-DRA","CD11b-CITE","CD11c-CITE","KLRG1"), ncol =5)
+```
+
+```{r fig.height=8, fig.width=12}
+RidgePlot(batch3c,features = c("CCR4-CITE","CD4-CITE","CD8A"), ncol =3) + xlim(-0.2,3) + NoLegend()
+RidgePlot(batch3c,features = c("CCR4-CITE","CD4","CD8A"), ncol =3, sort=TRUE) + NoLegend()
+```
+
+```{r}
+RidgePlot(batch1,y.max=5,log=TRUE,features = c("CD34-CITE"))
+```
+```{r fig.height=5, fig.width=15}
+RidgePlot(batch1_batch2,log=TRUE,features = c("CD14-CITE","CD15-CITE","CD34-CITE","OLR1"), ncol=4)
+```
+```{r fig.height=5, fig.width=12}
+RidgePlot(batch3c,features = c("DEFA4","MMP8","CEACAM8","LOX1"), ncol=4) #, NoLegend())
+RidgePlot(batch1_batch2,features = c("CD8A","CD79A"), ncol=2, slot="data") #, NoLegend())
+RidgePlot(batch1_batch2,features = c("FCGR3B"), ncol=1) #, NoLegend())
+RidgePlot(batch1_batch2,features = c("HLA-DRA"), ncol=1, log=TRUE) #, NoLegend())
+HLA-DQA1
+RidgePlot(batch1_batch2,features = c("percent.HLA-D"), log=TRUE) #, NoLegend())
+RidgePlot(batch1,features = c("percent.HLA-DR"), log=TRUE) #, NoLegend())
+VlnPlot(batch1,features = c("percent.HLA-D"), ncol=1, log=TRUE) #, NoLegend())
+```
+
+FeatureScatter
+
+```{r fig.height=8, fig.width=8}
+c("ITGAM","CD11b-CITE","ITGAX","CD11c-CITE","CD14","CD14-CITE","SIGLEC6","CD33-CITE","CD4","CD4-CITE","FUT4","CD15-CITE","CD34","CD34-CITE","CSF1R","CSF-1R-CITE")
+FeatureScatter(batch1, feature1="CD4", feature2 = "CD4-CITE")
+FeatureScatter(batch1, feature1="ITGAM", feature2 = "CD11b-CITE")
+FeatureScatter(batch1, feature1="ITGAX", feature2 = "CD11c-CITE")
+FeatureScatter(batch1, feature1="CD14", feature2 = "CD14-CITE")
+FeatureScatter(batch1, feature1="SIGLEC6", feature2 = "CD33-CITE")
+FeatureScatter(batch1, feature1="CD4", feature2 = "CD4-CITE")
+FeatureScatter(batch1, feature1="FUT4", feature2 = "CD15-CITE")
+FeatureScatter(batch1, feature1="CD34", feature2 = "CD34-CITE")
+FeatureScatter(batch1, feature1="CSF1R", feature2 = "CSF-1R-CITE")
+FeatureScatter(batch1, feature1="CD274", feature2 = "PD-L1-CITE")
+FeatureScatter(batch1, feature1="CCR6", feature2 = "CCR6-CITE")
+FeatureScatter(batch1, feature1="PDCD1", feature2 = "PD-1-CITE")
+FeatureScatter(batch1, feature1="CXCR3", feature2 = "CXCR3-CITE")
+FeatureScatter(batch1, slot="counts",feature1="LAG3", feature2 = "LAG-3-CITE")
+FeatureScatter(batch1, slot="data",feature1="LAG3", feature2 = "LAG-3-CITE")
+
+FeatureScatter(batch1, feature1="CD33-CITE", feature2 = "CD34-CITE") #
+FeatureScatter(batch1, feature1="CD15-CITE", feature2 = "CD34-CITE") #
+FeatureScatter(batch1, feature1="CD14-CITE", feature2 = "CD34-CITE") #
+#
+cd14 <- subset(batch1,idents = c("7","9","13"))
+cd15 <- subset(batch1,idents = c("0","5","9","13","16"))
+FeatureScatter(cd14, "CD14-CITE", feature2 = "CD15-CITE")
+FeatureScatter(cd14, "CD14-CITE", feature2 = "CD34-CITE")
+
+FeatureScatter(cd15, "CD14-CITE", feature2 = "CD15-CITE")
+FeatureScatter(batch1, feature1="CD14-CITE", feature2 = "CD15-CITE") 
+
+rownames(batch1$CITE)
+```
+
+Export data for custom plotting
+
+```{r}
+rna_matrix <- as.matrix(batch1$RNA@scale.data)
+save(rna_matrix,file = "rna_scale.data_matrix.rdata")
+rna_matrix[1:5,1:5]
+boxplot(rna_matrix[,1:30])
+data_CITE <- as.matrix(batch1$CITE@counts)
+
+data_CITE[1:7,1:5]
+mRNA_CITE[1:15,1:5]
+mRNA_CITE <- data_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("ITGAM","ITGAX","CD14","CXCR3","CCR4","CCR6","LAG3","CD274","PDCD1","SIGLEC6","PTPRC","CD4","FUT4","CSF1R","CD34")) %>% arrange(match(Gene,c("ITGAM","ITGAX","CD14","CXCR3","CCR4","CCR6","LAG3","CD274","PDCD1","SIGLEC6","PTPRC","CD4","FUT4","CSF1R","CD34")))
+mRNA_gather <- mRNA_CITE %>% gather(Cell,mRNA_counts,-Gene)
+```
+
+
+```{r fig.height=10, fig.width=15}
+data_CITE_f[1:16,1:5]
+
+CITE_gather <- data_CITE %>% data.frame %>% tibble::rownames_to_column("Gene_CITE") %>% dfilter (Gene_CITE != "CD45RO-CITE") %>% dselect(-Gene_CITE) %>% mutate(Gene=c("ITGAM","ITGAX","CD14","CXCR3","CCR4","CCR6","LAG3","CD274","PDCD1","SIGLEC6","PTPRC","CD4","FUT4","CSF1R","CD34")) %>% gather(Cell,CITE_counts,-Gene)
+ 
+All_gather <- left_join(mRNA_gather,CITE_gather, by="Gene")
+
+All_gather2 <- cbind(mRNA_gather,CITE_gather[,3])
+colnames(All_gather2) <- c("Gene","Cell","mRNA_counts","CITE_counts")
+ggplot(All_gather2 %>% dfilter(Gene != "PTPRC"), aes(x=mRNA_counts, y = CITE_counts, alpha=0.5)) + geom_jitter() + facet_wrap(~Gene, scales="free", ncol=5)
+```
+
+Heatmap of CITE markers
+```{r fig.height=15, fig.width=15}
+DoHeatmap(batch1, features= rownames(batch1$CITE), assay="CITE", angle=90) +NoLegend()
+rownames(batch1$CITE)
+```
+
+
+Calculate Euclidian distance matrix
+```{r}
+CITE.data <- GetAssayData(batch1, slot= "data")
+CITE.dist <- dist(t(CITE.data))
+
+batch1[["umap_CITE"]] <- RunUMAP(CITE.dist, assay="CITE",reduction.key = "CITEumap_")
+batch1[["CITE_snn"]] <- FindNeighbors(CITE.dist)$snn
+batch1 <- FindClusters(batch1, resolution = 0.2, graph.name="CITE_snn") #this is the function that changed all the clusters
+??FindClusters
+
+clustering.table <- table(Idents(batch1),batch1$citeClusterID)
+write.table(clustering.table, file="CITE_mRNA_matrix.txt", sep="\t", quote=FALSE)
+
+methods_cor <- cor.test(as.numeric(Idents(batch1)),as.numeric(batch1$citeClusterID))
+
+```
+###################
+Dot plot of Heatmap
+##################
+
+```{r fig.height=10, fig.width=8}
+install.packages("ggcorrplot")
+#install.packages("corrgram")
+library(ggcorrplot)
+#library(corrgram)
+
+ggcorrplot(clustering.table, method = "circle")
+#clustering.table %>% data.frame %>% tibble::rownames_to_column("Groups") %>% arrange(rev(Groups))
+clustering.table_n <- clustering.table/878
+ggcorrplot((clustering.table_n), method = "circle")
+
+
+#ggcorrplot(methods_cor, method ="circle")
+
+```
+
+
+```{r fig.height=6, fig.width=8}
+DimPlot(batch1, reduction="umap", label=TRUE) +
+ggsave("CITE_Clusters_UMAP.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+```
+
+
+
+```{r fig.height=5, fig.width=15}
+FeaturePlot(batch3c,reduction="umap",slot ="data",cols=c("grey90","blue"),features = c( "CD14-CITE","CXCR3-CITE","CCR4-CITE","LAG-3-CITE","PD-L1-CITE","PD-1-CITE","CD45RA-CITE","CD45RO-CITE","CD4-CITE","CD15-CITE","CSF-1R-CITE","CD11b-CITE","CD11c-CITE","CD34-CITE","FCGR3B", "HLA_DRA","CD33-CITE","ARG1","FCGR3B","CD79A","VCAN"), ncol=5,max.cutoff=5) 
+
+FeaturePlot(batch4,reduction="umap",slot ="data",cols=c("grey90","red"),features = c( "CSF1R","CXCR2","EIFA2K4","GZMA"), ncol=3, max.cutoff = 1) 
+#ggsave("CITE_feature_counts.jpg", width=20, height=10, dpi=300, plot= last_plot(), units = "in")
+rownames(batch1$CITE)
+```
+
+
+###################
+###################
+
+Logicle tranform to plot data more like FACs
+May 21
+flowcore imports FCS: Flow cytometry standard format, or it can be created manually from a matrix
+1. use batch3c_matrix to select markers for FACs analysis
+###################
+###################
+7198 91816    93    37    22    42   226   479 19036    83 13663 10416 47687
+```{r}
+BiocManager::install("flowCore")
+library(flowCore)
+library(Biobase)
+
+facs_matrix <- FetchData(batch3c, vars= c("nFeature_RNA","nCount_RNA","PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B","CD14-CITE","CD15-CITE","CD4-CITE"), slot="counts") %>% as.matrix
+colnames(facs_matrix) <- c("nFeature_RNA","nCount_RNA","PTPRC","CD3G","CD8A","CD79A","GNLY","HLA_DRA","CD11b_CITE","FCGR3B","CD14_CITE","CD15_CITE","CD4_CITE")
+facs_cells <- rownames(facs_matrix)
+count_max <- facs_matrix %>% data.frame %>% summarise_all(max) %>% t %>% data.frame %>% pull(.data$.)
+facs_matrix[1:5,]
+#c("FL1-H","FL2-H","FL3-H","FL4-H","FL5-H","FL6-H","FL7-H","FL8-H","FL9-H","FL10-H"),
+para <- data.frame(name=c("nFeature_RNA","nCount_RNA","PTPRC","CD3G","CD8A","CD79A","GNLY","HLA_DRA","CD11b_CITE","FCGR3B","CD14_CITE","CD15_CITE","CD4_CITE"),desc=c("nFeature_RNA","nCount_RNA","PTPRC","CD3G","CD8A","CD79A","GNLY","HLA_DRA","CD11b_CITE","FCGR3B","CD14_CITE","CD15_CITE","CD4_CITE"), range=c(as.numeric(rep(1024,13))), minRange=c(as.numeric(rep(0,13))), maxRange=count_max)
+
+my_flowframe <- flowFrame(exprs=facs_matrix,parameters=AnnotatedDataFrame(data=para) )
+
+lgcl <- logicleTransform(transformationId="defaultlogicleTransform", w=0.3, t=226, m=1, a=0) 
+lgcl <- estimateLogicle(my_flowframe,channels=c("CD79A","GNLY")) #,"CD79A","GNLY","HLA_DRA","CD11b_CITE","FCGR3B","CD14_CITE","CD15_CITE"
+
+gate2 <- transform(my_flowframe, lgcl)
+rownames(gate1) <- facs_cells
+exprs(gate_counts)
+
+
+```
+
+###################
+###################
+
+Manually cluster like FACs
+
+May 13
+
+the exprs(gate#) lines are logicle normalized
+###################
+###################
+
+```{r fig.height=4, fig.width=4}
+
+exprs(gate_counts) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% ggplot(aes(nFeature_RNA,nCount_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,150),oob=squish) + nolegend()
+
+#gate 1
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A")) %>% ggplot(aes(CD3G,PTPRC)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend()
+
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A")) %>% mutate(CD45_a = ifelse(PTPRC==0,runif(28888,min=-2,max=-1),PTPRC), CD3G_a = ifelse(CD3G==0,runif(28888,min=-2,max=-1),CD3G)) %>% ggplot(aes(CD3G_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend() 
+#gate 1b CD4-cite
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD4-CITE"))  %>% dfilter(CD3G ==0, CD8A ==0) %>% mutate(CD45_a = ifelse(PTPRC==0,runif(28888,min=-2,max=-1),PTPRC), CD4_a = ifelse(`cite_CD4-CITE`==0,runif(28888,min=-2,max=-1),`cite_CD4-CITE`)) %>% ggplot(aes(CD4_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend() 
+
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD4-CITE"))  %>% dfilter(CD3G ==0, CD8A ==0) %>% mutate(CD45_a= jitter(PTPRC,amount=0.2),CD4_CITE_a= jitter(`cite_CD4-CITE`,amount=0.2)) %>% ggplot(aes(CD4_CITE_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend() + xlim(0,6)
+
+exprs(gate1) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% mutate(CD3_a=jitter(CD3G,amount=0.2),CD45_a=jitter(PTPRC,amount=0.2)) %>% ggplot(aes(CD3G,PTPRC)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,150),oob=squish) + nolegend()
+
+exprs(gate1) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% mutate(CD45_a = ifelse(PTPRC==0,runif(28888,min=-1,max=-0.1),PTPRC), CD3G_a = ifelse(CD3G==0,runif(28888,min=-1,max=-0.1),CD3G)) %>% mutate(CD3G_a=jitter(CD3G_a,amount=0.2),CD45_a=jitter(CD45_a,amount=0.2)) %>% ggplot(aes(CD3G_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,100),oob=squish) + nolegend()
+
+exprs(gate1b) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% mutate(CD45_a= jitter(PTPRC,amount=0.2),CD4_CITE_a= jitter(CD4_CITE,amount=0.2)) %>% ggplot(aes(CD4_CITE_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend()
+
+#gate 2
+exprs(gate2) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0,CD4_CITE <2) %>% mutate(CD79A_a = ifelse(CD79A==0,runif(28888,min=-1.3,max=-0.3),CD79A), GNLY_a = ifelse(GNLY<= 0,runif(28888,min=-1.3,max=-0.3),GNLY)) %>% mutate(CD79A_a=jitter(CD79A_a,amount=0.2),GNLY_a=jitter(GNLY_a,amount=0.2)) %>% ggplot(aes(CD79A_a,GNLY_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,120),oob=squish) + nolegend()
+# 
+
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY")) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0) %>% mutate(CD79A_a = ifelse(CD79A==0,runif(28888,min=-2,max=-1),CD79A), GNLY_a = ifelse(GNLY==0,runif(28888,min=-2,max=-1),GNLY)) %>% ggplot(aes(CD79A_a,GNLY_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,150),oob=squish) + nolegend()
+#gate 3 HLA vs CD11B
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE")) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0 ,CD79A ==0, GNLY==0) %>% mutate(HLA_DRA_a = ifelse(`HLA-DRA`==0,runif(28888,min=-2,max=-1),`HLA-DRA`), cite_CD11b_CITE_a = ifelse(`cite_CD11b-CITE`<= 0.2,runif(28888,min=-2,max=-1),`cite_CD11b-CITE`)) %>% ggplot(aes(cite_CD11b_CITE_a,HLA_DRA_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,100),oob=squish) + nolegend()
+
+exprs(gate3) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0,CD4_CITE <2,CD79A ==0, GNLY==0) %>% mutate(HLA_DRA_a = ifelse(HLA_DRA==0,runif(28888,min=-1.3,max=-0.3),HLA_DRA), CD11b_CITE_a = ifelse(CD11b_CITE<= 0,runif(28888,min=-1.3,max=-0.3),CD11b_CITE)) %>% ggplot(aes(CD11b_CITE_a,HLA_DRA_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,100),oob=squish) + nolegend()
+
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE")) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0 ,CD79A ==0, GNLY==0) %>% dfilter(`HLA-DRA`==0,`cite_CD11b-CITE` > 0.2)
+
+#gate 4 CD16 vs CD11B
+# TOGGLING
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B")) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, `HLA-DRA` ==0, `cite_CD11b-CITE` > 0.5 ) %>% mutate(FCGR3B_a = ifelse(FCGR3B==0,runif(28888,min=-2,max=-1),FCGR3B), cite_CD11b_CITE_a = ifelse(`cite_CD11b-CITE`<=0.20,runif(28888,min=-2,max=-1),`cite_CD11b-CITE`)) %>% ggplot(aes(cite_CD11b_CITE_a,FCGR3B_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,80),oob=squish) + nolegend() +xlim(-2,6)
+
+exprs(gate4) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, HLA_DRA ==0, CD11b_CITE > 1.5 ) %>% mutate(FCGR3B_a = ifelse(FCGR3B==0,runif(28888,min=-1,max=0),FCGR3B), CD11b_CITE_a = ifelse(CD11b_CITE <=0.20,runif(28888,min=-1.3,max=-0.3),CD11b_CITE)) %>% mutate(CD16_a = jitter(FCGR3B_a,amount=0.2)) %>% ggplot(aes(CD11b_CITE_a,CD16_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,80),oob=squish) + nolegend() + xlim(-0.5,4.5)
+
+#count cells
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B")) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, `HLA-DRA` ==0, `cite_CD11b-CITE` > 0.5 ) %>% dfilter(FCGR3B > 0)
+
+# Gate 5 CD14 vs CD15
+# CUTOFF at 1.5 for both markers
+#don't use this
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B","CD14-CITE","CD15-CITE")) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, `HLA-DRA` ==0, `cite_CD11b-CITE` > 0.2, FCGR3B == 0 ) %>% mutate(cite_CD14_CITE_a = ifelse(`cite_CD14-CITE` <1.5,runif(28888,min=-2,max=-1),`cite_CD14-CITE`), cite_CD15_CITE_a = ifelse(`cite_CD15-CITE`<1.50,runif(28888,min=-2,max=-1),`cite_CD15-CITE`)) %>% ggplot(aes(cite_CD14_CITE_a,cite_CD15_CITE_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,30),oob=squish) + nolegend() 
+
+# create a object with normalized data for all markers, then merge in the count data for CD14 and CD15 CITE markers, because their signal spread is different and better represented by counts. Gate on 0 counts
+mdsc <- FetchData(batch4, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B")) %>% tibble::rownames_to_column("Cell") %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0 ,CD79A ==0, GNLY==0, `HLA-DRA` ==0, `cite_CD11b-CITE` > 0.2, FCGR3B == 0)
+
+# gMDSC and mMDSC separation by 1, + 0.1 to Zero counts, 2. Log2 transform, 3. fan out original values that were 0  4. add jitter
+mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell")  %>% mutate(`cite_CD14-CITE`=ifelse(`cite_CD14-CITE`==0, `cite_CD14-CITE`-0.1, `cite_CD14-CITE`),`cite_CD15-CITE`=ifelse(`cite_CD15-CITE`==0, `cite_CD15-CITE`-0.1, `cite_CD15-CITE`)) %>% mutate(CD14_log = log(`cite_CD14-CITE`,2), CD15_log=log(`cite_CD15-CITE`,2)) %>% mutate(CD14_log_a = ifelse(CD14_log <=0,runif(31307,min=-2,max=-1),CD14_log), CD15_log_a = ifelse(CD15_log<=0,runif(31307,min=-2,max=-1),CD15_log)) %>% mutate(CD14_log_a= jitter(CD14_log_a,amount=0.25)) %>% ggplot(aes(CD14_log_a,CD15_log_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,30),oob=squish) + nolegend() + expand_limits(x=c(0.001,10), y=c(0.001, 15))
+
+
+exprs(gate5) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, HLA_DRA ==0, CD11b_CITE > 1.5, FCGR3B == 0 ) %>% ggplot(aes(CD14_CITE,CD15_CITE)) + geom_hex(bins=80) + scale_fill_continuous(type="viridis", limit = c(0,25),oob=squish) + nolegend() 
+
+exprs(gate5) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, HLA_DRA ==0, CD11b_CITE > 1.5, FCGR3B == 0 ) %>% mutate(CD14_CITE_a = ifelse(CD14_CITE ==0 ,runif(28888,min=-1.5,max=-1),CD14_CITE), CD15_CITE_a = ifelse(CD15_CITE ==0 ,runif(28888,min=-1,max=-0.5),CD15_CITE)) %>% mutate(CD14_CITE_a= jitter(CD14_CITE_a,amount=0.2),CD15_CITE_a= jitter(CD15_CITE_a,amount=0.2)) %>% ggplot(aes(CD14_CITE_a,CD15_CITE_a)) + geom_hex(bins=80) + scale_fill_continuous(type="viridis", limit = c(0,25),oob=squish) + nolegend() 
+
+#gMDSC CD15+, CD14=0
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0)
+
+facs_gMDSCs <- mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0) %>% pull(Cell) #368
+
+facs_gMDSCs_CD33 <- mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE","CD33-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0, `cite_CD33-CITE` > 0) %>% pull(Cell) #375
+
+facs_gMDSCs_CD33_CD34 <- mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE","CD33-CITE","CD34-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0, `cite_CD33-CITE` > 0, `cite_CD34-CITE` > 0) %>% pull(Cell) #375
+
+#Gate 6A gMDSC CD33 CD34
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE","CD33-CITE","CD34-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"), by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0) %>% mutate(`cite_CD33-CITE`=ifelse(`cite_CD33-CITE`==0, `cite_CD33-CITE`+0.1, `cite_CD33-CITE`),`cite_CD34-CITE`=ifelse(`cite_CD34-CITE`==0, `cite_CD34-CITE`+0.1, `cite_CD34-CITE`)) %>% mutate(CD33_log = log(`cite_CD33-CITE`,2), CD34_log=log(`cite_CD34-CITE`,2)) %>% mutate(CD33_log_a = ifelse(CD33_log <=0.1,runif(28888,min=-2,max=-1),CD33_log), CD34_log_a = ifelse(CD34_log<=0.1,runif(28888,min=-2,max=-1),CD34_log)) %>% mutate(CD33_log_a= jitter(CD33_log_a,amount=0.25),CD34_log_a= jitter(CD34_log_a,amount=0.25)) %>% ggplot(aes(CD33_log_a,CD34_log_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,10),oob=squish) + nolegend() #+ expand_limits(x=c(0.001,10), y=c(0.001, 15))
+
+#iiMDSC CD14-, CD15-
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` == 0) #9
+
+#iMDSC CD14+, CD15+
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0)
+
+#iMDSC CD14+, CD15+, split into CD14 higher and CD15 higher
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` > 7.5/5)
+
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` > 7.5/5)
+
+# plot the CD15+ CD14+ group where CD15+ is relatively higher
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE","CD33-CITE","CD34-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` > 7.5/5) %>% mutate(`cite_CD33-CITE`=ifelse(`cite_CD33-CITE`==0, `cite_CD33-CITE`+0.1, `cite_CD33-CITE`),`cite_CD34-CITE`=ifelse(`cite_CD34-CITE`==0, `cite_CD34-CITE`+0.1, `cite_CD34-CITE`)) %>% mutate(CD33_log = log(`cite_CD33-CITE`,2), CD34_log=log(`cite_CD34-CITE`,2)) %>% mutate(CD33_log_a = ifelse(CD33_log <=0.1,runif(28888,min=-2,max=-1),CD33_log), CD34_log_a = ifelse(CD34_log<=0.1,runif(28888,min=-2,max=-1),CD34_log)) %>% mutate(CD33_log_a= jitter(CD33_log_a,amount=0.25),CD34_log_a= jitter(CD34_log_a,amount=0.25)) %>% ggplot(aes(CD33_log_a,CD34_log_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,10),oob=squish) + nolegend()
+
+#CD14+ CD15+ relative
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` <= 7.5/5)
+
+facs_gMDSC_CD14 <- mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` > 7.5/5) %>% pull(Cell)
+
+save(facs_gMDSC_CD14,file="gMDSC_CD14pos.rdata")
+
+facs_mMDSC_CD15 <- mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` <= 7.5/5) %>% pull(Cell)
+
+#iMDSC CD14+, CD15-
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` == 0)
+facs_mMDSC <- mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` == 0) %>% pull(Cell)
+
+#iMDSC CD14-, CD15+
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`== 0, `cite_CD15-CITE` > 0)
+
+#mMDSC
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell")  %>% mutate(`cite_CD14-CITE`=ifelse(`cite_CD14-CITE`==0, `cite_CD14-CITE`+0.1, `cite_CD14-CITE`),`cite_CD15-CITE`=ifelse(`cite_CD15-CITE`==0, `cite_CD15-CITE`+0.1, `cite_CD15-CITE`)) %>% mutate(CD14_log = log(`cite_CD14-CITE`,2), CD15_log=log(`cite_CD15-CITE`,2)) %>% mutate(CD14_log_a = ifelse(CD14_log <=0.1,runif(28888,min=-2,max=-1),CD14_log), CD15_log_a = ifelse(CD15_log<=0.1,runif(28888,min=-2,max=-1),CD15_log)) 
+```
+Put FACs cell annotations into the batch3c object
+
+```{r fig.height=5, fig.width=10}
+batch3c[["percent.HLA.D"]] 
+
+facs_gMDSCs
+
+DimPlot(batch4, cells.highlight = WhichCells(batch4,cells=facs_gMDSCs),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+DimPlot(batch4, cells.highlight = WhichCells(batch4,cells=facs_gMDSC_CD14),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+DimPlot(batch4, cells.highlight = WhichCells(batch4,cells=facs_gMDSCs_CD33),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+DimPlot(batch4, cells.highlight = WhichCells(batch4,cells=facs_gMDSCs_CD33_CD34),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+
+DimPlot(batch4, cells.highlight = WhichCells(batch4,cells=facs_mMDSC_CD15),cols.highlight="red",sizes.highlight=0.2) + NoLegend()
+DimPlot(batch4, cells.highlight = WhichCells(batch4,cells=facs_mMDSC),cols.highlight="red",sizes.highlight=0.5) + NoLegend()
+
+FetchData(batch4, vars=c("nFeature_RNA", "ident"), cells=facs_gMDSC_CD14) %>% ggplot(aes(ident,nFeature_RNA, color=ident)) + geom_violin() + geom_jitter(size=0.5) + NoLegend()
+
+hilite_g <- FetchData(batch4, vars=c("nFeature_RNA", "ident","orig.ident"), cells=facs_gMDSC_CD14)
+hilite_m <- FetchData(batch4, vars=c("nFeature_RNA", "ident"), cells=facs_mMDSC_CD15)
+
+FetchData(batch4, vars=c("nFeature_RNA", "ident")) %>% tibble::rownames_to_column("Cell") %>% ggplot(aes(ident,nFeature_RNA)) + geom_jitter(size=0.5) + geom_jitter(data=hilite_g, aes(x=ident,y=nFeature_RNA), color='red', size=0.5) + NoLegend()
+
+FetchData(batch4, vars=c("nFeature_RNA", "ident")) %>% tibble::rownames_to_column("Cell") %>% ggplot(aes(ident,nFeature_RNA)) + geom_jitter(size=0.5) + geom_jitter(data=hilite_m, aes(x=ident,y=nFeature_RNA), color='red', size=0.5) + NoLegend() + scale_y_log10()
+
+hilite_g %>% dselect(ident, orig.ident) %>% table #118 FACS+ gMDSCs in cluster 20, 273 FACS gMDSC cells in cluster 13, 447 cells in cluster 20
+batch4@active.ident %>% table
+hilite_m %>% dselect(ident) %>% table #~100 mMDSCs
+```
+
+
+
+
+
+
+###################
+###################
+Subset to just the myeloid clusters
+###################
+###################
+
+```{r}
+batch4_myeloid <- subset(batch4, idents=c(2,3,5,8,21,13,20,10,7,11,12,15,25,22))
+save(batch4_myeloid, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_myeloid.Robj") 
+DimPlot(batch4_myeloid, reduction="umap",label=TRUE)
+```
+Gabrilovich features
+
+UP in gMDSCs
+```{r fig.height=5, fig.width=25}
+FeaturePlot(batch3_myeloid,reduction="umap",slot ="data",cols=c("grey90","red"),features = c("OLFM4","LCN2","CEACAM8","DEFA1","VCAN","CPVL","PPBP","DEFA4","CD24","TUBB1","LTF","ANXA2","OLR1","RGCC","MS4A3","S100A10","BPI","THBS1","DPYSL2","NKG7"), ncol=5)
+
+
+FeaturePlot(batch3c,reduction="umap",slot ="data",cols=c("grey90","red"),features = c("BCL2","BAX","MLKL","HMGB1","percent.mt"), ncol=5)
+```
+
+UP in Neutrophils
+```{r fig.height=12, fig.width=25}
+FeaturePlot(batch4_myeloid,reduction="umap",slot ="data",cols=c("grey90","red"),features = c("TNF","CASP8","EID3","CDC42EP3","CYP4F3","LBR","MXI1","LOC606724","RAPGEF2","BEND7","NLRP12","SLC30A1","SNORA12","SNORA23","PIM1","DHRSX","SCL38A2","TSR1","PHF13"), ncol=5) 
+```
+RAPT MDSC signature
+```{r fig.height=25, fig.width=25}
+FeaturePlot(batch4_myeloid,reduction="umap",slot ="data",cols=c("grey90","red"),features = c("DYSF", "C5AR1", "TREM1", "CSF3R", "DEFA1", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C", "LTF", "F13A1", "PPBP", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "CD24", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1"), ncol=5) 
+cluster 20 gMDSC markers: LTF, CD24, CAMP, BPI. LCN2, DEFA1
+FeaturePlot(batch4_myeloid,reduction="umap",slot ="data",cols=c("grey90","red"),features = c("CSF3R", "SLC6A6", "TREM1", "CLEC4E", "PLBD1"), ncol=5) 
+
+```
+
+#################
+
+Label the clusters with Predicted cell types
+
+################
+
+```{r}
+CITE_ident <- c("0 gMDSC","1 T cell CD45RA+","2 Markerless","3 MDSC CD14+ CD15+","4 T cell CXCR3+ PD1+","5 Markerless","6 MDSC CD14+ CD15+","7 CD45RA+ Naive cell","8 Markerless","9 CD45RA+","10 Markerless","11 Markerless")
+mRNA_ident <- c("0 gMDSC","1 T cell CD4+ TCF7+","2 NK","3 T cell CD4 CCR7+","4 T cell CD4 CCR7+ TCF7+","5 gMDSC SELL+","6 T cell CD8+","7 mMDSC CD15+","8 Granulocyte","9 mMDSC CD14+/- CD34 med","10 Platelet","11 B cell","12 T cell CD4 RPhigh","13 mMDSC CD15+ CSF1R+","14 Granulocyte CD16+","15 Granulocyte CD16+","16 gMDSC DEFA3+","17 Apoptotic","18 Unknown GAPDH++","19 DC","20 NK XCL+")
+#make the quivalency of the old labels to the new label names
+
+names(CITE_ident) <- levels(batch1) # 11 levels in CITE mode
+batch1 <- RenameIdents(batch1,CITE_ident)
+```
+
+Total chaos on trying to rename mRNA clusters after moving on to the CITE clustering
+Save CITE cluster names before proceeding more
+```{r}
+batch1[["citeClusterID"]] <- Idents(batch1)
+```
+
+
+Seurat 2 had SetAllIdent, which is changed to Ident in Seurat3:
+Idents(batch1) <- "new.idents"
+https://satijalab.org/seurat/essential_commands.html
+```{r}
+
+DefaultAssay(batch1) <- "RNA"
+# switch back to mRNA mode to change mRNA cluster names
+mRNA_ident #this was defined
+#Restore the mRNA clusters
+Idents(batch1) <- batch1[["rnaClusterID"]]
+
+names(mRNA_ident) <- levels(batch1$rnaClusterID)
+batch1 <- RenameIdents(batch1, mRNA_ident)
+
+levels(batch1)
+
+DefaultAssay(batch1) <- "CITE"
+table(Idents(batch1),batch1$citeClusterID)
+```
+Plot mRNA and CITE groupings side by side
+
+```{r fig.height=7, fig.width=12}
+#RNA_clust <- 
+DimPlot(batch1, reduction="umap",label=TRUE, label.size=5, repel=TRUE, pt.size=0.75) + NoLegend() + scale_color_manual(values= r_palette)+ ggtitle("Clustering based on scRNA-seq") + theme(plot.title = element_text(hjust = 0.5)) +
+ggsave("Labelled_Clusters_UMAP.jpg", width=11, height=7, dpi=300, plot= last_plot(), units = "in")
+
+CITE_clust<- DimPlot(batch1, reduction="umap", group.by ="citeClusterID", label=TRUE,label.size=4) + NoLegend() + ggtitle("Clustering based on CITE-seq") + theme(plot.title = element_text(hjust = 0.5))
+
+CombinePlots(plots = list(RNA_clust,CITE_clust), ncol=2) +
+ggsave("mRAN_vs_CITE_Clusters_UMAP.jpg", width=14, height=7, dpi=300, plot= last_plot(), units = "in")
+
+
+my_colour_palette <- c("#F8766D", "#EB8335" ,"#DA8F00","#FF63B9", "#A9A400", "#86AC00" , "#53B400" , "#A58AFF","#C49A00" , "#00C094", "#00C0B5", "#FF6B96" , "#00ABFD" , "#FB61D7" ,"#619CFF", "#00BE6D", "#D078FF" ,"#EC69EF" ,"#00BA38" ,"#00BDD2" ,"#00B6EB")
+
+
+
+```
+Fix the colour palatte so adjacent groups can be distinguished
+```{r}
+require(scales)
+hue_pal()(21)
+green jumble: 7, 8, 9, 13, 14   
+reds "#F8766D" "#EB8335" "#DA8F00" "#C49A00" 
+greens "#A9A400" "#86AC00" 7 "#53B400" 8 "#FB61D7"  9 "#A58AFF"  "#00C094" 
+blues "#00C0B5" "#00BDD2" 13 "#FF6B96" 14 "#00ABFD" "#619CFF" 
+purples "#00BE6D" "#D078FF" "#EC69EF" 
+pinks "#00BA38" "#FF63B9" "#00B6EB"
+```
+
+
+```{r fig.height=5, fig.width=7}
+colSums(table(Idents(batch1),batch1$orig.ident)) 
+
+
+
+prop.table(table(Idents(batch1),batch1$orig.ident),2) %>% data.frame %>% rename(Celltype= Var1, Donor = Var2, Cell_percent = Freq) %>% mutate(Celltype = factor(Celltype, levels= rev(c("0 gMDSC","5 gMDSC SELL+","16 gMDSC DEFA3+","7 mMDSC CD15+","9 mMDSC CD14+/- CD34 med","13 mMDSC CD15+ CSF1R+","1 T cell CD4+ TCF7+","2 NK","3 T cell CD4 CCR7+","4 T cell CD4 CCR7+ TCF7+","6 T cell CD8+","12 T cell CD4 RPhigh","8 Granulocyte","14 Granulocyte CD16+","15 Granulocyte CD16+","10 Platelet","11 B cell","17 Apoptotic","18 Unknown GAPDH++","19 DC","20 NK XCL+")))) %>% ggplot(aes(Donor,Celltype, fill=Cell_percent)) + geom_tile(label=TRUE, size=8) + scale_fill_gradient(low="white", high="blue") + geom_text(aes(label = round(Cell_percent, 2))) +
+ggsave("Per_donor_cell_percentage.jpg", width=7, height=5, dpi=300, plot= last_plot(), units = "in")
+#+ scale_fill_gradient(low = "white", high = "steelblue")
+```
+
+#######################
+######################
+
+Predict cell type by xCell and MDSC score
+
+M1, M2, Macrophage signatures are each one of the xcell BLUEPRINT signatures that have the most markers out of 3. 
+I compared the xcell makers with the most and least number of markers, and the ones with fewer markers don't give robust scores. 
+#######################
+######################
+```{r}
+gMDSC_sig <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "DEFA1", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C", "LTF", "F13A1", "PPBP", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "CD24", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1")
+# 42
+
+mMDSC_sig <- c("CSF3R", "SLC6A6", "TREM1", "CLEC4E", "PLBD1")
+
+MDSC_signature <- c("DEFA1", "DEFA3", "LTF", "DEFA1B", "MMP8", "OLFM4", "DEFA4", "CEACAM8", "ABCA13", "CRISP3", "ELANE", "CAMP", "CTSG", "PGLYRP1", "RNASE3", "HP", "MPO", "BPI", "MS4A3", "RNASE2", "RETN", "F13A1", "PPBP", "GP9", "TUBB1", "CMTM2", "PROK2", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "S100A12", "CR1")
+
+Macrophage <- c("ACP2" ,"ADRA2B" ,"ALCAM" ,"ABCD1" ,"ATOX1" ,"ATP6V0C" ,"ATP6V1E1" ,"BLVRA" ,"C1QA" ,"CD48" ,"CD63" ,"CLCN7" ,"TPP1" ,"CLTC" ,"CCR1" ,"CMKLR1" ,"SLC31A1" ,"COX5B" ,"FCER1G" ,"FDX1" ,"FOLR2" ,"FPR3" ,"FTL" ,"HEXB" ,"HK3" ,"IL10" ,"IL12B" ,"ITGAE" ,"LAIR1" ,"CXCL9" ,"MMP19" ,"NARS" ,"NDUFS2" ,"P2RX7" ,"PDCL" ,"MAPK13" ,"PTGIR" ,"PTPRA" ,"RELA" ,"CCL7" ,"CCL8" ,"CCL19" ,"CCL22" ,"SRC" ,"STX4" ,"TCEB1" ,"TFRC" ,"AGPS" ,"MARCO" ,"SNX3" ,"CD84" ,"USP14" ,"ITGB1BP1" ,"ATP6V1F" ,"TRIP4" ,"CD163" ,"CIAO1" ,"WTAP" ,"ARHGEF11" ,"ABI1" ,"SCAMP2" ,"ACTR2" ,"BCAP31" ,"ZMPSTE24" ,"BCKDK" ,"EXOC5" ,"STIP1" ,"UQCR11" ,"SDS" ,"LILRB4" ,"OGFR" ,"TFEC" ,"FKBP15" ,"DNAJC13" ,"TDRD7" ,"STX12" ,"IL17RA" ,"ABTB2" ,"FAM32A" ,"SIGLEC7" ,"SIGLEC9" ,"ADAMDEC1" ,"CECR5" ,"SLC25A24" ,"NRBP1" ,"MS4A4A" ,"TREM2" ,"OTUD4" ,"PQLC2" ,"HAUS2" ,"ARL8B" ,"NECAP2" ,"WDR11" ,"ZC3H15" ,"CCDC47" ,"UTP3" ,"MRS2" ,"HAMP" ,"MRPL40" ,"VPS33A" ,"CORO7" ,"LIMD2" ,"TMX1" ,"DOT1L" ,"ADO" ,"ADCK2")
+
+M1 <- c("ACP2" ,"ADRA2B" ,"ALCAM" ,"ABCD1" ,"ATOX1" ,"ATP6V0C" ,"ATP6V1E1" ,"BLVRA" ,"C1QA" ,"CD48" ,"CD63" ,"CLCN7" ,"TPP1" ,"CLTC" ,"CCR1" ,"CMKLR1" ,"SLC31A1" ,"COX5B" ,"FCER1G" ,"FDX1" ,"FOLR2" ,"FPR3" ,"FTL" ,"HEXB" ,"HK3" ,"IL10" ,"IL12B" ,"ITGAE" ,"LAIR1" ,"CXCL9" ,"MMP19" ,"NARS" ,"NDUFS2" ,"P2RX7" ,"PDCL" ,"MAPK13" ,"PTGIR" ,"PTPRA" ,"RELA" ,"CCL7" ,"CCL8" ,"CCL19" ,"CCL22" ,"SRC" ,"STX4" ,"TCEB1" ,"TFRC" ,"AGPS" ,"MARCO" ,"SNX3" ,"CD84" ,"USP14" ,"ITGB1BP1" ,"ATP6V1F" ,"TRIP4" ,"CD163" ,"CIAO1" ,"WTAP" ,"ARHGEF11" ,"ABI1" ,"SCAMP2" ,"ACTR2" ,"BCAP31" ,"ZMPSTE24" ,"BCKDK" ,"EXOC5" ,"STIP1" ,"UQCR11" ,"SDS" ,"LILRB4" ,"OGFR" ,"TFEC" ,"FKBP15" ,"DNAJC13" ,"TDRD7" ,"STX12" ,"IL17RA" ,"ABTB2" ,"FAM32A" ,"SIGLEC7" ,"SIGLEC9" ,"ADAMDEC1" ,"CECR5" ,"SLC25A24" ,"NRBP1" ,"MS4A4A" ,"TREM2" ,"OTUD4" ,"PQLC2" ,"HAUS2" ,"ARL8B" ,"NECAP2" ,"WDR11" ,"ZC3H15" ,"CCDC47" ,"UTP3" ,"MRS2" ,"HAMP" ,"MRPL40" ,"VPS33A" ,"CORO7" ,"LIMD2" ,"TMX1" ,"DOT1L" ,"ADO" ,"ADCK2")
+M2 <- c("ACP2" ,"ADCY3" ,"ABCD1" ,"ALK" ,"ARSB" ,"ATP2A2" ,"ATP6V1C1" ,"ATP6V0A1" ,"TSPO" ,"CAMP" ,"CANX" ,"CD63" ,"CD81" ,"CLCN7" ,"TPP1" ,"SLC31A1" ,"FDX1" ,"FGR" ,"FTL" ,"GLB1" ,"HADHB" ,"NCKAP1L" ,"HEXA" ,"HEXB" ,"HPS1" ,"IFNAR1" ,"ITGAX" ,"KCNJ5" ,"LAIR1" ,"LAMP1" ,"MSR1" ,"MYO9B" ,"P2RX7" ,"SDCBP" ,"SNX1" ,"SNX2" ,"STX4" ,"MARCO" ,"CDS2" ,"PABPC4" ,"ATP6V0D1" ,"PICK1" ,"ARHGEF11" ,"HS3ST2" ,"PDCD6IP" ,"SCAMP2" ,"COL4A3BP" ,"HSPH1" ,"OS9" ,"SDS" ,"LILRB4" ,"VSIG4" ,"GABARAP" ,"TFEC" ,"WDFY3" ,"TBC1D9B" ,"ZC3H3" ,"CYFIP1" ,"PLEKHM2" ,"FKBP15" ,"SMG5" ,"UNC50" ,"GGA1" ,"SNX5" ,"SLC39A1" ,"ADAMDEC1" ,"COMMD9" ,"SLC25A24" ,"SPG21" ,"MS4A4A" ,"ANKFY1" ,"BTBD1" ,"STX18" ,"RIN2" ,"PQLC2" ,"TMEM70" ,"ACSM5" ,"AGGF1" ,"SLC38A7" ,"VPS53" ,"NOP10" ,"IARS2" ,"CCDC88A" ,"VPS35" ,"TMEM184C" ,"EXOC1" ,"SLAMF8" ,"C16orf62" ,"POGK" ,"HAMP" ,"DNASE2B" ,"MTMR14" ,"GORASP1" ,"C10orf76" ,"LONRF3" ,"UBXN6")
+
+NK <- c("FASLG" ,"CX3CR1" ,"GZMB" ,"GZMM" ,"IL2RB" ,"KLRD1" ,"KPNB1" ,"MED1" ,"PRF1" ,"MAPK1" ,"PTGDR" ,"PTPN4" ,"BRD2" ,"XCL1" ,"MAP3K7" ,"TKTL1" ,"TNFSF11" ,"IL18RAP" ,"ZNF264" ,"NCR1" ,"STX8" ,"PJA2" ,"HELZ" ,"GNLY" ,"STAG2" ,"ZMYND11" ,"ZBTB1" ,"SACM1L" ,"TBX21" ,"RAB14" ,"CD244" ,"AGK" ,"DNAJB14" ,"FIP1L1" ,"ARPC5L" ,"HIPK1")
+
+CD8_T <- c("CA6" ,"CD7" ,"CD8A" ,"CD8B" ,"CD27" ,"CCR7" ,"CTSW" ,"DSC1" ,"FKTN" ,"PRMT2" ,"IL16" ,"MMP19" ,"NDUFS2" ,"NFKB1" ,"NPAT" ,"PCNT" ,"PFN2" ,"PURA" ,"RING1" ,"S100B" ,"ZNF200" ,"MYOM1" ,"MTRF1" ,"TSPAN32" ,"CD96" ,"CEPT1" ,"SDCCAG3" ,"MSL3" ,"DIDO1" ,"BTN2A1" ,"COG2" ,"AAK1" ,"RBM34" ,"CLUAP1" ,"CBY1" ,"UTP20" ,"UBQLN2" ,"POP5" ,"RAPGEF6" ,"DPP8" ,"CCDC25" ,"POLR3E" ,"NKRF" ,"YLPM1" ,"CRTAM" ,"CIAPIN1" ,"PLXDC1" ,"GGNBP2" ,"WDR82" ,"TRAF3IP3" ,"NDFIP1" ,"TMEM41B")
+
+CD8_T_2 <- c("BAD" ,"CD2" ,"CD3G" ,"CD5" ,"CD28" ,"CD40LG" ,"CCR4" ,"CTLA4" ,"GOLGA4" ,"HMOX2" ,"MGAT2" ,"NFE2L2" ,"PLCL1" ,"PPP2CA" ,"SUPV3L1" ,"TSPYL1" ,"NUDCD3" ,"LEPROTL1" ,"ICOS" ,"TRAT1" ,"FOXP3" ,"WBP11" ,"SIRPG" ,"POLR3E" ,"USP36" ,"DDX31" ,"HAUS3" ,"SLTM" ,"HIPK1")
+
+M1_2 <- c("ACP2" ,"ABCD1" ,"FDX1" ,"CCL8" ,"CCL22" ,"CD163" ,"ADAMDEC1" ,"TREM2" ,"HAMP")
+M2_2 <- c("CLCN7" ,"FGR" ,"GLB1" ,"HEXA" ,"HEXB" ,"HS3ST2" ,"FKBP15" ,"PQLC2" ,"TMEM70" ,"SLC38A7")
+NK_2 <- c("FASLG" ,"KLRD1" ,"PTGDR" ,"PTPN4" ,"XCL1" ,"TKTL1" ,"IL18RAP" ,"NCR1" ,"ZMYND11" ,"SACM1L" ,"CD244" ,"AGK" ,"DNAJB14")
+Macrophage_2 <- c("ABCD1","FDX1","CCL8","CCL22","CD163","ADAMDEC1","TREM2","HAMP")
+Neutrophil <- c("CA4","CEACAM3","FCGR3B","CXCR1","CXCR2","PGLYRP1","MMP25","ZDHHC18","TRPM6")
+Platelet <- c("ALOX12","ARHGAP6","GP1BA","PDE6H","PF4V1","SELP","SEC14L5","ACSBG1","MLH3","CLEC1B","CABP5","TUBB1")
+Monocyte <- c("AIF1","ASGR2","CYBB","FCAR","FCN1","KCNMB1","MEFV","MNDA","CFP","S100A12","CD163","CD101","CLEC5A","FBXL5","TREM1","RETN","CCR2")
+aas_sig <- c("CLIC4","YARS","SARS","PHGDH","C6orf48","GARS","ASNS","SAT1","SLC3A2","DDIT3","WARS","CHAC1","HERPUD1","PYCR1","TRIB3","CEBPB","PPP1R15A","ATF4")
+GCN2_h_sig
+
+CSF1R_sig_h <- c("NDUFA13","GPR65","NUDT1","DPY30","TRIAP1","TMEM141","MRPL33","RPS15","POLB","LGALS1","SEC61G","PIP4K2A","SEC61B","SDF2","ATP6V1E1","CHCHD1","RAB8A","APOBEC1","PSENEN","MRPS28","SSR4","S100A1","COMMD3","NME3","MRPS21","NME1","ATP5J2","DPM3","NDUFS8","BLVRB","PFDN5","ISCU","SKAP2","TAGLN","RNASEH2B","MRPS33","NDUFB3","RPS27L","UQCR11","ATP5H","UQCR10","MRPL54","PTS","CST3","P2RY6","BLOC1S1","S100A13","AP4S1","APOE","NDUFV2","ATG5","RPL19","COA4","TIMM8B","P2RY13","TRAPPC1","SS18L2","GINS4","NDUFA1","NTAN1","DNAJC15","LSM3","RPS26","AIMP1","TIMM10B","SPCS1","TEN1","RGS10","LAMTOR2","LAMTOR4","RPS24","C1QC")
+
+load("/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/GCN2_human_sig.rdata") #GCN2_human
+```
+
+
+Calculate scores for each cell
+
+Export and check data
+
+```{r}
+library(Matrix)
+rna_matrix <- as(as.matrix(batch4$RNA@data), 'sparseMatrix')
+save(rna_matrix,file = "batch4_data_matrix.rdata")
+load("batch3b_data_matrix.rdata")
+rna_matrix[1:5,1:5] #looks normalized
+boxplot(rna_matrix[,1:50])
+```
+
+To put data back into batch1, the data has to be a data.frame, with cells as rowsnames and a single column with a name 
+
+```{r}
+
+batch3c[["gMDSC_s"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% gMDSC_sig) %>% summarize_if(is.numeric,mean_mx) %>% t %>% data.frame %>% pull(.data$.)
+batch3c[["mMDSC_s"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,mean_mx) %>% t %>% data.frame %>% pull(.data$.)
+batch1[["sMDSC_s"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% MDSC_signature) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["M1_s"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% M1) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["M2_s"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% M2) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["Macrophage_s"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Macrophage) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["M1_s2"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% M1_2) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["M2_s2"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% M2_2) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["Macrophage_s2"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Macrophage_2) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["NK_s"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% NK) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["NK_s2"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% NK_2) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["CD8_T_s"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% CD8_T) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["CD8_T_s2"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% CD8_T_2) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch3c[["Neutrophil"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Neutrophil) %>% summarize_if(is.numeric,mean_mx) %>% t %>% data.frame %>% pull(.data$.)
+batch1[["Platelet"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Platelet) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["Monocyte"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Monocyte) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch3c[["GCN2_pathway"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% GCN2_h_sig) %>% summarize_if(is.numeric,mean_mx) %>% t %>% data.frame %>% pull(.data$.)
+batch1[["PERK_pathway"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% PERK_h) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["HRI_pathway"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% HRI_h) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["ISR_pathway"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("DDIT3","TRIB3","PPP1R15A","ASNS","ATF4")) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+batch1[["AAS"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% aas_sig) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+tail(batch3b[["GCN2_pathway"]])
+rna_matrix[1:5,23000:23005] %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Neutrophil)  %>% summarize_if(is.numeric,sum) %>% t %>% tail
+
+batch4[["CSF1R_sig_h"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% CSF1R_sig_h) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+
+```
+Correlate markers
+
+```{r}
+my_sigs <- batch1[["ISR_pathway"]] %>% data.frame %>% cbind(batch1[["GCN2_pathway"]],batch1[["AAS"]],batch1@active.ident) #%>% dfilter(grepl("mMDSC",batch1@active.ident))
+batch1@active.ident
+my_sigs %>% ggplot(aes(ISR_pathway,GCN2_pathway)) + geom_point(aes(alpha=0.9))
+#my_sigs %>% ggplot(aes(AAS,GCN2_pathway)) + geom_jitter(aes(alpha=0.9))  + scale_x_continuous(trans='log2') + scale_y_continuous(trans='log2')
+my_sigs %>% ggplot(aes(AAS,GCN2_pathway)) + geom_jitter(aes(alpha=0.9)) ## R squared 0.4  # in mMDSC only, it's 0.45
+lm <- lm(AAS~GCN2_pathway, data=my_sigs)
+lm <- lm(ISR_pathway~GCN2_pathway, data=my_sigs)
+summary(lm)
+cor(my_sigs$GCN2_pathway,my_sigs$AAS)
+```
+
+
+Plot gene signatures
+
+```{r fig.height=4, fig.width=16}
+FeaturePlot(batch1,reduction="umap",cols=c("grey90","blue"),features = c("gMDSC_s","mMDSC_s","Platelet","M1_s","M2_s","Monocyte","Neutrophil","GCN2_pathway","ISR_pathway","PERK_pathway","HRI_pathway"), ncol=4) 
+
+FeaturePlot(batch4,reduction="umap",cols=c("grey90","blue"),features = c("CSF1R_sig_h"), ncol=4) 
+
+FeaturePlot(batch1,reduction="umap",cols=c("grey90","red"),features = c("gMDSC_s","GCN2_pathway","AAS","ISR_pathway"), ncol=2) 
+ggsave("Myeloid_signatures_UMAP.jpg", width=20, height=8, dpi=300, plot= last_plot(), units = "in")
+#"CD8_T_s",
+VlnPlot(batch1,features = c("gMDSC_s","mMDSC_s","sMDSC_s","M1_s","M2_s","Macrophage_s","NK_s","CD8_T_s"), ncol=4) +
+ggsave("Xcell_signatures_violin.jpg", width=20, height=10, dpi=300, plot= last_plot(), units = "in")
+
+FeaturePlot(batch3c,reduction="umap",cols=c("grey90","red"),features = c("gMDSC_s","Neutrophil","GCN2_pathway"), ncol=3) 
+```
+Overlap of Zilionis Neutrophils with Talmadge Neutrophils
+```{r}
+Zilionis <- read.table("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/Zilionis_Neutrophil.txt",sep="\t",header=TRUE) %>% data.frame %>% dfilter(Log2FC > 0.5) %>% pull(Zilionis_Neutrophil)
+length(gMDSC_sig) # 42
+length(Zilionis) # 318
+intersect(Zilionis, gMDSC_sig) #34  #23
+```
+
+Calculate scores for each cell 2
+Try exporting raw data, and then taking  the zscores like before. 
+
+```{r}
+rna_matrix <- as.matrix(batch1$RNA@scale.data)
+save(rna_matrix,file = "rna_scale.data_matrix.rdata")
+rna_matrix[1:5,1:5] #looks normalized
+boxplot(rna_matrix[,1:50])
+
+gMDSC_s <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% gMDSC_sig) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame
+mMDSC_s <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,sum)
+sMDSC_s <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% MDSC_signature) %>% summarize_if(is.numeric,sum)
+M1_s <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% gMDSC_sig) %>% summarize_if(is.numeric,sum)
+M2_s <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% gMDSC_sig) %>% summarize_if(is.numeric,sum)
+Macrophage_s <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Macrophage) %>% summarize_if(is.numeric,sum)
+
+```
+
+########################
+########################
+Diffex
+
+Cluster 9 expresses IL7R, CD3G and a lot of RP proteins
+Cluster 16 looks like NK cells: Ccl5, GNLY, NKG7, not CD3 or CD8
+Cluster 24 are B cells, Igkc, CD79A, CD79B
+Cluster 8 are myeloid cells: HLAs, LYZ, 
+Cluster 17 is T cell, CD3G, TCF7,CCR7
+Cluster 18 is CD8 T cells
+########################
+########################
+
+```{r}
+low_RNA <- FindMarkers(batch3c, ident.1=c(9, 16, 24) , ident.2=NULL)
+low_RNA %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(-avg_logFC)
+
+low_RNA_8 <- FindMarkers(batch3c, ident.1=c(8) , ident.2=NULL)
+low_RNA_8 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(-avg_logFC)
+
+low_RNA_9 <- FindMarkers(batch3c, ident.1=c(9) , ident.2=NULL)
+low_RNA_9 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(-avg_logFC)
+
+low_RNA_16 <- FindMarkers(batch3c, ident.1=c(16) , ident.2=NULL)
+low_RNA_16 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(-avg_logFC)
+
+low_RNA_17 <- FindMarkers(batch3c, ident.1=c(17) , ident.2=NULL)
+low_RNA_17 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(-avg_logFC)
+
+low_RNA_18 <- FindMarkers(batch3c, ident.1=c(18) , ident.2=NULL)
+low_RNA_18 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(-avg_logFC)
+
+low_RNA_24 <- FindMarkers(batch3c, ident.1=c(24) , ident.2=NULL)
+low_RNA_24 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(-avg_logFC)
+```
+
+
+#######################
+#######################
+
+Import into Monocle2
+monocle_2.16.0
+
+This was a disaster, the instructions don't make any sense and skip steps, and the code won't run
+
+Try again on the Mac trashcan, Aug 17, 2020
+#######################
+#######################
+
+```{r}
+library(monocle3)
+library(monocle)
+library(ggplot2)
+library(dplyr)
+library(Matrix)
+sessionInfo()
+
+batch4[["ident"]] <- batch4@active.ident 
+my.data <- as(as.matrix(batch4@assays$RNA@counts), 'sparseMatrix')
+
+meta <- data.frame(batch4@meta.data)
+#pd <- new('AnnotatedDataFrame', data = batch4@meta.data)
+gene_meta <- data.frame(gene_short_name = row.names(my.data), row.names = row.names(my.data))
+#fd <- new('AnnotatedDataFrame', data = fData)
+
+#importCDS(batch4_myeloid, import_all=TRUE)
+#Construct monocle cds
+batch4_monocle3 <- new_cell_data_set(my.data,
+                         cell_metadata = meta,
+                         gene_metadata = gene_meta) 
+batch4@meta.databatch4_monocle2$ident
+```
+
+#######################
+#######################
+
+Import into Monocle2
+monocle_2.16.0
+This was a disaster previously, but
+Try again on the Mac trash can, Aug 17, 2020
+Monocle 2 has worked out before, in 2018
+#######################
+#######################
+ 
+```{r}
+library(monocle)
+sessionInfo() # monocle 2.16.0
+#load data from line 101, batch4_myeloid
+
+batch4_myeloid[["ident"]] <- batch4_myeloid@active.ident 
+counts.matrix <- as(as.matrix(batch4_myeloid@assays$RNA@counts), 'sparseMatrix') # raw counts data
+pheno <- as(batch4_myeloid@meta.data,"AnnotatedDataFrame") # phenoData where rows are cells, and columns are attributes
+gene_meta <- as(data.frame(gene_short_name = row.names(counts.matrix), row.names = row.names(counts.matrix)), "AnnotatedDataFrame")
+#fd <- new('AnnotatedDataFrame', data = fData)
+
+#Construct monocle cds
+batch4mye_monocle2 <- newCellDataSet(counts.matrix,
+                         phenoData = pheno,
+                         featureData = gene_meta,
+                         expressionFamily=negbinomial.size()) 
+
+save(batch4mye_monocle2,file="batch4mye_monocle2.rdata")
+
+batch4mye_monocle2 <- clusterCells()
+```
+ 
+Pre-Process
+Process
+```{r}
+batch4mye_monocle2 <- estimateSizeFactors(batch4mye_monocle2)
+batch4mye_monocle2 <- estimateDispersions(batch4mye_monocle2)
+
+disp_table <- dispersionTable(batch4mye_monocle2)
+unsup_clustering_genes <- subset(disp_table, mean_expression >= 0.01)
+length(unsup_clustering_genes$gene_id) #7468
+batch4mye_monocle2 <- setOrderingFilter(batch4mye_monocle2, unsup_clustering_genes$gene_id)
+plot_ordering_genes(batch4mye_monocle2)
+```
+This is the PCA analysis step, can take quite a while
+```{r}
+# HSMM@auxClusteringData[["tSNE"]]$variance_explained <- NULL
+plot_pc_variance_explained(batch4mye_monocle2, return_all = F) # norm_method='log'
+```
+reduceDimension(cds, max_components = 2, reduction_method = c("DDRTree",
+  "ICA", "tSNE", "SimplePPT", "L1-graph", "SGL-tree"), norm_method = c("log",
+  "vstExprs", "none"), residualModelFormulaStr = NULL, pseudo_expr = 1,
+  relative_expr = TRUE, auto_param_selection = TRUE, verbose = FALSE,
+  scaling = TRUE, ...)
+
+```{r fig.height=8, fig.width=12}
+batch4mye_monocle2 <- reduceDimension(batch4mye_monocle2, max_components = 2, num_dim = 9,
+                reduction_method = 'tSNE', verbose = T)
+batch4mye_monocle2 <- clusterCells(batch4mye_monocle2, num_clusters = 8) #Distance cutoff calculated to 5.928387 
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "CellType",
+    markers = c("DEFA3", "ARG1","HLA-DRA","CXCR2","CD74","CD24"),cell_size = 0.5)
+```
+
+ I see cells cluster by the original donor: regress out this contribution in the next block of code
+```{r fig.height=6, fig.width=8}
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "orig.ident",cell_size = 0.5)
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "nFeature_RNA",cell_size = 0.5)
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "seurat_clusters",cell_size = 0.5)
+
+```
+
+```{r fig.height=8, fig.width=12}
+batch4mye_monocle2 <- reduceDimension(batch4mye_monocle2, max_components = 2, num_dim = 9,
+                reduction_method = 'tSNE', verbose = T,residualModelFormulaStr = "~orig.ident",)
+batch4mye_monocle2 <- clusterCells(batch4mye_monocle2, num_clusters = 8) #Distance cutoff calculated to 5.928387 
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "CellType",
+    markers = c("DEFA3", "ARG1","HLA-DRA","CXCR2","CD74","CD24"),cell_size = 0.5)
+```
+
+Well, that made it much worse
+```{r fig.height=6, fig.width=8}
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "orig.ident",cell_size = 0.5)
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "nFeature_RNA",cell_size = 0.5)
+
+```
+Put it back without the awful regression
+```{r fig.height=8, fig.width=12}
+batch4mye_monocle2 <- reduceDimension(batch4mye_monocle2, max_components = 2, num_dim = 9,
+                reduction_method = 'tSNE', verbose = T)
+batch4mye_monocle2 <- clusterCells(batch4mye_monocle2, num_clusters = 8) #Distance cutoff calculated to 5.928387 
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "CellType",
+    markers = c("DEFA3", "ARG1","HLA-DRA","CXCR2","CD74","CD24"),cell_size = 0.5)
+```
+Monocle 2 Trajectory
+
+
+1. Try trajectory along clusters
+Select genes with min expression of 0.1, and expressed in > 5% of cells
+```{r}
+batch4mye_monocle2 <- detectGenes(batch4mye_monocle2, min_expr = 0.1)
+fData(batch4mye_monocle2)$use_for_ordering <-
+    fData(batch4mye_monocle2)$num_cells_expressed > 0.05 * ncol(batch4mye_monocle2)
+```
+PCA
+```{r}
+plot_pc_variance_explained(batch4mye_monocle2, return_all = F)
+```
+tSNE
+```{r}
+batch4mye_monocle2 <- reduceDimension(batch4mye_monocle2,
+                              max_components = 2,
+                              norm_method = 'log',
+                              num_dim = 3,
+                              reduction_method = 'tSNE',
+                              verbose = T)
+```
+
+```{r}
+batch4mye_monocle2 <- clusterCells(batch4mye_monocle2, verbose = F, num_clusters=8)
+```
+
+```{r fig.height=8, fig.width=10}
+plot_cell_clusters(batch4mye_monocle2, color_by = 'as.factor(Cluster)')
+```
+
+Check cell IDs
+```{r fig.height=8, fig.width=12}
+plot_cell_clusters(batch4mye_monocle2, 1, 2, color = "CellType",
+    markers = c("DEFA3", "ARG1","HLA-DRA","CXCR2","CD74","CD24","RPS12","CD36","ITGAX"),cell_size = 0.5)
+
+plot_cell_clusters(batch4mye_monocle2, 1, 2,color = "gMDSC_s", markers = c("gMDSC_s"),cell_size = 1)
+
+```
+
+Check some parameters
+Rho p is the local cell density, while delta is the nearest distance to another cell 
+```{r}
+plot_rho_delta(batch4mye_monocle2, rho_threshold = 170, delta_threshold = 5 )
+
+```
+
+Re-run with Delta and Rho_sigma
+rho 2
+sigma 5
+```{r}
+batch4mye_monocle2 <- clusterCells(batch4mye_monocle2,
+                 rho_threshold = 2,
+                 delta_threshold = 5,
+                 skip_rho_sigma = T,
+                 verbose = F)
+```
+
+```{r fig.height=8, fig.width=10}
+plot_cell_clusters(batch4mye_monocle2, color_by = 'as.factor(Cluster)')
+```
+
+DE analysis between clusters
+differentialGeneTest takes a while, set cores=1 because cores=6 threw an error
+Took 1 hour
+```{r}
+Myeloid_expressed_genes <-  row.names(subset(fData(batch4mye_monocle2),
+num_cells_expressed >= 10))
+
+clustering_DEG_genes <-
+    differentialGeneTest(batch4mye_monocle2[Myeloid_expressed_genes,],
+          fullModelFormulaStr = '~Cluster',
+          cores = 1)
+
+save(clustering_DEG_genes, file="clustering_DEG_genes.rdata")
+```
+
+
+Set the top 1000 significant genes as the ordering genes and run DDRTree
+#Set top 3000 genes and see if topology gets more complex: because the monocyte and granulocyte branches contain subsets of cells
+
+```{r}
+Myeloid_ordering_genes <-
+    row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:1000]
+
+batch4mye_monocle2 <-
+    setOrderingFilter(batch4mye_monocle2,
+        ordering_genes = Myeloid_ordering_genes)
+
+batch4mye_monocle2 <-
+    reduceDimension(batch4mye_monocle2, method = 'DDRTree')
+
+batch4mye_monocle2 <-
+    orderCells(batch4mye_monocle2)
+
+batch4mye_monocle2 <-
+    orderCells(batch4mye_monocle2, root_state = GM_state(batch4mye_monocle2))
+```
+```{r fig.height=6, fig.width=8}
+plot_cell_trajectory(batch4mye_monocle2, color_by = "Cluster",cell_size = 1)
+```
+
+
+
+Plot scatter
+```{r fig.height=9, fig.width=12}
+library(viridis)
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, markers = c("DEFA3", "ARG1","CD24","CEACAM8"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE, show_branch_points = FALSE) + scale_color_viridis(option="B",begin=0, end=1, direction= 1, limit = c(0,1),oob=squish) + theme(panel.background = element_rect(fill = "grey90"))
+
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, markers = c(plot_these,"gMDSC_s"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE, show_branch_points = FALSE) + scale_color_viridis(option="D",begin=0, end=1, direction= 1, limit = c(0,1),oob=squish) + theme(panel.background = element_rect(fill = "grey90"))
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, markers = c(plot_these),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE) + scale_color_viridis(option="A",begin= 0, end=1, direction= 1, limit = c(0,1),oob=squish)
+
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, markers = c("HLA-DRA","CD74","RPS12","CD36"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE) + scale_color_viridis(option="A",begin= 0, end=1, direction= 1, limit = c(0,1),oob=squish)
+
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, markers = c("CXCR2","FCGR3B","CMTM2","SOD2"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE) + scale_color_viridis(option="D",begin= 0, end=1, direction= 1, limit = c(0,2),oob=squish)
+
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, colou_by= "State", cell_size=0.5)
+
+
+```
+
+```{r fig.height=5, fig.width=8}
+library(scales)
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, color = "nFeature_RNA",use_color_gradient =FALSE) + scale_color_continuous(type="viridis", limit = c(0,2000),oob=squish) 
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, color = "gMDSC_s",use_color_gradient =FALSE) + scale_color_continuous(type="viridis", limit = c(0,1),oob=squish) 
+
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, color_by = "orig.ident",use_color_gradient =FALSE, cell_size=1) +  scale_color_manual(values=c("darkorchid1","darkorchid1","turquoise3","turquoise3","turquoise3","orchid2","orchid2","orchid2")) + facet_wrap(~orig.ident)
+```
+
+Pseudotime DE
+VGAM
+Specific markers
+```{r fig.height=6, fig.width=7}
+to_be_tested <- row.names(subset(fData(batch4mye_monocle2), gene_short_name %in% c("CXCR2","FCGR3B","CMTM2","SOD2")))
+cds_subset <- batch4mye_monocle2[to_be_tested,]
+diff_test_res <- differentialGeneTest(cds_subset, fullModelFormulaStr = "~sm.ns(Pseudotime)")
+diff_test_res[,c("gene_short_name", "pval", "qval")] # this gives the DE results
+plot_genes_in_pseudotime(cds_subset, color_by = "Cluster", cell_size=1)
+```
+```{r}
+plot_cell_trajectory(batch4mye_monocle2, 1, 2, markers = c("OLFM4"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE)
+```
+DE analysis between States
+
+Took 1 hour
+This doesn't record the state of the marker either!!!!
+```{r}
+
+Myeloid_expressed_genes <-  row.names(subset(fData(batch4mye_monocle2),
+num_cells_expressed >= 10))
+
+State_DEG_genes <-
+    differentialGeneTest(batch4mye_monocle2[Myeloid_expressed_genes,],
+          fullModelFormulaStr = '~State',
+          cores = 1)
+State_DEG_genes %<>% tibble::rownames_to_column("Gene")
+save(State_DEG_genes, file="clustering_DEG_genes.rdata")
+
+State_DEG_genes %>% dfilter(qval < 0.0000000001, num_cells_expressed > 5, num_cells_expressed < 150, use_for_ordering == TRUE) %>% arrange(qval)
+
+cluster_DEG <- State_DEG_genes %>% arrange(qval) %>% dfilter(qval < 0.00001) %>% pull(Gene) # 6968
+length(cluster_DEG)
+cluster_heatmap <- plot_pseudotime_heatmap(batch4mye_monocle2[cluster_DEG,],
+                num_clusters = 6,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+cluster_marker <- as.data.frame(cutree(cluster_heatmap$tree_row, k=3))
+colnames(cluster_marker) <- "Cluster"
+cluster_marker %<>% tibble::rownames_to_column("Gene")
+cluster_marker %<>% dfilter(Cluster == 1) %>% pull(Gene)
+
+cluster_mono_MDSC <- plot_pseudotime_heatmap(batch4mye_monocle2[cluster_marker,],
+                num_clusters = 3,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+cluster_mono_MDSC_marker <- as.data.frame(cutree(cluster_mono_MDSC$tree_row, k=3))
+colnames(cluster_mono_MDSC_marker) <- "Cluster"
+cluster_mono_MDSC_marker %<>% tibble::rownames_to_column("Gene")
+cluster_mono_MDSC_marker %<>% dfilter(Cluster == 3) %>% pull(Gene)
+length(cluster_mono_MDSC_marker)
+
+cluster_progenitor_mono <- plot_pseudotime_heatmap(batch4mye_monocle2[cluster_mono_MDSC_marker,],
+                num_clusters = 3,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+cluster_MDSC_marker <- as.data.frame(cutree(cluster_progenitor_mono$tree_row, k=3))
+colnames(cluster_MDSC_marker) <- "Cluster"
+cluster_MDSC_marker %<>% tibble::rownames_to_column("Gene")
+cluster_MDSC_marker %<>% dfilter(Cluster != 1) %>% pull(Gene)
+length(cluster_MDSC_marker)
+
+cluster_gMDSC <- plot_pseudotime_heatmap(batch4mye_monocle2[cluster_MDSC_marker,],
+                num_clusters = 3,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+cluster_MDSC_strong_marker <- as.data.frame(cutree(cluster_gMDSC$tree_row, k=3))
+colnames(cluster_MDSC_strong_marker) <- "Cluster"
+cluster_MDSC_strong_marker %<>% tibble::rownames_to_column("Gene")
+cluster_MDSC_strong_marker %<>% dfilter(Cluster != 3) %>% pull(Gene)
+length(cluster_MDSC_strong_marker)
+
+cluster_gMDSC_strong <- plot_pseudotime_heatmap(batch4mye_monocle2[cluster_MDSC_strong_marker,],
+                num_clusters = 3,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+MDSC_strong_marker <- as.data.frame(cutree(cluster_gMDSC_strong$tree_row, k=3))
+colnames(MDSC_strong_marker) <- "Cluster"
+MDSC_strong_marker %<>% tibble::rownames_to_column("Gene")
+MDSC_strong_marker %>% dfilter()
+
+plot_these
+plot_pseudotime_heatmap(batch4mye_monocle2[plot_these,],
+                num_clusters = 3,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+```
+
+DE along Pseudotime
+Setting a low threshold
+```{r}
+sig_pseudo <- diff_test_res_all %>% left_join(t, by="cell") %>% dfilter(qval < 1e-10) %>% arrange(qval) %>% row.names
+
+#%>% write.table(file="pseudotime_myeloid.txt", sep="\t",row.names = FALSE, quote=FALSE)
+
+heatmap_trajectory_markers <- plot_pseudotime_heatmap(batch4mye_monocle2[sig_pseudo,],
+                num_clusters = 3, return_heatmap = T,
+                cores = 1,
+                show_rownames = T)
+
+```
+Recover information from the heatmap
+Cluster 1 Monocyte
+Cluster 2 Granulocytic
+Cluster 3 gMDSC
+Plug the gMDSC markers into heatmap tool to further cluster
+``` {r}
+#Get the cluster information for each gene
+t <- as.data.frame(cutree(heatmap_trajectory_markers$tree_row, k=3))
+colnames(t) <- "Cluster"
+t %>% dfilter(Cluster==3)
+t %<>% tibble::rownames_to_column("Gene")
+t["CD24",]
+gMDSC_pseudotime <- t %>% dfilter(Cluster==3) %>% pull(Gene)
+
+gMDSC_subclust <- plot_pseudotime_heatmap(batch4mye_monocle2[gMDSC_pseudotime,],
+                num_clusters = 6,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+gMDSC_sub1 <- as.data.frame(cutree(gMDSC_subclust$tree_row, k=6))
+colnames(gMDSC_sub1) <- "Cluster"
+
+gMDSC_sub2 <- gMDSC_sub1 %>% dfilter(Cluster==4) %>% pull(Gene)
+
+gMDSC_sub3 <- gMDSC_sub1 %>% dfilter(Cluster==5) %>% pull(Gene)
+
+gMDSC_neutrophil_marker <- gMDSC_sub1 %>% dfilter(Cluster==2) %>% pull(Gene)
+
+gMDSC_neutrophil <- plot_pseudotime_heatmap(batch4mye_monocle2[gMDSC_neutrophil_marker,],
+                num_clusters = 3,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+```
+
+Significant markers for Heatmap
+
+```{r}
+gMDSC_subclust2 <- plot_pseudotime_heatmap(batch4mye_monocle2[gMDSC_sub2,],
+                num_clusters = 6,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+gMDSC_subclust4 <- plot_pseudotime_heatmap(batch4mye_monocle2[gMDSC_sub3,],
+                num_clusters = 6,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+
+gMDSC_sub5 <- as.data.frame(cutree(gMDSC_subclust4$tree_row, k=6))
+colnames(gMDSC_sub5) <- "Cluster"
+gMDSC_sub5  %<>% tibble::rownames_to_column("Gene")
+gMDSC_sub6 <- gMDSC_sub5 %>% dfilter(Cluster==1) %>% pull(Gene)
+
+plot_pseudotime_heatmap(batch4mye_monocle2[gMDSC_sub6,],
+                num_clusters = 1,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+```
+Plot maturation markers
+```{r}
+plot_this <- batch4mye_monocle2[c("SELL"),] #"nFeature_RNA"
+plot_genes_in_pseudotime(plot_this, color_by = "Cluster", cell_size=1,vertical_jitter = NULL)
+```
+
+
+Plot gMDSC markers
+```{r fig.height=15, fig.width=5}
+plot_this <- batch4mye_monocle2[gMDSC_sub6,]
+plot_this <- batch4mye_monocle2[c("LTF","LCN2","CD24","CEACAM8","DEFA3","BPI","DEFA4","MS4A3"),]
+plot_seurat <- batch4mye_monocle2[c("MMP8","CRISP3","ABCA13","CEACAM6","RNASE3","OLR1","TCN1","INHBA","CD177","CHIT1","HP","SERPINB10"),]
+plot_genes_in_pseudotime(plot_seurat, color_by = "Cluster", cell_size=1,vertical_jitter = 0.3)
+```
+
+Plot additional gMDSC markers from lower threshold (10-5 qval)
+They are not good: the signals are too weak and not specific enough for progenitor myeloid cells
+
+```{r fig.height=10, fig.width=5}
+plot_that <- batch4mye_monocle2[c("ERG","E2F7","TARM1","UNG","DEFA1","DDO","ANKRD18A"),]
+plot_these <-State_DEG_genes %>% right_join(MDSC_strong_marker, by="Gene") %>% dfilter(num_cells_expressed >300) %>% pull(Gene)
+plot_this <- batch4mye_monocle2[plot_these,]
+plot_genes_in_pseudotime(plot_this, color_by = "Cluster", cell_size=1,vertical_jitter = 0.3)
+```
+
+Here is where the cell order and cell state information are stored
+```{r}
+
+batch4mye_monocle2@phenoData$Pseudotime
+colnames(batch4mye_monocle2)
+pseudotime_cell <- data.frame(Cell=colnames(batch4mye_monocle2), Pseudotime=batch4mye_monocle2@phenoData$Pseudotime) %>% arrange(Pseudotime) %>% pull(Cell)
+batch4mye_monocle2@phenoData$State
+
+batch4mye_monocle2@featureData@data$gene_short_name
+batch4mye_monocle2@assayData$exprs # this is a sparse matrix
+
+batch4mye_monocle2@assayData$exprs[cluster_DEG,pseudotime_cell] %>% data.frame %>% tibble::rownames_to_column("Gene") %>% write.table(file="Pseudotime_myeloid.txt",quote=FALSE,row.names = FALSE, sep="\t")
+```
+
+Refine gMDSC signature from scRNA data
+1. Monocle2 Trajectory markers
+2. Seurat3 Cluster markers: there are 447 cells in the gMDSC cluster 20 
+3. Gabrilovich & BluePrint DE analysis markers
+
+```{r}
+gMDSC_monocle2 <- c("BPI","CD24","CEACAM8","DEFA3","DEFA4","LCN2","LTF","MS4A3")
+
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/All_vs_all_DE_batch4.rdata") # pbmc.markers
+# cluster 20 are gMDSCs, filter for q value == 0 and expressed in at least 150 cells
+pbmc.markers %>% dfilter(cluster==20, p_val_adj == 0) %>% left_join(State_DEG_genes,by=c("gene"="Gene")) %>% dfilter(num_cells_expressed > 150, num_cells_expressed < 500) %>% pull(gene)
+
+gMDSC_seurat3 <- c("CEACAM8","DEFA4","MMP8", "CRISP3","ABCA13","MS4A3","CEACAM6","RNASE3","OLR1","TCN1","INHBA","CD177","CHIT1","HP","SERPINB10")
+#filter out ones that are expressed too much in neutrophils
+gMDSC_seurat3 <- c("CEACAM8","DEFA4","ABCA13","MS4A3","CEACAM6","RNASE3","OLR1","TCN1","INHBA","CHIT1","SERPINB10")
+
+gMDSC_gabrilovich <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "DEFA1", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C", "LTF", "F13A1", "PPBP", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "CD24", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1","DEFA1","CD24")
+
+sMDSC_sig <- c("DEFA1", "DEFA3", "LTF", "DEFA1B", "MMP8", "OLFM4", "DEFA4", "CEACAM8", "ABCA13", "CRISP3", "ELANE", "CAMP", "CTSG", "PGLYRP1", "RNASE3", "HP", "MPO", "BPI", "MS4A3", "RNASE2", "RETN", "F13A1", "PPBP", "GP9", "TUBB1", "CMTM2", "PROK2", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "S100A12", "CR1")
+
+gMDSC_scRNA <- union(gMDSC_monocle2,gMDSC_seurat3)
+gMDSC_scRNA <- c("BPI","CD24","CEACAM8","DEFA3","DEFA4","LCN2","LTF","MS4A3","ABCA13","MS4A3","CEACAM6","OLR1","TCN1","INHBA","CHIT1","SERPINB10")
+
+setdiff(gMDSC_seurat3,gMDSC_monocle2)
+intersect(gMDSC_scRNA,sMDSC_sig)
+gMDSC_gabrilovich
+```
+
+Export and check data to calculate signature scores
+
+```{r}
+rna_matrix <- as.matrix(batch4$RNA@data)
+save(rna_matrix,file = "batch4_data_matrix.rdata")
+
+batch4[["gMDSC_Gab"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% gMDSC_gabrilovich) %>% summarize_if(is.numeric,mean_mx) %>% t %>% data.frame %>% pull(.data$.)
+batch4[["sMDSC_Gab"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% sMDSC_sig) %>% summarize_if(is.numeric,mean_mx) %>% t %>% data.frame %>% pull(.data$.)
+batch4[["gMDSC_sc"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% gMDSC_scRNA) %>% summarize_if(is.numeric,mean_mx) %>% t %>% data.frame %>% pull(.data$.)
+```
+
+Plot signatures onto the Batch4 Seurat object
+```{r fig.height=4, fig.width=15}
+FeaturePlot(batch4, slot="data", features=c("gMDSC_Gab","sMDSC_Gab","gMDSC_sc","TNF"),cols=c("grey90","blue"), ncol=4)
+```
+
+#######################
+#######################
+
+Install Monocle3
+here is just the code, do the installation on R in Terminal
+
+the $PATH shortcut for anaconda or conda or anything related will mess up the leidenbase installation, so get rid of the anaconda link in $PATH using >open ~/.bash_profile
+
+Use anaconda to install R monocle3:
+https://bioconda.github.io/recipes/r-monocle3/README.html
+Set up anaconda channel first:
+/Users/mxu/anaconda3/bin/conda config --add channels defaults
+/Users/mxu/anaconda3/bin/conda config --add channels bioconda
+/Users/mxu/anaconda3/bin/conda config --add channels conda-forge
+
+/Users/mxu/anaconda3/bin/conda install r-leidenbase # this seems to have worked
+/Users/mxu/anaconda3/bin/conda install r-monocle3 # this won't start
+#######################
+#######################
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+install.packages("BiocManager")
+BiocManager::install(version = "3.10")
+
+BiocManager::install(c('BiocGenerics', 'DelayedArray', 'DelayedMatrixStats',
+                       'limma', 'S4Vectors', 'SingleCellExperiment',
+                       'SummarizedExperiment', 'batchelor', 'Matrix.utils'))
+
+install.packages("devtools")
+devtools::install_github('cole-trapnell-lab/leidenbase')
+#can't install leidenbase because of clang++ issue
+
+devtools::install_github('cole-trapnell-lab/monocle3')
+
+library(monocle3)
+```
+
+```{r}
+library(monocle3)
+library(ggplot2)
+library(dplyr)
+library(Matrix)
+#sessionInfo()
+
+batch4_myeloid[["ident"]] <- batch4_myeloid@active.ident 
+my.data <- as(as.matrix(batch4_myeloid@assays$RNA@counts), 'sparseMatrix')
+
+meta <- data.frame(batch4_myeloid@meta.data)
+#pd <- new('AnnotatedDataFrame', data = batch4@meta.data)
+gene_meta <- data.frame(gene_short_name = row.names(my.data), row.names = row.names(my.data))
+#fd <- new('AnnotatedDataFrame', data = fData)
+
+#importCDS(batch4_myeloid, import_all=TRUE)
+#Construct monocle cds
+batch4_monocle3 <- new_cell_data_set(my.data,
+                         cell_metadata = meta,
+                         gene_metadata = gene_meta) 
+
+save(batch4_monocle3,file="batch4_monocle3.rdata")
+```
+
+Pre-process: PCA most within 10, no more gains after 20
+batch correction with preset background signals that could be present
+```{r}
+batch4_monocle3 <- preprocess_cds(batch4_monocle3,num_dim= 50)
+batch4_monocle3 <- align_cds(batch4_monocle3,alignment_group ="orig.ident", residual_model_formula_str = "~ bg.300.loading + bg.400.loading + bg.500.1.loading + bg.500.2.loading + bg.r17.loading + bg.b01.loading + bg.b02.loading")
+
+plot_pc_variance_explained(batch4_monocle3)
+```
+UMAP: default dimension reduction
+
+reduction_method= "UMAP", umap.metric="manhattan", umap.n_neighbors= 30
+```{r fig.height=5, fig.width=7}
+batch4_monocle3 <- reduce_dimension(batch4_monocle3, reduction_method= "UMAP", umap.metric="manhattan", umap.n_neighbors= 150, umap.min_dist = 0.1)
+
+plot_cells(batch4_monocle3, color_cells_by = "ident",group_label_size = 5) 
+plot_cells(batch4_monocle3, color_cells_by = "orig.ident",group_label_size = 5)
+colData(batch4_monocle3)
+plot_cells(batch4_monocle3, genes = c("ARG1"),group_label_size = 5)
+batch4_monocle3@ide
+```
+
+
+Cluster cells using Monocle Levine et al. phenoGraph method
+
+```{r fig.height=5, fig.width=7}
+batch4_monocle3 = cluster_cells(batch4_monocle3, reduction_method = "UMAP", cluster_method = "leiden",resolution=0.001, random_seed = 42)
+plot_cells(batch4_monocle3, group_label_size = 5) # 
+```
+
+Find Marker genes by cluster
+
+```{r}
+markers_Res <- top_markers(batch4_monocle3, group_cells_by = "ident", reference_cells = 300, cores=8)
+
+top_specific_markers <- marker_test_res %>% filter(fraction_expression>= 0.1 %>% group_by(cell_group) %>% top_n(1,pseudo_R2))
+
+markers_Res %>% dfilter(cell_group==20) %>% arrange(-specificity)
+markers_Res %>% arrange(-specificity)
+markers_Res %>% arrange(-pseudo_R2)
+markers_Res %>% write.table(file="Myeloid_Monocle3_Markers.txt", sep="\t", quote=FALSE)
+```
+Look at the metrics of marker testing
+```{r fig.height=7, fig.width=6.5}
+markers_Res %>% ggplot(aes(x=specificity,y=pseudo_R2)) + geom_point()
+top <- markers_Res %>% dfilter(fraction_expressing >= 0.1) %>% group_by(cell_group) %>% top_n(4,specificity) %>% pull(gene_id) %>% unique
+plot_genes_by_group(batch4_monocle3, top, group_cells_by = "ident", ordering_type = "cluster_row_col", max.size=3)
+```
+
+Learn a Trajectory
+Error: No cell clusters for UMAP calculated. Please run cluster_cells with reduction_method = UMAP before running learn_graph.
+```{r fig.height=5, fig.width=6}
+batch4_monocle3 <- learn_graph(batch4_monocle3)
+plot_cells(batch4_monocle3, group_label_size = 5) #
+```
+
+
+Slingshot
+https://www.bioconductor.org/packages/devel/bioc/vignettes/slingshot/inst/doc/vignette.html
+http://127.0.0.1:30988/library/slingshot/doc/vignette.html
+```{r}
+BiocManager::install("slingshot")
+library(slingshot)
+browseVignettes("slingshot")
+```
+
+Convert seurat object into a matrix
+```{r}
+library(Matrix)
+library(SingleCellExperiment)
+mye_counts <- as(as.matrix(batch4_myeloid$RNA@counts),'sparseMatrix')
+mye_norm <- as(as.matrix(batch4_myeloid$RNA@data),'sparseMatrix')
+#insert raw and normalized data from Seurat object
+mye_slignshot <- SingleCellExperiment(assays=list(counts=mye_counts, norm=mye_norm)) 
+```
+
+Gene filtering # can skip
+Normalization # can use @data slot of seurat
+Also normalize using the Slingshot Quantile normalization
+mye_slignshot$counts --> is Seurat normalized data
+mye_slignshot$sling_norm --> is Quantile norm in Slingshot
+They should be very similar, if  not identical
+```{r}
+FQnorm <- function(mye_counts){
+    rk <- apply(mye_counts,2,rank,ties.method='min')
+    counts.sort <- apply(mye_counts,2,sort)
+    refdist <- apply(counts.sort,1,median)
+    norm <- apply(rk,2,function(r){ refdist[r] })
+    rownames(norm) <- rownames(mye_counts)
+    return(norm)
+}
+assays(mye_slignshot)$sling_norm <- FQnorm(assays(mye_slignshot)$counts)
+assays(mye_slignshot)$sling_norm[1:5,1:5] 
+```
+
+Dimensional Reduction
+Perform PCA with prcomp: this is taking hours
+Might have to run this on Teton: this ran overnight, not sure when it finished. 
+```{r}
+install.packages("gmodels")
+library(gmodels)
+??fast.prcomp()
+pca   <- fast.prcomp(t(log1p(assays(mye_slignshot)$norm)), scale. = FALSE) # this was run on Teton, finished in less than 2h 
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/pca_Seurat_norm_slingshot.rdata") #pca_5 the first 5 PCs of pca
+pca_5
+pca_s <- fast.prcomp(t(log1p(assays(mye_slignshot)$sling_norm)), scale. = FALSE) # ran 
+save(pca_s,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/pca_slingshot.rdata")
+
+rd1 <- pca_5[,1:2]
+rd2 <- pca_s$x[,c(1,2)]
+rd3 <- pca_s$x[,c(1,6)]
+
+FetchData(batch4_myeloid, vars="ident") %>% tibble::rownames_to_column("cell") %>% left_join(rd2 %>% data.frame %>% tibble::rownames_to_column("cell"), by="cell") %>% ggplot(aes(PC1, PC2, colour=ident)) + geom_point()
+
+FetchData(batch4_myeloid, vars="ident") %>% tibble::rownames_to_column("cell") %>% left_join(rd2 %>% data.frame %>% tibble::rownames_to_column("cell"), by="cell") %>% ggplot(aes(PC1, PC4, colour=ident)) + geom_label(aes(size=1,label=ident,alpha=0.5))
+
+```
+
+Perform Diffusion map dimension reduction using destiny
+This is taking to long, run overnight
+```{r}
+BiocManager::install("destiny")
+library(destiny)
+
+dm <- DiffusionMap(t(log1p(assays(mye_slignshot)$sling_norm)),n_pcs = 30) #10:33 killed at 4:30 pm, never finished
+#You have 23620 genes. Consider passing e.g. n_pcs = 50 to speed up computation.
+rd3 <- cbind(DC1 = dm$DC1, DC2 = dm$DC2)
+
+FetchData(batch4_myeloid, vars="ident") %>% tibble::rownames_to_column("cell") %>% left_join(rd3 %>% data.frame %>% tibble::rownames_to_column("cell"), by="cell") %>% ggplot(aes(DC1, DC2, colour=ident)) + geom_point()
+
+plot(rd3, col = rgb(0,0,0,.5), pch=16, asp = 1)
+```
+
+Save PCA analysis dim reduction into object
+```{r}
+reducedDims(mye_slignshot) <- SimpleList(PCA=rd2)
+```
+
+Cluster Cells
+
+This clustering is different from typical scRNA clustering: bc this clustering informs the branching points and the relative locations of cells, there is less emphasis on distinguishing cells that are along the same lineage
+Gaussian mixture modeling: mclust
+K-mean clustering
+```{r}
+library(mclust)
+#install.packages("mclust")
+
+cl1 <- Mclust(rd2, G=1:9)$classification # this assigns a numerical cluster: 6 clusters found
+cl2 <- Mclust(rd2, G=1:14)$classification # this assigns a numerical cluster: 6 clusters found
+cl3 <- Mclust(rd3, G=1:14)$classification 
+cl4 <- Mclust(rd1, G=1:14)$classification 
+
+colData(mye_slignshot)$GMM <- cl2
+colData(mye_slignshot)$GMM14_pc3 <- cl2
+colData(mye_slignshot)$GMM_pc4 <- cl3
+colData(mye_slignshot)$GMM_pc6 <- cl3
+colData(mye_slignshot)$GMMseurat <- cl4
+
+library(RColorBrewer)
+plot(rd2, col = brewer.pal(9,"Set1")[cl1], pch=16, asp = 1)
+
+colData(mye_slignshot) %>% data.frame %>% tibble::rownames_to_column("cell") %>% left_join(rd3 %>% data.frame %>% tibble::rownames_to_column("cell"), by="cell") %>% mutate(GMM= as.factor(GMM)) %>% ggplot(aes(PC1, PC2, colour=GMM)) + geom_point(size=0.5) + scale_fill_manual(my_colour_palette) 
+
+cl2 %>% data.frame %>% tibble::rownames_to_column("cell") %>% mutate(GMM= .data$.) %>% dselect(-.) %>% left_join(rd2 %>% data.frame %>% tibble::rownames_to_column("cell"), by="cell") %>% mutate(GMM= as.factor(GMM)) %>% ggplot(aes(PC1,PC3, colour=GMM)) + geom_point(size=1) + scale_fill_manual(my_colour_palette) 
+```
+
+K-means
+Cluster into 14: super fast
+The clusters are equal sized, which is not what's expected, so still with the gaussian mixture model
+```{r}
+cl3 <- kmeans(rd2, centers = 14)$cluster
+
+colData(mye_slignshot)$kmeans <- cl3
+cl3 %>% data.frame %>% tibble::rownames_to_column("cell") %>% mutate(GMM= .data$.) %>% dselect(-.) %>% left_join(rd2 %>% data.frame %>% tibble::rownames_to_column("cell"), by="cell") %>% mutate(GMM= as.factor(GMM)) %>% ggplot(aes(PC1,PC3, colour=GMM)) + geom_point(size=1) + scale_fill_manual(my_colour_palette) 
+```
+
+Slignshot getLineages, getCurves
+
+```{r fig.height=5, fig.width=7}
+mye_slignshot <- slingshot(mye_slignshot, clusterLabels = 'GMM', reducedDim = 'PCA')
+
+summary(mye_slignshot$slingPseudotime_1)
+
+colors <- colorRampPalette(brewer.pal(11,'Spectral')[-6])(100)
+plotcol <- colors[cut(mye_slignshot$slingPseudotime_1, breaks=100)]
+
+plot(reducedDims(mye_slignshot)$PCA, col = plotcol, pch=16, asp = 1) +
+lines(SlingshotDataSet(mye_slignshot), lwd=2, col='black')
+```
+
+```{r}
+plot(reducedDims(mye_slignshot)$PCA, col = brewer.pal(9,'Set1')[mye_slignshot$GMMseurat], pch=16, asp = 1) +
+lines(SlingshotDataSet(mye_slignshot), lwd=2, type = 'lineages', col = 'black')
+```
+Try running Slingshot on my UMAP projection from Seurat analysis: I'm pretty happy it's its topology. I just want Slingshot of infer the trajectory for it
+
+```{r}
+batch4_myeloid@reductions$umap@cell.embeddings
+batch4_myeloid@active.ident
+#Define clusters
+colData(mye_slignshot)$Seurat_clust <- batch4_myeloid@active.ident
+#define dimension reduction
+reducedDims(mye_slignshot) <- SimpleList(UMAP=batch4_myeloid@reductions$umap@cell.embeddings)
+
+mye_slignshot <- slingshot(mye_slignshot, clusterLabels = 'Seurat_clust', reducedDim = 'UMAP')
+
+plot(reducedDims(mye_slignshot)$UMAP, col = plotcol, pch=16, asp = 1) +
+lines(SlingshotDataSet(mye_slignshot), lwd=2, col='black')
+
+plot(reducedDims(mye_slignshot)$UMAP, col = brewer.pal(9,'Set1')[mye_slignshot$GMMseurat], pch=16, asp = 1) +
+lines(SlingshotDataSet(mye_slignshot), lwd=2, type = 'lineages', col = 'black')
+
+```
+
+PAGA
+Downloaded Anaconda3: files are in:
+/Users/mxu/opt/anaconda3
+Install Jupyter notebook: 
+Terminal > 
+/Users/mxu/opt/anaconda3/bin/conda install -c conda-forge jupyterlab
+
+https://scanpy.readthedocs.io/en/stable/installation.html
+/Users/mxu/opt/anaconda3/bin/conda install seaborn scikit-learn statsmodels numba pytables
+/Users/mxu/opt/anaconda3/bin/conda install -c conda-forge python-igraph leiden
+export PATH=$PATH:/Users/mxu/opt/anaconda3/bin/ # this didn't work
+export PATH=/Users/mxu/opt/anaconda3/bin:$PATH # this worked
+pip install scanpy # this threw an error "ImportError: No module named pathlib" this is from having the out-of-date version of python: my Mac has a default python 2.7 version installed, so I had to add the shortcut to python3 path in the front of $PATH 
+
+Reticulate
+install.packages("reticulate")
+```{r}
+library(reticulate)
+use_python("Users/mxu/opt/anaconda3/bin")
+os <- import("os")
+os$listdir(".")
+
+```
+
+Scanpy was originally built as a python version of the Seurat workflow: is was a demonstration to reproduce Seurat's clustering tutorial.
+Seurat objects can be converted to Scanpy using loomR
+devtools::install_github(repo = "mojaveazure/loomR", ref = "develop")
+```{r}
+library(loomR)
+pbmc.loom <- as.loom(batch4_myeloid, filename = "/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_myeloid.loom", verbose = FALSE)
+```
+
+

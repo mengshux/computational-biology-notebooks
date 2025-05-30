@@ -1,0 +1,73 @@
+---
+title: "Check Azizi Seurat data for Manu Shiny tool"
+author: "Mengshu"
+date: "1/2/2019"
+output: html_document
+---
+
+
+```{r}
+library(Seurat)
+#update.packages("Seurat")
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tibble)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")
+```
+
+Load data from rds file
+
+This version of the Azizi Seurat object has the t-sne projection, but no UMAP
+I preferred the t-sne in this case because the cells are distributed well with less "clumping"
+```{r fig.height=6, fig.width=12}
+pbmc<- readRDS("Azizi_PBMC_Seurat.rds")
+azizi <- UpdateSeuratObject(pbmc)
+saveRDS(azizi,file="azizi_v3.rds")
+readRDS("azizi_v3.rds")
+
+#azizi@reductions$tsne
+DimPlot(azizi, reduction="tsne", label=TRUE) +
+ggsave("CITE_Clusters_UMAP.jpg", width=12, height=6, dpi=300, plot= last_plot(), units = "in")
+
+azizi_cluster <- AverageExpression(azizi)
+save(azizi_cluster, file="Azizi_PBMC_clusters_ave.rdata")
+write.table(azizi_cluster, file="Azizi_PBMC_clusters_ave.txt", sep="\t")
+```
+Clusters 10. NKT and 11. Premature Monocyte look switched
+They *are* switched: 11. is GNLY high, CD14-, while 10. is CD14+ GNLY-, so 10. is clearly monocytic, while 11. is NKT (T because it's CD3+ but CD8-, and NK beccause GNLY+)
+```{r fig.height=12, fig.width=24}
+FeaturePlot(azizi,slot = "data",reduction="tsne", features = c("CD14", "CD3D","GNLY","CD8A"))
+```
+Fix cluster labels
+
+```{r fig.height=6, fig.width=12}
+#current labels
+levels(azizi@active.ident)
+levels(azizi)
+fix.cluster.ids <- c("0. Naive CD8 T","1. Active CD4 T","2. Active Monocyte","3. Naive CD4 T","4. B cell precursor","5. Monocyte","6. Naive CD4 T","7. T EM","8. B cells","9. NK cell","10.Immature Monocyte","11. NKT cell","12. FCGR3A+ DC4", "13. DC2","14. T effector","15. Apoptotic T","16. T RM","17. CD3+ B","18. DC1","19. Megakaryocyte" ,"20. NK precursor")  
+names(fix.cluster.ids) <- levels(azizi)
+azizi <- RenameIdents(azizi, fix.cluster.ids)
+DimPlot(object = azizi, label = TRUE, reduction= 'tsne') # fixed. 
+```
+
+
+
+
+
+
+
+Don't know why UMAP slot is empty here, since I ran it before: rerun with same dims=1:24
+```{r fig.height=8, fig.width=12}
+library(umap)
+azizi <-  RunUMAP(azizi, dims=1:24) 
+DimPlot(object = azizi, label = TRUE, reduction.use = 'umap')
+DimPlot(object = azizi, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 4) 
+ggsave("Azizi_PBMCs_UMAP.jpg", width= 12, height=8, dpi=600, plot= last_plot(), units = "in")
+```
+
+
+

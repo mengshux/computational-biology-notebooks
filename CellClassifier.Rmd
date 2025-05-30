@@ -1,0 +1,208 @@
+---
+title: "Cellclassifier"
+output: html_document
+---
+
+Load data
+
+```{r}
+my_data <- read.delim("C:/Users/lgutierrez/Desktop/Downloads/10X_pbmc_t_variable.txt")
+```
+
+Removing high abundance genes
+
+```{r}
+GENES <- names(my_data.caret)
+index<-grep("^RP.*|^MT.*", GENES, perl =T) #Ribosomal proteins & Mitochondrial genes
+GENES[index]
+```
+
+```{r}
+my_data.caret <- my_data[, -index]
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+my_data.caret <- data.table(my_data.caret)
+```
+
+
+Joining labels 4 & 6 (They are both Naive Cells) & Switching labels 10 and 11
+
+```{r}
+my_data.caret[id_num == "6", id_num :="3",]
+my_data.caret[id_num == "10", id_num :="22",]
+my_data.caret[id_num == "11", id_num :="10",]
+my_data.caret[id_num == "22", id_num :="11",]
+
+my_data.caret[id_num == "3", id:= "3. Naive CD4 T"]
+my_data.caret[id_num == "10", id:= "10. NKT cell"]
+my_data.caret[id_num == "11", id:= "11. Immature Monocyte"]
+my_data.caret[id_num == "17", id:= "17. Mix T & B cells"]
+
+
+```
+
+
+```{r}
+my_data.caret$id_num <- as.factor(my_data.caret$id_num)
+```
+
+```{r}
+unique(my_data.caret$id_num)
+```
+
+
+Remove the id from the dataset
+
+```{r}
+my_data.caret2 <- my_data.caret[, -2,]
+```
+
+Splitting data
+
+```{r}
+library(caret)
+set.seed(1)
+inTrain <- createDataPartition(
+  y = my_data.caret2$id_num,
+  p = 0.75,  ##The percentage of data in the training set
+  list = FALSE
+)
+
+```
+
+Defining training and testing datasets
+
+```{r}
+training.caret <- my_data.caret2[inTrain,]
+testing.caret <- my_data.caret2[-inTrain,]
+```
+
+Testing labels
+
+```{r}
+labels <- testing.caret$id_num
+```
+
+
+
+Applying PCA to both training and testing datasets
+
+```{r}
+pca_generator <- preProcess(training.caret, method= "pca", thresh=0.75)
+training.pcs <- predict(pca_generator, training.caret)
+
+```
+
+```{r}
+testing.pcs <- predict(pca_generator, testing.caret)
+```
+
+Training
+
+Cross-validation
+
+```{r}
+fitControl <- trainControl(
+  method = "repeatedcv", 
+  repeats = 5,
+  n = 5
+)
+
+fitControl2 <- trainControl(
+  method = "none"
+)
+```
+
+
+LDA
+
+```{r}
+metric <- "Accuracy"
+
+set.seed(123)
+LDAFit.pcs <- train(id_num ~., data = training.pcs, method = "lda", trControl = fitControl, metric = metric )
+```
+
+Training accuracy score
+
+```{r}
+LDAFit.pcs
+```
+
+Testing accuracy score
+
+```{r}
+LDAFit.pcs.test <- predict(LDAFit.pcs, testing.pcs[, -1,])
+confusionMatrix(LDAFit.pcs.test, labels)
+```
+
+Model seems to missclassify many labels 2. Active Monocyte and 5. Monocyte
+
+Random Forest (mtry = 21)
+
+```{r}
+mtry <- sqrt(ncol(training.pcs))
+
+randomForestGrid.pcs <- expand.grid(mtry = c(7, 8, 9, 10, 21, 22, 23))
+
+set.seed(123)
+randomForestFit.pcs <- train(id_num~., data = training.pcs, method = "rf", trControl = fitControl, tuneGrid = randomForestGrid.pcs, metric = metric)
+```
+
+
+```{r}
+randomForestFit.pcs.test <- predict(randomForestFit.pcs, testing.pcs[, -1, ])
+confusionMatrix(randomForestFit.pcs.test, labels)
+```
+
+```{r}
+plot(randomForestFit.pcs)
+```
+
+random Forest (mtry = 10) --> Without cross-validation
+
+```{r}
+randomForestFit.pcs.10.test <- predict(randomForestFit.pcs.10, testing.pcs)
+confusionMatrix(randomForestFit.pcs.10.test, labels)
+```
+
+gbm (interaction.depth = 8, n.trees = 250, shrinkage = 0.1, n.minobsinnode = 30)
+
+```{r}
+gbmGrid.pcs <- expand.grid(interaction.depth = c(2,4,8), n.trees = c(150, 200, 250), shrinkage = 0.1, n.minobsinnode = 30)
+
+set.seed(123)
+gbmFit.pcs <- train(id_num~., data = training.pcs, method = "gbm", trControl = fitControl, tuneGrid = gbmGrid.pcs, verbose = TRUE, metric = metric)
+```
+
+
+```{r}
+gbmFit.pcs
+```
+
+```{r}
+gbmFit.pcs.test <- predict(gbmFit.pcs, testing.pcs[, -1,])
+confusionMatrix(gbmFit.pcs.test, labels)
+```
+
+```{r}
+plot(gbmFit.pcs)
+```
+
+**** MOST ACCURATE ****
+
+gbmFit (interaction.depth = 8, n.trees = 150, shrinkage = 0.1, n.minobsinnode = 30)--> Without cross-validation
+
+```{r}
+gbmFit.pcs.150.test <- predict(gbmFit.pcs.150, testing.pcs[, -1,])
+confusionMatrix(gbmFit.pcs.150.test, labels)
+```
+
+
+
+
+
+

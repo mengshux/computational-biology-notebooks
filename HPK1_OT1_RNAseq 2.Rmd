@@ -1,0 +1,382 @@
+---
+title: "HPK1_OTI"
+author: "MX"
+date: "9/29/2020"
+output: html_document
+---
+
+```{r}
+library(limma)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(DESeq2)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("d:/FLX/Files_from_Gene/R_functions.r")
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+```
+
+Save and Load data
+```{r}
+save(tpm_gene,file="/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/tpm_gene.rdata") # normalized and summed by gene
+
+load("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/tpm_gene.rdata")
+tpms
+```
+
+
+
+
+Read in the data
+```{r}
+file_names <- list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/kallisto/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"\\.")[[1]][1]})
+files <- base::list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/kallisto/", pattern=".tsv", full.names=TRUE)
+#strsplit("G_AAS_1.kallisto_quant.abundance.tsv","\\.")[[1]][1]
+data_files <- lapply(files, function(i){read.table(i,header=TRUE)})
+tpms <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+rownames(tpms) <- data_files[[1]]$target_id
+colnames(tpms) <- file_names
+```
+
+Normalize data for plotting
+Sum by genes
+and take gene-wise z_score
+```{r}
+boxplot(tpms %>% as.matrix)
+tpm_norm <- normalizeBetweenArrays(tpms %>% as.matrix)
+boxplot(tpm_norm)
+
+gencode_symbol <- read.table("/Volumes/Picard/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+
+tpm_gene <- tpm_norm %>% data.frame %>% tibble::rownames_to_column("Gencode") %>% left_join(gencode_symbol, by="Gencode") %>% dselect(Symbol,everything()) %>% dselect(-Gencode) %>% group_by(Symbol) %>% mutate_if(is.numeric,sum_mx) %>% unique %>% ungroup
+
+tpm_m <- tpm_gene %>% tibble::column_to_rownames("Symbol") %>% as.matrix
+tpm_z <- t(apply(tpm_m,1,mx_zscore)) #the middle term 1 means rows, and 2 means columns
+tpm_t[1:5,1:5]
+tpm_z[1:5,1:5]
+boxplot(tpm_z)
+save(tpm_gene,file="tpm_gene.rdata") 
+#load("tpm_gene.rdata")
+
+save(tpm_z,file="tpm_z.rdata")
+load(file="tpm_z.rdata")
+```
+
+DESeq2 PCA plot
+Batch comparison for samples
+
+https://support.bioconductor.org/p/77960/
+
+```{r}
+library(DESeq2)
+library(tximport)
+files <- base::list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/kallisto/", pattern=".tsv", full.names=TRUE)
+gencode_symbol <- read.table("/Volumes/Picard/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+names <- base::list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/kallisto/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"\\.")[[1]][1]}) %>% unlist
+ot1 <- tximport(files, type="kallisto", tx2gene=gencode_symbol)
+colnames(ot1$counts) #<- colnames(tpm_gene)[2:length(colnames(tpm_gene))]
+meta <- data.frame(Sample= names) %>% mutate(Treatment= case_when(
+  grepl("RAPT1.*d3",Sample) ~ "Vehicle_Day3",
+  grepl("RAPT2.*d3",Sample) ~ "F019324_30mpk_Day3",
+  grepl("RAPT3.*d3",Sample) ~ "F019324_100mpk_Day3",
+  grepl("RAPT1.*d7",Sample) ~ "Vehicle_Day7",
+  grepl("RAPT2.*d7",Sample) ~ "F019324_30mpk_Day7",
+  grepl("RAPT3.*d7",Sample) ~ "F019324_100mpk_Day7",
+)) 
+meta <- data.frame(Sample=names) %>% mutate(Day = if_else(grepl("d3",Sample),"Day_3","Day_7"))
+meta <- data.frame(Sample=names) 
+sample_order<- data.frame(Sample= names) %>% mutate(Treatment= case_when(
+  grepl("1-",Sample) ~ "Vehicle",
+  grepl("2-",Sample) ~ "F019324_30mpk",
+  grepl("3-",Sample) ~ "F019324_100mpk",
+)) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","F019324_30mpk","F019324_100mpk"))) %>% mutate(Day=if_else(grepl("_d3",Sample),"Day3","Day7")) %>% arrange(Day,Treatment) %>% pull(Sample)
+
+OT1 <- DESeqDataSetFromTximport(ot1,
+                                   colData = meta,
+                                   design= ~ Treatment)
+OT1@assays@data$counts
+#OT1 <- DESeq(OT1)
+rld <- rlog(OT1)
+plotPCA(rld,intgroup=c("Treatment")) + scale_color_manual(values= c("red","red","orange","orange","grey60","grey60"))
+plotPCA(rld,intgroup=c("Day"))
+data <- plotPCA(rld,intgroup=c("Sample"), returnData=TRUE)
+ggplot(data, aes(PC1,PC2, colour=group, label=Sample, alpha=0.1)) + geom_label(vjust = "inward", hjust = "inward") 
+```
+
+Explore genes in PCs
+https://www.biostars.org/p/339919/
+
+PC1: CAMP, LTF macrophage gMDSC markers, hemoglobin
+PC2: most non genes
+```{r}
+rv = rowVars(assay(rld)) 
+select = order(rv, decreasing=TRUE)[seq_len(min(500, length(rv)))]
+pc = prcomp(t(assay(rld)[select,]))
+loadings = as.data.frame(pc$rotation)
+aload = abs(loadings)
+sweep(aload, 2, colSums(aload), "/")
+aload %>% arrange(-PC2)
+```
+
+
+DE
+Levels: Vehicle_Day3 F019324_100mpk_Day3 F019324_100mpk_Day7 F019324_30mpk_Day3 F019324_30mpk_Day7 Vehicle_Day7
+```{r}
+OT1$Treatment <- relevel(OT1$Treatment, ref = "Vehicle_Day7")
+OT1$Day <- relevel(OT1$Day, ref = "Day_3")
+OT1$Sample <- relevel(OT1$Sample, ref = "RAPT1-1_d3") 
+OT1 <- DESeq(OT1)
+resultsNames(OT1)
+save(OT1,file="OTI1_DESeq2_object.rdata")
+
+res_Vehicle <- results(OT1, name="Treatment_Vehicle_Day7_vs_Vehicle_Day3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+res_Vehicle%>% write.table(file="Day7_vs_Day3_Veh_Gene_2.txt", sep="\t",row.names = FALSE,quote=F)
+
+
+res_100Day7_vsVehDay3 <- results(OT1, name="Treatment_F019324_100mpk_Day7_vs_Vehicle_Day3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+res_100Day7_vsVehDay3 %>% write.table(file="Day7100_vs_Day3_Veh_Gene.txt", sep="\t",row.names = FALSE,quote=F)
+Day7_100mpk_UP_genes <- res_100Day7_vsVehDay3 %>% pull(Gene)
+Day7_100mpk_UP_genes2 <- res_100Day7_vsVehDay3 %>% pull(Gene)
+intersect(Day7_100mpk_UP_genes,Day7_100mpk_UP_genes2)
+
+res_100Day7_vsVehDay3_DN <- results(OT1, name="Treatment_F019324_100mpk_Day7_vs_Vehicle_Day3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+res_100Day7_vsVehDay3_DN %>% write.table(file="Day7100_vs_Day3_Veh_Gene_DN.txt", sep="\t",row.names = FALSE,quote=F)
+res_100Day7_vsVehDay3_DN_genes <- res_100Day7_vsVehDay3_DN %>% pull(Gene)
+
+res_30Day7_vsVehDay3 <- results(OT1, name="Treatment_F019324_30mpk_Day7_vs_Vehicle_Day3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+res_30Day7_vsVehDay3 %>% write.table(file="Day730_vs_Day3_Veh_Gene.txt", sep="\t",row.names = FALSE,quote=F)
+
+"Day_Day_7_vs_Day_3"
+res_Day7_vs_Day3_DN <- results(OT1, name="Day_Day_7_vs_Day_3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange < -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+res_Day7_vs_Day3_DN
+
+"Treatment_F019324_100mpk_Day7_vs_Vehicle_Day7"
+res_100Day7_vsVehDay7 <- results(OT1, name="Treatment_F019324_100mpk_Day7_vs_Vehicle_Day7") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.5,log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+res_100Day7_vsVehDay7 %>% write.table(file="Day7100_vs_Day3_Veh_Gene_DN.txt", sep="\t",row.names = FALSE,quote=F)
+
+#Check Prdm1/Blimp expression
+res_100Day7_vsVehDay7 <- results(OT1, name="Treatment_F019324_100mpk_Day7_vs_Vehicle_Day7") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene =="Prdm1") 
+
+res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.05,log2FoldChange >= 0.5) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) #%>% write.table(file="RENCA_19_10_UP.txt",sep="\t", quote=FALSE,row.names = FALSE)
+res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange <= -0.5) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="RENCA_19_10_DN.txt",sep="\t", quote=FALSE,row.names = FALSE)
+sig_UP <- res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange >= 0.5) %>% arrange(-log2FoldChange) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% pull(Gene)
+sig_DN <- res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange <= -0.5) %>% arrange(-log2FoldChange) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% pull(Gene)
+sig_UP %>% data.frame
+```
+
+Volcano Plot
+
+```{r fig.height=8, fig.width=6}
+
+library(EnhancedVolcano)
+
+pdf("Vehicle_Day7_vs_Day3.pdf",width = 6, height = 8)
+EnhancedVolcano(results(OT1,name="Treatment_Vehicle_Day7_vs_Vehicle_Day3"),
+                 lab = rownames(results(OT1)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 8),
+                 xlim = c(-6, 6),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'OTI Vehicle Day 7 vs Day 3',
+                 pCutoff = 0.05,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+
+EnhancedVolcano(results(OT1,name="Treatment_F019324_100mpk_Day7_vs_Vehicle_Day3"),
+                 lab = rownames(results(OT1)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 22),
+                 xlim = c(-8, 8),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'Treatment_F019324_100mpk_Day7_vs_Vehicle_Day3',
+                 pCutoff = 0.05,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+
+EnhancedVolcano(results(OT1,name="Treatment_F019324_30mpk_Day7_vs_Vehicle_Day3"),
+                 lab = rownames(results(OT1)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 22),
+                 xlim = c(-8, 8),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'Treatment_F019324_30mpk_Day7_vs_Vehicle_Day3',
+                 pCutoff = 0.05,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+
+EnhancedVolcano(results(OT1,name="Day_Day_7_vs_Day_3"),
+                 lab = rownames(results(OT1)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 50),
+                 xlim = c(-7, 7),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'Day7_vs_Day3',
+                 pCutoff = 0.05,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+
+EnhancedVolcano(results(OT1,name="Treatment_F019324_100mpk_Day7_vs_Vehicle_Day7"),
+                 lab = rownames(results(OT1)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 20),
+                 xlim = c(-7, 7),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = '100mpk_Day7_vs_Vehicle_Day7',
+                 pCutoff = 0.05,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+
+
+```
+
+Heatmap of DE genes between Day 3 Vehicle and Day 7 100 mpk
+
+```{r fig.height=10, fig.width=7}
+pheatmap(D7_100mpk_m,cluster_cols=F)
+```
+
+https://davetang.org/muse/2018/05/15/making-a-heatmap-in-r-with-the-pheatmap-package/
+```{r fig.height=120, fig.width=6}
+library(pheatmap)
+sample_order_dot <- str_replace(sample_order,"-",".")
+D7_100mpk <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Day7_100mpk_UP_genes2) %>% dselect(Gene,sample_order_dot)
+
+D7_100mpk %>% write.table(file="Gene_zscores_all_samples.txt",sep="\t",quote=F,row.names = F)
+#test <- data.frame("one"=c(1,3,5,6,NA,8,4,6),"two"=c(5,NA,5,8,4,NA,3,2))
+#test[is.na(test)] <- 0
+D7_100mpk_m <- D7_100mpk %>% tibble::column_to_rownames("Gene") %>% as.matrix
+D7_100mpk_m[1:10,1:10]
+D7_100mpk_m["Hbb-bs",]
+
+pheatmap(D7_100mpk_m,cluster_cols=F)
+
+pheatmap(tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(grepl("^Vmn",Gene)) %>% dfilter(!is.nan(RAPT1.1_d3)) %>% tibble::column_to_rownames("Gene") %>% as.matrix )
+
+pheatmap(tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(grepl("^Traj",Gene)) %>% dfilter(!is.nan(RAPT1.1_d3)) %>% tibble::column_to_rownames("Gene") %>% as.matrix )
+```
+
+Heatmap of DN genes
+```{r fig.height=180, fig.width=6}
+
+sample_order_dot <- str_replace(sample_order,"-",".")
+length(res_100Day7_vsVehDay3_DN_genes) # 1565 genes
+D7_100mpk_DN <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% res_100Day7_vsVehDay3_DN_genes) %>% dselect(Gene,sample_order_dot)
+
+D7_100mpk_DN_m <- D7_100mpk_DN %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(D7_100mpk_DN_m,cluster_cols=F)
+```
+Heatmap of interesting markers
+```{r fig.height=6, fig.width=6}
+Interesting_markers_m <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Ccr7","Sell","Klrg1","Mki67","Ccr7","Il7r","Cd161","Cd27","Lck","Zap70","Tox","Lag3","Havcr2","Entpd1","Ifng","Tnf","Ptger2","Cd69","Cd127","Tigit","Tcf7","Gzmk","Nkg7","Prdm1")) %>% dselect(Gene,sample_order_dot) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(Interesting_markers_m,cluster_cols=F)
+```
+
+
+Heatmap of 1000 most variable genes across all samples (as measured by variace)
+Variance is Sum of (value - mean)^2/(n-1)
+Get a list of most variable genes
+```{r fig.height=120, fig.width=6}
+rv = rowVars(assay(rld))# save row variance to rv
+top1000 <- order(rv, decreasing=TRUE)[seq_len(min(1000, length(rv)))] # take the top 500 most variable genes, or the length of rv, whichever is less
+top1000_varGenes <- row.names(assay(rld)[top1000,])
+top1000_genes <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% top1000_varGenes) %>% dselect(Gene,sample_order_dot)
+top1000_genes_m <- top1000_genes %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(top1000_genes_m,cluster_cols=F)
+```
+Take top z-score genes
+```{r}
+RAPT2.3_d3_UP <-tpm_z %>% data.frame %>% arrange(-RAPT2.3_d3) %>% dfilter(RAPT2.3_d3 >= 2.5) %>% tibble::rownames_to_column("Gene") %>% dfilter(!grepl("^Gm",Gene)) %>% pull(Gene)
+length(Day7_100mpk_UP_genes2)
+intersect(Day7_100mpk_UP_genes2,RAPT2.3_d3_UP) %>% write.table(file="RAPT2.3_d3_UP.txt",sep="\n",row.names = FALSE,quote=F)
+RAPT2.3_d3_UP %>% write.table(file="RAPT2.3_d3_UP.txt",sep="\n",row.names = FALSE,quote=F)
+```
+CD161 = Klrb1 is a marker of MAIT T cells
+Tim3 = Havcr2
+CD39 = Entpd exhaustion marker
+PGE2= PTGER2
+CD127 naive marker
+```{r fig.height=7, fig.width=10}
+library(ggbeeswarm)
+tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Ccr7","Sell","Klrg1","Mki67","Ccr7","Il7r","Cd161","Cd27","Lck","Zap70","Tox","Lag3","Havcr2","Entpd1","Ifng","Tnf","Ptger2","Cd69","Cd127","Tigit","Tcf7","Gzmk","Nkg7","Il10")  ) %>% gather(Sample, RNA_z_score,-Gene) %>% mutate(Sample = str_replace(Sample,"\\.","-")) %>% left_join(meta, by="Sample") %>% ggplot(aes(Treatment,RNA_z_score, colour=Sample)) + geom_beeswarm() + facet_wrap(~Gene) + theme(axis.text.x = element_text(angle=90,size=12, vjust=0.5, hjust=1),strip.text=element_text(size=12))
+
+tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Prdm1","Lag3","Havcr2","Tigit")  ) %>% gather(Sample, RNA_z_score,-Gene) %>% mutate(Sample = str_replace(Sample,"\\.","-")) %>% left_join(meta, by="Sample") %>% ggplot(aes(Treatment,RNA_z_score, colour=Sample)) + geom_beeswarm() + facet_wrap(~Gene) + theme(axis.text.x = element_text(angle=90,size=12, vjust=0.5, hjust=1),strip.text=element_text(size=12))
+
+
+
+meta %<>% mutate(Treatment=factor(Treatment, levels=c("Vehicle_Day3","F019324_30mpk_Day3","F019324_100mpk_Day3","Vehicle_Day7","F019324_30mpk_Day7","F019324_100mpk_Day7")))
+
+```
+
+```{r}
+tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Kit","Cd19")  ) %>% gather(Sample, RNA_z_score,-Gene) %>% mutate(Sample = str_replace(Sample,"\\.","-")) %>% left_join(meta, by="Sample") %>% ggplot(aes(Treatment,RNA_z_score, colour=Sample)) + geom_beeswarm() + facet_wrap(~Gene) + theme(axis.text.x = element_text(angle=90,size=12, vjust=0.5, hjust=1),strip.text=element_text(size=12))
+```
+
+Heatmap of Listeria response signature in T cells
+```{r}
+
+T_cell_listeria_genes <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Cx3cr1","Klrg1","Tbx21","Ifng","Gzmb","Cd8b1")) %>% dselect(Gene,sample_order_dot)
+T_cell_listeria_genes_m <- T_cell_listeria_genes %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(T_cell_listeria_genes_m,cluster_cols=F)
+```
+
+Gene in HPK1 supposed pathway
+Prdm1/Blimp Gata3, Tbx21
+```{r fig.height=2, fig.width=6}
+library(pheatmap)
+Alleged_genes <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Prdm1","Gata3","Tbx21","Tox")) %>% dselect(Gene,sample_order_dot)
+Alleged_genes_m <- Alleged_genes %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(Alleged_genes_m,cluster_cols=F)
+```
+NFkB pathway
+```{r}
+nfkb_genes <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Rela","Nfkbil1","Bcl3","Traf1","Nfkbia","Icam1","Nfkb2","Relb","Il15","Traf3","Traf4","Nfkb1")) %>% dselect(Gene,sample_order_dot)
+nfkb_genes_m <- nfkb_genes %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(nfkb_genes_m,cluster_cols=F)
+```
+
+Si et al. 2020 B6 model HPK1 k/o data
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE156204
+```{r}
+si_data <- read.table("/Volumes/Picard/Papers/GSE156204_gene.expression_RPKM.txt", header=T)
+ENSMUG <- read.table("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/ENSMUSG.txt",sep="\t",header=F) %>% data.frame
+colnames(ENSMUG) <- c("tracking_id", "Gene")
+FPKM_gene <- si_data %>% left_join(ENSMUG, by=
+"tracking_id") %>% dselect(Gene,everything()) %>% dselect(-tracking_id) %>% group_by(Gene) %>% mutate_if(is.numeric,sum_mx) %>% unique %>% ungroup
+FPKM_gene %>% write.table(file="FPKM_gene_sum.txt",sep="\t",quote=F,row.names = F)
+FPKM_m <- FPKM_gene %>% dfilter(!grepl("Gm|Rik",Gene)) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+FPKM_z <- t(apply(FPKM_m,1,mx_zscore2)) 
+```
+Heatmap
+```{r fig.height=4, fig.width=6}
+pheatmap(FPKM_z,cluster_cols=F, annotation_names_row=FALSE)
+pheatmap(FPKM_z[c("Gata3","Tbpl1","Nfat5","Pdcd1","Ctla4","Havcr2","Lag3","Cd274","Cdk2","Ccnb1","Casp3","Tbx21"),],cluster_cols=F)
+
+```
+
+```{r}
+library(limma)
+library(edgeR)
+edgeR_hpk <- DGEList(counts=FPKM_m, group=group)
+group <- c(1,1,2,2)
+design <- model.matrix(~group)
+keep <- filterByExpr(edgeR_hpk)
+edgeR_hpk <- edgeR_hpk[keep,,keep.lib.sizes=FALSE]
+
+edgeR_hpk <- calcNormFactors(edgeR_hpk)
+edgeR_hpk$samples
+edgeR_hpk <- estimateDisp(edgeR_hpk)
+de <- exactTest(edgeR_hpk)
+topTags(de)
+de %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(-logFC) #%>% write.table(file="FPKM_EdgeR_DE.txt",sep="\t",quote=F,row.names = F)
+Gene_order
+```
+

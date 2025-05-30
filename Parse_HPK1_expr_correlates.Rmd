@@ -1,0 +1,57 @@
+---
+title: "HPK1_Expr_Correlations"
+author: "Mengshu"
+date: "9/19/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+update.packages("dplyr")
+library(dplyr)
+library(magrittr)
+library(tidyr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+## I have downloaded TCGA gene expression correlation tables from cBioportal for HPK1 vs genes in individual cancer cohorts. The expression values are from RNAseq V2, and the correlation values are Spearman. 
+## There is also correaltion data from the CCLE, comparing HPK1 expression against all cell lines. 
+## I also have Pearson's R values from Gene's analysis of TCGA data, correlating HPK1 expression to all cancers. 
+## This script is for transposing the data into a horizontal format for Cluster3 and Treeview input. 
+# I want to see the patterns of co-occurence of correlation, and find the most conserved and cancer-specific correlations. 
+
+```{r}
+my_input <- list.files(pattern="*_co-ex.tsv")
+merge_tsv <- lapply(my_input, function(i) {
+  read.csv(i, header= TRUE, sep="\t")
+})
+names(merge_tsv) <- sub("_co-ex.tsv","",my_input)
+merge_tsv <- lapply(seq_along(merge_tsv),function(i){
+  name <- names(merge_tsv)[i]
+  merge_tsv[[i]] %<>% dselect(Correlated.Gene,Cytoband,Spearman.s.Correlation,pValue=`p.Value`,qValue=`q.Value`) %>% mutate(Cancer=name) %>% dfilter(abs(Spearman.s.Correlation) >= 0.6, qValue <= 0.05) %>% dselect(-pValue,-qValue)
+  merge_tsv[[i]] <- merge_tsv[[i]][!duplicated(merge_tsv[[i]]$Correlated.Gene),] ## tried using the dplyr distinct() function, but it would remove all other cols
+})
+merge_HPK1_corr <- do.call('rbind',merge_tsv)
+HPK1_expr_corr_matrix <- spread(merge_HPK1_corr,Cancer,Spearman.s.Correlation) %>% dselect(-TCGA_THYM_HPK1)
+HPK1_expr_corr_matrix$sums <- rowSums(HPK1_expr_corr_matrix[,c(3:31)], na.rm=TRUE)
+HPK1_expr_corr_matrix %<>% dfilter(sums != 0) %>% rename(Gene=Correlated.Gene) %>% mutate(CorrSum=sums) %>% arrange(desc(sums)) %>% dselect(-sums) 
+
+(HPK1_expr_corr_matrix$Gene)
+HPK1_expr_corr_matrix %<>% dselect("Correlated.Gene","Gene","CCLE_HPK1","TCGA_AML_HPK1","TCGA_Gene_HPK1","TCGA_BLCA_HPK1","TCGA_BRCA_HPK1","TCGA_LGG_HPK1","TCGA_LUAD_HPK1","TCGA_LUSC_HPK1","TCGA_PAAD_HPK1","TCGA_SKCM_HPK1","TCGA_STAD_HPK1","TCGA_TGC_HPK1","TCGA_Gene_CD45","TCGA_Gene_CD8A","TCGA_Gene_GMFG","TCGA_Gene_RASGRP4")
+
+write.table(HPK1_expr_corr_matrix, file= "HPK1_expr_corr_matrix.cdt",sep="\t", row.names = FALSE)
+
+```
+
+Convert HUGO names to ENSEMBLE
+
+```{r}
+gene_list=as.list(HPK1_expr_corr_matrix$Gene)
+queryMany('IKZF3', scopes="symbol", fields="all", return.as=c("text"), species="human")
+glist <- queryMany("ENSG00000161405", scopes="ensembl.gene", fields="symbol", return.as=c("text"), species="human")
+glist	
+ENSG00000161405
+glist$ensembl
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

@@ -1,0 +1,84 @@
+---
+title: "Linear modeling with cBioPortal Cancer metadata"
+author: "Gene Cutler"
+date: "7/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+lmtest <- function(dt, test.col) {
+  if (test.col %nin% colnames(dt)) return(NA)
+  dt <- dt[, .SD, .SDcols=c("VAR", test.col) ]
+  setnames(dt, 2, "VAL")
+  lm.here <- try(lm(VAL ~ VAR, data=dt[!is.na(VAR)]))
+  if (class(lm.here) != "try-error") {
+    lm.here %>% anova %>% tidy %>% filter(term=="VAR") %>% select(p.value) %>% unlist
+  } else {
+    NA
+  }
+}
+
+fullTT <- list()
+TTsubgroups <- list()
+TTacrossSubgroups <- list()
+for (tt in tts) {
+  # fullTT[[tt]] <- data.table(
+  #   CCL22.FOXP3.cor = cor(TCGAwICGC.subset[ Tumor.Type == tt, .(FOXP3, CCL22)], method="spearman")[1,2],
+  #   CCLx.FOXP3.cor = cor(TCGAwICGC.subset[ Tumor.Type == tt, .(FOXP3, CCLx)], method="spearman")[1,2],
+  #   TGFB.FOXP3.cor = cor(TCGAwICGC.subset[ Tumor.Type == tt, .(FOXP3, TGFB1)], method="spearman")[1,2],
+  #   median.CCL22 = median(TCGAwICGC.subset[ Tumor.Type == tt, CCL22]),
+  #   median.CCL17 = median(TCGAwICGC.subset[ Tumor.Type == tt, CCL17]),
+  #   median.CCLx = median(TCGAwICGC.subset[ Tumor.Type == tt, CCLx]),
+  #   median.FOXP3 = median(TCGAwICGC.subset[ Tumor.Type == tt, FOXP3]),
+  #   median.CD8 = median(TCGAwICGC.subset[ Tumor.Type == tt, CD8]),
+  #   median.FOXP3vCD8 = median(TCGAwICGC.subset[ Tumor.Type == tt, FOXP3.by.CD8]),
+  #   median.TREGvCD8 = median(TCGAwICGC.subset[ Tumor.Type == tt, TREG.by.CD8]),
+  #   median.Treg = median(TCGAwICGC.subset[ Tumor.Type == tt, Treg]),
+  #   median.CPEpredict = median(TCGAwICGC.subset[ Tumor.Type == tt, CPEpredict]),
+  #   n = nrow( TCGAwICGC.subset[ Tumor.Type == tt ] ),
+  #   TT=tt
+  # )
+  
+  wanted.annotations <- want.info[ TT == tt ]
+  if (nrow(wanted.annotations) > 0) {
+    # stats by annotation
+    for (var in wanted.annotations$VAR) {
+      merged <- merge(TCGAwICGC.subset[ Tumor.Type == tt ], cBioPortal[[tt]][, .SD, .SDcols=c("SAMPLE_ID",var)], by="SAMPLE_ID", all=FALSE)
+      setnames(merged, ncol(merged), "VAR")
+      # if (wanted.annotations[ VAR == var, class ] != "numeric") {
+      #   merged[ VAR %in% blank, VAR := NA ]
+      #   merged <- merged[ !is.na(VAR) ]
+      #   TTsubgroups[[ paste0(tt,".",var) ]] <- 
+      #     merged[, .( 
+      #       CCL22.FOXP3.cor=cor(FOXP3,CCL22, method="spearman"),
+      #       CCLx.FOXP3.cor=cor(FOXP3,CCLx, method="spearman"),
+      #       TGFB.FOXP3.cor=cor(FOXP3,TGFB1, method="spearman"),
+      #       median.CCL22 = median(CCL22),
+      #       median.CCL17 = median(CCL17),
+      #       median.CCLx = median(CCLx),
+      #       median.FOXP3 = median(FOXP3),
+      #       median.CD8 = median(CD8),
+      #       median.FOXP3vCD8 = median(FOXP3/CD8),
+      #       median.TREGvCD8 = median(Treg/CD8),
+      #       median.Treg = median(Treg),
+      #       median.CPEpredict = median(CPEpredict),
+      #       n = length(CPEpredict),
+      #       TT = tt,
+      #       VARNAME = var
+      #     ), by=VAR ]
+      # }
+      out <- sapply( c('CCL22','CCLx','FOXP3','Treg','CD8','FOXP3.by.CD8','TREG.by.CD8','CPEpredict'), function(x) lmtest(merged, x) )
+      out <- data.table(as.data.frame(t(out)))
+      out[, ':=' (TT=tt, VAR=var) ]
+      TTacrossSubgroups[[ paste0(tt,".",var) ]] <- out
+    }
+  }
+}
+
+```
+

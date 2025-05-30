@@ -1,0 +1,117 @@
+---
+title: "Limma regDC DE"
+author: "Mengshu"
+date: "February 21, 2019"
+output: html_document
+---
+Differential timecourse analysis of microarray data using Limma
+```{r}
+#BiocManager::install("Biobase")
+#BiocManager::install("GEOquery")
+library(GEOquery)
+library(Biobase)
+library(limma)
+library(dplyr)
+```
+
+Download datasets
+```{r}
+
+
+gse <- getGEO("GSE5151", destdir=".",GSEMatrix=TRUE)
+gse <- getGEO("GSE59294", destdir=".",GSEMatrix=TRUE) #Guttman 2014 AD data
+#garvan <- getGEO("GSE3982", destdir=".",GSEMatrix=TRUE)
+show(gse)
+eset <- gse[[1]]
+e <- exprs(eset)
+boxplot(log(e))
+#see the experiments
+show(pData(phenoData(eset)))
+rownames(pData(phenoData(eset)))
+```
+
+```{r}
+e_Df <- data.frame(e)
+AD_2014 <- e_Df %>% dplyr::select("GSM1432944","GSM1432949", "GSM1432951","GSM1432954","GSM1432958", "GSM1432960" , "GSM1432961", "GSM1432962","GSM1432967", "GSM1432969", "GSM1432970" ,"GSM1432974","GSM1432978","GSM1432979", "GSM1432981","GSM1432945", "GSM1432948", "GSM1432950","GSM1432953","GSM1432955", "GSM1432959","GSM1432963", "GSM1432966", "GSM1432971","GSM1432975","GSM1432980","GSM1432982")
+
+(e["221333_at",])
+(AD_2014["221165_s_at",])
+(AD_2014["221333_at",])
+
+```
+
+
+
+Set up design and the groups to compare
+```{r}
+design <- cbind(GSM116323=c(1,0,0,0),
+                GSM116324=c(0,1,0,0),
+                GSM116325=c(0,0,1,0),
+                GSM116326=c(0,0,0,1)
+              )
+lev <- c("GSM116323", "GSM116324", "GSM116325", "GSM116326")
+f <- factor(lev, levels=lev)
+design2 <- model.matrix(~0+ f)
+              )
+design
+design2
+#what to compare
+c <- makeContrasts(GSM116324-GSM116323,GSM116325-GSM116323,GSM116326-GSM116323, levels=design)
+c
+```
+Fit Linear Model: Can't do this without replicates, so skip the lmFit step
+```{r}
+ fit <- lmFit(eset,design) 
+ fit2<- contrasts.fit(fit,c) 
+ lm.Fit(c,)
+ fit2<- eBayes(fit2)
+ toptable(fit2)
+```
+
+Forget trying to analyze this, just export and cluster the data. 
+Limma does not take kindly to no replicates
+```{r}
+e <- tibble::rownames_to_column(data.frame(e))
+e %<>% mutate(gene=rowname) %>% dselect(rowname, gene, everything())
+gene_code <- e %>% dselect(gene)
+write.table(e, file="DC_TGFB_Ju.txt", sep="\t", quote=FALSE, row.names=FALSE)
+```
+
+Look up the gene names
+Array is HG_U95Av2
+Problem is the tool returns
+length(HUGO[,1]) 22283
+length(OUT)    22300
+length(unique(OUT$SYMBOL)) 
+```{r}
+source("http://bioconductor.org/biocLite.R")
+biocLite("hgu95av2.db")
+BiocManager::install("hgu95av2.db")
+library("AnnotationDbi")
+library("hgu95av2.db")    ##for Human
+library("hgu133a2.db") 
+columns(hgu95av2.db)
+PROBES<- e[,1]
+OUT <- select(hgu95av2.db,keys= PROBES, columns=c("SYMBOL","GENENAME"),multiVals="first")
+OUT[1:100,]
+HUGO[1:100,]
+HUGO <- OUT[!duplicated(OUT[,1]),]
+length(HUGO[,1])
+e %<>% mutate(gene_name=HUGO[,2])
+e %<>% dselect(-gene,gene_name,rowname,everything())
+e %>% dfilter(gene_name=="MET")
+select
+#Back lookup the array name
+mapIds(hgu95av2.db,keys="FOXP3", column="PROBEID", keytype='SYMBOL')
+mapIds(hgu133a2.db,keys="IL22", column="PROBEID", keytype='SYMBOL')
+select(hgu133a2.db,keys= c("221333_at"), columns=c("SYMBOL","GENENAME","ENSEMBL","ENSEMBLPROT"))
+```
+Normalize values
+
+```{r}
+fold_change_log <- e %>% mutate("4hour"=log2(GSM116324/GSM116323), "16hour" =log2(GSM116325/GSM116323), "36hour"=log2(GSM116326/GSM116323)) %>% dselect(-GSM116323,-GSM116324,-GSM116325,-GSM116326)
+fold_change <- e %>% mutate("4hour"=(GSM116324/GSM116323), "16hour" =(GSM116325/GSM116323), "36hour"=(GSM116326/GSM116323)) %>% dselect(-GSM116323,-GSM116324,-GSM116325,-GSM116326)
+write.table(fold_change, file="DC_TGFB_Ju_FC.txt", sep="\t", quote=FALSE, row.names=FALSE)
+
+```
+

@@ -1,0 +1,74 @@
+---
+title: "Parse_human_Kallisto"
+author: "MX"
+date: "2/2/2021"
+output: html_document
+---
+
+```{r}
+library(limma)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(DESeq2)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")  # code for PC
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+```
+
+
+Read in the data
+```{r}
+file_names <- list.files("/Volumes/Picard/FLX/HPK1/Bellshaped_curve_experiments/Kallisto/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"_abundance")[[1]][1]})
+files <- base::list.files("/Volumes/Picard/FLX/HPK1/Bellshaped_curve_experiments/Kallisto/", pattern=".tsv", full.names=TRUE)
+
+data_files <- lapply(files, function(i){read.table(i,header=TRUE)})
+offtargets <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+rownames(offtargets) <- data_files[[1]]$target_id
+colnames(offtargets) <- file_names
+
+```
+
+
+Normalize samples to each other
+```{r}
+library(limma)
+boxplot(offtargets %>% as.matrix)
+offtargets_norm <- normalizeBetweenArrays(offtargets %>% as.matrix)
+boxplot(offtargets_norm)
+```
+
+Get the translation table for ENSEMBL to HUGO names
+```{r}
+require("biomaRt")
+listMarts() # find the name for the ENSEMBL database
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+listDatasets(mart) #find the species
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+listAttributes(mart) # find the data slot that you want to retrieve
+
+annotLookup <- getBM(
+  mart = mart,
+  attributes = c(
+    "external_gene_name","affy_hta_2_0"),values = c('TC01003833.hg', '2824546_st', 'TC01000020.hg'))
+colnames(annotLookup) <- c("ID_REF","Gene") # change the column names
+save(annotLookup,file="Human_ENSEMBL_transcript_2_HUGO.rdata")
+load("Human_ENSEMBL_transcript_2_HUGO.rdata") # code to load it again later
+
+annotLookup[10000:10010,]
+```
+
+Translate ENSEML transcript names to HUGO gene names, then take the rows that are the same gene and sum them together
+
+The gene names are in this format:
+ENST00000473358.1|ENSG00000243485.5|OTTHUMG00000000959.2|OTTHUMT00000002840.1|MIR1302-2HG-202|MIR1302-2HG|712|lincRNA| 
+Have to parse out the first gene name and get rid of the rest of it using separate()
+```{r}
+
+offtargets_gene <- offtargets_norm %>% data.frame %>% tibble::rownames_to_column("Gencode") %>% separate(Gencode, into=c(Gencode,NA),sep="|", extra="drop") %>% left_join(annotLookup, by=c("Gencode"="ID_REF")) %>% dselect(Gene,everything()) %>% dselect(-Gencode) %>% dfilter(!is.na(Gene)) %>% group_by(Gene) %>% mutate_if(is.numeric,sum_mx) %>% unique %>% ungroup 
+
+```
+

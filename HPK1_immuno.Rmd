@@ -1,0 +1,352 @@
+---
+title: "HPK1_Immuno_TCGA"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r }
+library(ggplot2)
+```
+
+
+```{r}
+hpk1_data <- read.csv("IMMUNO_HPK1_TCGA_clean.txt", sep= "\t", header= TRUE)
+hpk1_df <- data.frame(hpk1_data)
+head(hpk1_df)
+min(hpk1_df$Immune.score)
+library(dplyr)
+hpk1_df <- hpk1_df %>%
+  filter(HPK1_FPKM != "NA" & CD8A_FPKM != "NA" & CD45_FPKM != "NA") %>%
+  mutate(Immune.score.pos = Immune.score+2500)
+head(hpk1_df)
+#unique(hpk1_data$Long_name)
+str(hpk1_df)  
+```
+```{r}
+hpk1_omit_OU <- hpk1_df %>%
+  filter(Code != "UCEC" & Code != "OV")
+head(hpk1_omit_OU)
+
+```
+
+```{r}
+##the following sets the order of data plotted as same as input
+hpk1_df$Code <- factor(hpk1_df$Code, levels=unique(hpk1_df$Code))
+hpk1_omit_OU$Code <- factor(hpk1_omit_OU$Code, levels=unique(hpk1_omit_OU$Code))
+```
+
+```{r}
+
+ggplot(hpk1_df, aes(Code, y=HPK1_FPKM, show.legend = FALSE)) +
+  geom_boxplot(scale="width", trim = FALSE, aes(fill=Code), show.legend = FALSE) + 
+  geom_jitter(height=0, width=0.1, size=0.3, alpha=0.4) + 
+  #geom_point(size = 0.1,stroke=FALSE,colour="blue") +
+  xlab("TCGA cancer type") +
+  scale_y_log10() +
+  theme(axis.text.x=element_text(size=16, angle = 90), 
+        axis.text.y=element_text(size=16),
+        axis.title =element_text(size=16))
+
+```
+
+```{r}
+ggsave("TCGA_HPK1_log10.jpg", dpi=300, plot= last_plot(), width = 15, height = 15, units = "cm" )
+```
+
+```{r}
+ggplot(hpk1_df, aes(Code, y=Immune.score.pos, show.legend = FALSE, aes= 0.4)) +
+  geom_boxplot(scale="width", trim = FALSE, aes(fill=Code), show.legend = FALSE) + 
+  geom_jitter(height=0, width=0.1, size=0.5, show.legend = FALSE) + 
+  ylim(0,5500) +
+  xlab("TCGA cancer type") +
+  theme(axis.text.x=element_text(size=16, angle = 90), 
+        axis.text.y=element_text(size=16),
+        axis.title =element_text(size=16))
+```
+```{r}
+ggsave("TCGA_immune.score_log10.jpg", dpi=300, plot= last_plot(), width = 15, height = 15, units = "cm" )
+```
+```{r}
+
+```
+
+```{r}
+ggplot(hpk1_df, aes(x=Immune.score, y=HPK1_FPKM, colour=Code, show.legend = FALSE)) +
+  geom_point(height=0, width=0.1, size=1, alpha=0.4, show.legend = FALSE) + 
+  geom_abline(intercept = 0, slope = 0.0005,linetype="dashed", show.legend = FALSE) +
+  #facet_grid(cols = vars(Code)) +
+  facet_wrap( ~ Code, ncol=4) +
+  xlab("Immune Score") +
+  scale_y_log10() +
+  theme(axis.text.x=element_text(size=16, angle = 90), 
+        axis.text.y=element_text(size=16),
+        axis.title =element_text(size=16))
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+ggsave("TCGA_immune.score_cancer_facet_4.jpg", dpi=300, plot= last_plot(), units = "cm", width = 18, height = 15)
+```
+```{r}
+
+HPK1_mean <-hpk1_df %>%
+            group_by(Code) %>%
+            summarize(meanImmune.score= median(Immune.score.pos), meanHPK1_FPKM=median(HPK1_FPKM), meanCD45_FPKM=median(CD45_FPKM), mean.ratio=1000*(meanHPK1_FPKM/meanImmune.score)) 
+head(HPK1_mean)
+```
+
+```{r}
+ggplot(HPK1_mean, aes(meanImmune.score, meanHPK1_FPKM, colour= mean.ratio, label = Code, show.legend=FALSE)) +
+  geom_point(show.legend=FALSE) +
+  geom_abline(intercept = -2.5, slope = 1/700,linetype="dashed", show.legend = FALSE) +
+  xlab("Median Immune score") +
+  ylab("Median HPK1 FPKM") +
+  #scale_y_log10(0.00001,3) +
+  xlim(2000,3700) +
+  ylim(0.5,3.25) +
+  geom_label(show.legend=FALSE)
+```
+
+```{r}
+ggsave("HPK1_vs_TCGA_immune.jpg", dpi=300, width= 14, height=10, plot= last_plot(), units = "cm" )
+```
+```{r}
+ggplot(HPK1_mean, aes(meanImmune.score, meanHPK1_FPKM, colour= mean.ratio, label = Code, show.legend=FALSE)) +
+  geom_point(show.legend=FALSE) +
+  geom_abline(intercept = -2.5, slope = 1/700,linetype="dashed", show.legend = FALSE) +
+  xlab("Median Immune score") +
+  ylab("Median HPK1 FPKM") +
+  #scale_y_log10(0.00001,3) +
+  xlim(2000,3700) +
+  ylim(0.5,3.25) +
+  geom_label(show.legend=FALSE)
+```
+
+```{r}
+ggplot(hpk1_df, aes(Immune.score,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+
+# The noise in the correlation comes form OV and UCEC samples. They constitute most of the outliers in this graph
+#Test Pearson correlation with and without OV and UCEC
+```{r}
+ggsave("HPK1_vs_Immune.score.jpg", dpi=300, width= 16, height=14, plot= last_plot(), units = "cm" )
+```
+```{r}
+
+```
+
+
+```{r}
+cor.test(hpk1_df$HPK1_FPKM,hpk1_df$Immune.score)
+```
+
+```{r}
+cor.test(hpk1_omit_OU$HPK1_FPKM,hpk1_omit_OU$Immune.score)
+```
+```{r}
+ggplot(hpk1_omit_OU, aes(Immune.score,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+```{r}
+ggsave("HPK1_vs_Immune.score_omit_OU.jpg", dpi=300, width= 16, height=14, plot= last_plot(), units = "cm" )
+```
+
+```{r}
+ggplot(hpk1_df, aes(Stromal.score,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+```{r}
+cor.test(hpk1_df$Stromal.score,hpk1_df$HPK1_FPKM)
+```
+
+```{r}
+ggsave("HPK1_vs_stromal.score.jpg", dpi=300, width= 16, height=14, plot= last_plot(), units = "cm" )
+```
+```{r}
+ggplot(hpk1_omit_OU, aes(Stromal.score,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+
+```{r}
+ggsave("HPK1_vs_stromal.score_omit_OU.jpg", dpi=300, width= 16, height=14, plot= last_plot(), units = "cm" )
+```
+```{r}
+
+```{r}
+cor.test(hpk1_omit_OU$Stromal.score,hpk1_omit_OU$HPK1_FPKM)
+```
+
+```{r}
+```{r}
+ggplot(hpk1_df, aes(tumor.purity,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+```{r}
+cor.test(hpk1_df$HPK1_FPKM,hpk1_df$tumor.purity)
+```
+
+```{r}
+ggsave("HPK1_vs_tumor.purity.jpg", dpi=300, width= 16, height=14, plot= last_plot(), units = "cm" )
+```
+
+
+```{r}
+ggplot(hpk1_omit_OU, aes(tumor.purity,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+```{r}
+ggsave("HPK1_vs_tumor_purity_omit_OU.jpg", dpi=300, width= 16, height=14, plot= last_plot(), units = "cm" )
+```
+
+```{r}
+cor.test(hpk1_omit_OU$HPK1_FPKM,hpk1_omit_OU$tumor.purity)
+```
+```{r}
+ggplot(hpk1_df, aes(Immune.score,CD45_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+```{r}
+cor.test(hpk1_df$CD45_FPKM,hpk1_df$Immune.score)
+```
+
+```{r}
+ggsave("CD45_vs_immune_score.jpg", dpi=300, width= 16, height=14, plot= last_plot(), units = "cm" )
+```
+
+```{r}
+ggplot(hpk1_df, aes(Stromal.score,CD45_FPKM,colour= Code)) +
+  geom_point() +
+  #facet_wrap( ~ Code, ncol=4) +
+  scale_y_log10()
+```
+
+```{r}
+cor.test(hpk1_df$CD45_FPKM,hpk1_df$Stromal.score)
+```
+
+```{r}
+ggsave("CD45_Vs_stromal_score.jpg", dpi=300, width= 20, height=15, plot= last_plot(), units = "cm" )
+```
+
+```{r}
+ggplot(hpk1_df, aes(tumor.purity,CD45_FPKM,colour= Code)) +
+  geom_point() +
+  #facet_wrap( ~ Code, ncol=4) +
+  scale_y_log10()
+```
+
+```{r}
+cor.test(hpk1_df$CD45_FPKM,hpk1_df$tumor.purity)
+```
+```{r}
+ggsave("CD45_Vs_tumor.purity.jpg", dpi=300, width= 20, height=15, plot= last_plot(), units = "cm" )
+```
+```{r}
+ggplot(hpk1_df, aes(CD45_FPKM,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  #facet_wrap( ~ Code, ncol=4) +
+  scale_y_log10() +
+  scale_x_log10()
+```
+```{r}
+ggsave("HPK1_Vs_CD3D_omit_OU.jpg", dpi=300, width= 20, height=15, plot= last_plot(), units = "cm" )
+
+```
+```{r}
+## DETERMINE IF HPK1 expression correlates with tumor or stromal content in Ovarian or Uterine cancers
+hpk1_OU <- hpk1_df %>%
+  filter(Code = OV, Code = UCEC)
+```
+
+
+```{r}
+ggplot(hpk1_df, aes(CD8A_FPKM,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  #facet_wrap( ~ Code, ncol=4) +
+  scale_y_log10() +
+  scale_x_log10()
+
+```
+```{r}
+hpk1_cd3D <- hpk1_df %>%
+  filter(CD3D_FPKM != "NA")
+hpk1_cd3D$Code <- factor(hpk1_cd3D$Code, levels=unique(hpk1_cd3D$Code))
+ggplot(hpk1_cd3D, aes(CD3D_FPKM,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10()
+```
+
+
+```{r}
+ggplot(hpk1_omit_OU, aes(CD3D_FPKM,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10()
+```
+
+```{r}
+```{r}
+ggplot(hpk1_omit_OU, aes(CD8A_FPKM,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10()
+```
+```{r}
+cor.test(hpk1_omit_OU$CD45_FPKM,hpk1_omit_OU$HPK1_FPKM)
+cor.test(hpk1_omit_OU$CD8A_FPKM,hpk1_omit_OU$HPK1_FPKM)
+cor.test(hpk1_omit_OU$CD3D_FPKM,hpk1_omit_OU$HPK1_FPKM)
+```
+
+```{r}
+hpk1_UO <-hpk1_df %>%
+  filter(Code %in% c("OV"))
+```
+```{r}
+ggplot(hpk1_UO, aes(Immune.score,HPK1_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+```{r}
+ggsave("O_HPK1_Vs_Immune.jpg", dpi=300, width= 15, height=15, plot= last_plot(), units = "cm" )
+```
+
+```{r}
+cor.test(hpk1_UO$HPK1_FPKM,hpk1_UO$Immune.score)
+```
+
+```{r}
+hpk1_U <-hpk1_df %>%
+  filter(Code %in% c("UCEC")) %>%
+  mutate(ExpImmRatio = HPK1_FPKM/Immune.score.pos) %>%
+  arrange(desc(ExpImmRatio))
+
+head(hpk1_U)
+
+```
+
+```{r}
+ggplot(hpk1_U, aes(ExpImmRatio,CD8A_FPKM,colour= Code)) +
+  geom_point() +
+  scale_y_log10()
+```
+```{r}
+filter_1 <-hpk1_U %>%
+  filter(ExpImmRatio >= 0.00125 )
+summary(filter_1)
+summary(hpk1_U)
+```
+

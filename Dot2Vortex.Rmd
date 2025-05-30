@@ -1,0 +1,87 @@
+---
+title: "Dotmatics2Vortex"
+author: "Mengshu"
+date: "12/10/2019"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(stringr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+###########
+Parsing Plan
+###########
+Common columns:
+ID, Reg ID, SMILES
+
+0. General parsing, fill in rows, groom numbers, filter out assays that we don't need in the output
+1. Percent Protein Bound Assay -> PPB Species PCT_Free, 2 columns
+2. DMPK -> AUC, %F, Half Life, by Route+Dose+Strain, 76 columns
+3. Biochemical assays: 15 columns
+4. Biochemical assay "Maximum": only for assays listed as "IL-2", 2 columns
+5. Liver Microsome Half life -> Average Half life by species, 3 columns
+Total: 98 data columns
+
+read.table does not interpret excel encoding correctly
+readxl::read_excel works
+```{r}
+dot <- readxl::read_excel("/Volumes/Enterprise/FLX/HPK1/Dotmatics2Vortex/19_08_23_HPK1_download_raw.xlsx")
+dot2 <- readxl::read_excel("/Volumes/Enterprise/FLX/HPK1/Dotmatics2Vortex/MyTabularView-60HSW7W7.xlsx")
+dot3 <- readxl::read_excel("/Volumes/Enterprise/FLX/HPK1/Dotmatics2Vortex/excelexport-CRIVA2OI.xlsx")
+dot4 <- readxl::read_excel("/Volumes/Enterprise/FLX/HPK1/Dotmatics2Vortex/excelexport-011020.xlsx")
+```
+
+```{r}
+
+dot_cleanup <- dot4 %>% rename("Reg_ID" = `Reg ID`) %>% fill(Reg_ID, SMILES) %>% mutate(Result_num = ifelse(startsWith(Result,'>'), 10*as.numeric(substr(Result,2,nchar(Result))), ifelse(startsWith(Result,'<'), 0.1*as.numeric(substr(Result,2,nchar(Result))), as.numeric(Result)))) %>% dplyr::rename(Species_LM=`Species...7`, Species_PPB=SPECIES, Strain_dmpk=Strain) %>% dplyr::select(-starts_with("Result "), -Result) %>% dfilter(
+Validated == 'VALIDATED',
+`Protocol Name` != "Library Screening",
+!str_detect(`Protocol Name`,"RBC$"),
+!str_detect(`Protocol Name`,"^HRI"),
+!str_detect(`Protocol Name`,"^PERK"),
+!str_detect(`Protocol Name`,"^PKR"),
+!str_detect(`Protocol Name`,"^Cytotoxicity"),
+!str_detect(`Protocol Name`,"SKOV"),
+!str_detect(`Protocol Name`,"^GSK"),
+!str_detect(`Protocol Name`,"^HPK1 KO_"),
+!str_detect(`Protocol Name`,"^HPK1 WT Clone"), 
+!str_detect(`Protocol Name`, "LanthaScreen$"))
+
+
+### Meta data
+dot_meta <- dot_cleanup %>% dselect(ID,Reg_ID,SMILES) %>% separate(ID, into=c("ID",NA),sep= "-") %>% unique
+
+##### PPB section
+dot_PPB <- dot_cleanup %>% dselect(Reg_ID,SMILES,Species_PPB,AVG_PCT_FREE) %>% group_by(Reg_ID,Species_PPB) %>% mutate(GeoMean_PCT_Free = geo.mean(AVG_PCT_FREE)) %>% ungroup() %>% dselect(-AVG_PCT_FREE) %>% unique %>% pivot_wider(names_from=Species_PPB, values_from=GeoMean_PCT_Free, names_prefix="PCT_Free_") %>% dselect(Reg_ID,PCT_Free_Rat,PCT_Free_Human)
+
+#### DMPK results : select coluns by name instead of index in case the export is slightly different order in future
+#### Creates 68 columns
+dot_dmpk <- dot_cleanup %>% dfilter(!is.na(Strain_dmpk)) %>% dselect(Reg_ID,`Strain_dmpk`,`CL (L/hr/kg)`,`%F`,`T1/2 (hr)`,`AUC (0-infinity) (hr*ng/mL)`,`Route`,`Dose (mg/kg)`) %>% group_by(Reg_ID,`Strain_dmpk`,`Route`,`Dose (mg/kg)`) %>% mutate_if(is.numeric, geo.mean) %>% unique  %>% pivot_wider(names_from=c(Strain_dmpk,Route,`Dose (mg/kg)`), values_from=c(`AUC (0-infinity) (hr*ng/mL)`,`%F`,`CL (L/hr/kg)`,`T1/2 (hr)`))
+ 
+ ## In vitro Assays
+## 13 columns
+dot_invitro <- dot_cleanup %>% dfilter(Validated == "VALIDATED",`Protocol Name` != "Microsomal") %>% dselect(Reg_ID,`Protocol Name`,Result_num) %>% group_by(Reg_ID,`Protocol Name`) %>% mutate_if(is.numeric, geo.mean) %>% ungroup %>% unique %>% pivot_wider(names_from=`Protocol Name`, values_from= Result_num)
+
+#In Vitro: Get Maximum values from the IL2 assays
+dot_maxima <- dot_cleanup %>% dplyr::filter(grepl("IL-2",`Protocol Name`),Validated == 'VALIDATED') %>% dselect(Reg_ID,`Protocol Name`,Maximum) %>% mutate(Maximum = as.numeric(Maximum)) %>% group_by(Reg_ID,`Protocol Name`) %>% mutate_if(is.numeric, geo.mean) %>% ungroup %>% unique %>% pivot_wider(names_from=`Protocol Name`, values_from= Maximum, names_prefix="Maximum_")
+  
+#Liver Microsome
+dot_LM <- dot_cleanup %>% dfilter(!is.na(Species_LM)) %>% dselect(Reg_ID,Species_LM,`Avg Half Life (min)`) %>% group_by(Reg_ID,Species_LM) %>% mutate_if(is.numeric,geo.mean) %>% ungroup %>% unique %>% pivot_wider(names_from = c(`Species_LM`), values_from = `Avg Half Life (min)`, names_prefix = "LM_HalfLife_")
+
+#Join everything
+rm(vortex)
+vortex <- left_join(dot_meta,dot_PPB,by="Reg_ID")
+vortex <- left_join(vortex,dot_dmpk,by="Reg_ID")
+vortex <- left_join(vortex,dot_invitro,by="Reg_ID")
+vortex <- left_join(vortex,dot_maxima,by="Reg_ID")
+vortex <- left_join(vortex,dot_LM,by="Reg_ID")
+# 101 columns total
+#1101 compound as of Jan 10 2020
+vortex %>% write.table(file="/Volumes/Enterprise/FLX/HPK1/Dotmatics2Vortex/Dot2Vortex_01102020.txt", sep="\t",col.names = TRUE, row.names = FALSE, quote=FALSE)
+vortex %>% write.table(file="/Volumes/Enterprise/FLX/HPK1/Dotmatics2Vortex/Dot2Vortex_01102020_Happy_Rubber_Ducky_Day.txt", sep="\t",col.names = TRUE, row.names = FALSE, quote=FALSE,na = "")
+```
+

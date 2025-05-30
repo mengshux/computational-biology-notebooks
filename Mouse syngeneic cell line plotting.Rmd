@@ -1,0 +1,757 @@
+---
+title: "Mosely lookup"
+author: "Mengshu"
+date: "7/16/2019"
+output: html_document
+---
+
+In-house and Mosely microarray expression data for Mouse syngeneic models
+mouse_dds is the in-house data of CT26, MC38 and Pan02 in triplicate
+mouseData_tum is the Mosely data
+samples.info_tum is the metadata for Mosely
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(data.table)
+library(reshape2) #needed for the heatmap
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")
+```
+
+
+Load data
+```{r}
+load("/Volumes/Enterprise/FLX/Silpa_data/mouseAnnot.rdata")
+load("/Volumes/Enterprise/FLX/Silpa_data/mouse_dds.rdata") # This is an in-house dataset, not the Mosely data
+#This is the Mosely data
+load("/Volumes/Picard/FLX/Silpa_data/mouseData_tum.rdata")
+load("/Volumes/Picard/FLX/Silpa_data/samples.info_tum.rdata")
+samples.info_tum
+load("D:/FLX/Silpa_data/mouseData_tum.rdata")
+load("D:/FLX/Silpa_data/samples.info_tum.rdata")
+
+# Z_score
+load("/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/Mosely_data_zscore.rdata") # mouse_z
+# ZZ_score
+load("/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/Mosely_data_zzscore.rdata") # mouse_zz
+mouse_zz
+# All mouse models combined: Mosely, KPC, other KPC, YUMM
+load("D:/FLX/Syngeneic_mouse_models/Syngeneic_JHU_KPC_YUMM_bnorm.rdata") # Syngeneic_JHU_KPC_YUMM_bnorm  This was comBat and limma::NormalizeBetweenArrays normalized
+```
+
+Take Z-score of the data
+#this took an hour
+```{r}
+syngeneic_z <- t(apply(mouseData_tum,2,mx_zscore)) #the middle term 1 means rows, and 2 means columns #24818
+syngeneic_z %<>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(!grepl("^Gm|Rik$",Gene)) #18599
+syngeneic_z_mean <- syngeneic_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame + %>% mutate(meta=samples.info_tum$`experimental group`) %>% dselect(meta,everything()) %>% dfilter(grepl("_T",meta)) %>% mutate(meta=str_replace(meta,"_T","")) %>% group_by(meta) %>% summarise_if(is.numeric,mean)
+save(syngeneic_z_mean,file="syngeneic_z_mean.rdata")
+
+syngeneic_z_rep <- syngeneic_z_mean %>% tibble::column_to_rownames("meta") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+save(syngeneic_z_rep,file="syngeneic_z_rep.rdata")
+
+mouseData_tum %>% as.matrix
+```
+
+DNAM-1 is Cd226
+```{r}
+syngeneic_z_rep %>% dfilter(grepl("Cd226",Gene)) %>% 
+  gather(Syngeneic_model, z_score, -Gene) %>%
+  ggplot(aes(x=reorder(Syngeneic_model,-z_score), y=z_score, ymin=0, ymax=z_score)) +
+  geom_point() +
+  geom_linerange() +
+  theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=45,size=14,hjust=1))
+
+syngeneic_z_rep %>% dfilter(grepl("PVR",Gene)) %>% 
+  gather(Syngeneic_model, z_score, -Gene) %>%
+  ggplot(aes(x=reorder(Syngeneic_model,-z_score), y=z_score, ymin=0, ymax=z_score)) +
+  geom_point() +
+  geom_linerange() +
+  theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=45,size=14,hjust=1))
+```
+
+Examine data
+Plot histogram of signal distribution
+```{r}
+samples.info_tum
+rownames(mouseData_tum) # this is the gene expression data of 24818 genes in columns by 93 rows that are unnamed
+mouseData_tum[1:10,1:10]
+mouseData_tum %>% gather(Gene,Signal) %>% hist()
+mouseData_tum %>% gather(Gene,Signal) %>% ggplot(aes(Signal, colour=Signal)) + geom_histogram(binwidth=0.2) + scale_x_continuous(name="Log2 Normalized Signal (Microarray)", breaks=seq(0,10,by=1)) +
+ggsave("Mosely_Signal_Hist.jpg", width=5, height=5, dpi=600, plot= last_plot(), units = "in")
+
+str(mouseAnnot) #this is the human mouse gene lookup table
+load("/Volumes/Enterprise/FLX/Reference_tables/mouse_human_gene.rdata")
+mouseAnnot %>% dfilter(GENE.SYMBOL=="Asns")
+mouseAnnot %>% dfilter(HumanName=="LMP2A")
+```
+Merge the Mosely data and metadata
+
+```{r}
+
+mouse <- data.frame(bind_cols(samples.info_tum,mouseData_tum))
+
+
+mouse %>% dselect(cell.line, genes) %>% gather(gene,RNA_expression, -cell_line) %>% ggplot(aes(x=cell_line, y=RNA_expression, group_by(cell_line), colour= cell_line)) + geom_point(show.legend=FALSE) + facet_wrap(~gene, ncol=1, scales="free_y") + theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=45,size=14,hjust=1),strip.text.x=element_text(size=16)) +
+ggsave("GCN2_off_target_Mouse_Vert.jpg", width=6, height=10, dpi=600, plot= last_plot(), units = "in")
+names(mouse)[7] <- "cell_line"
+mouse %>% dselect(cell_line, genes)  %>% gather(gene,RNA_expression, -cell_line) %>% ggplot(aes(x=cell_line, y=RNA_expression, group_by(cell_line), colour= cell_line)) + geom_point(show.legend=FALSE) + theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=45,size=14,hjust=1)) + stat_summary(inherit.aes = TRUE,quantiles = 0.5, colour="black")
+```
+
+Off-target Kinases plotting for Mike Z. 
+```{r fig.height=6, fig.width=16}
+ordered_cell_lines <- mouse %>% dselect(cell_line, genes) %>% gather(gene,RNA_expression, -cell_line) %>% dfilter(!is.na(RNA_expression)) %>% group_by(cell_line) %>% 
+  summarise(value=median(RNA_expression)) %>% arrange(value) %>% pull(cell_line)
+
+
+mouse %>% dselect(cell_line, genes) %>% gather(gene,RNA_expression, -cell_line) %>% dfilter(!is.na(RNA_expression)) %>% 
+  mutate(cell_line = factor(cell_line, levels=ordered_cell_lines)) %>% mutate(gene = factor(gene, levels=c("Cdk6","Cdc7","Mapk8","Mapk9","Gsk3a","Gsk3b","Eif2ak4","Ly6g","gMDSC_score","Trib2"))) %>%
+    ggplot(aes(x=cell_line, y=RNA_expression, group=cell_line, colour= cell_line)) + 
+  stat_summary(fun.y=median, fun.ymax=median, fun.ymin=median, geom="crossbar", size=0.5, colour="black") + 
+  geom_point(show.legend=FALSE) + 
+  facet_wrap(~gene, ncol=10, scales= "free_x") + expand_limits(y = c(5,7)) +
+  theme(axis.title = element_text(size=14), axis.text.y = element_text(size=12), axis.text.x = element_text(size=10,hjust=1),strip.text.x=element_text(size=14)) +  
+  coord_flip() +
+
+  ggsave("GCN2_off_target_Mouse_Horz.jpg", width=16, height=6, dpi=600, plot= last_plot(), units = "in")
+
+
+mouse %>% dselect(cell.line,Ccr4) %>% ggplot(aes(x=cell.line,y=Ccr4, colour=cell.line)) +geom_boxplot() + geom_point()
+mouse %>% dselect(cell.line,Ccr5) %>% ggplot(aes(x=cell.line,y=Ccr5, colour=cell.line)) +geom_boxplot() + geom_point()
+mouse %>% dselect(cell.line,Ccr6) %>% ggplot(aes(x=cell.line,y=Ccr6, colour=cell.line)) +geom_boxplot() + geom_point()
+```
+
+Calculate the MDSC scores of each mouse cell line based on our MDSC signatures
+Put the score back into the mouse table
+```{r}
+mouse[1:15,1:15]
+mouse_gMDSC_genes <- mouseAnnot %>% dfilter(HumanName %in% gMDSC_sig) %>% dselect(GENE.SYMBOL)  # translate the gMDSC signature into mouse gene names
+mouse_gMDSC_genes <- mouse_gMDSC_genes[,1] #this makes the data.frame into a simpler list of values
+mouse_zscore <- mouse %>% dselect()
+  
+mx_zscore <- function(x) {result <- (x-mean(x,na.rm=TRUE)) / sd(x,na.rm=TRUE) 
+                          return(result)}
+
+mouse_gMDSC_sig <- mouse %>% tibble:: column_to_rownames("SampleID") %>% dplyr::select_if(is.double) %>% t %>% data.frame %>% tibble::rownames_to_column("Gene") %>% mutate_if(is.numeric, mx_zscore) %>% dfilter(Gene %in% mouse_gMDSC_genes) %>% summarize_if(is.numeric, sum)
+
+#GCN2
+mouse %>% tibble:: column_to_rownames("SampleID") %>% dplyr::select_if(is.double) %>% t %>% data.frame %>% tibble::rownames_to_column("Gene") %>% mutate_if(is.numeric, mx_zscore) %>% dfilter(Gene =="Eif2ak4") %>% ggplot(aes)
+
+mouse %>% tibble:: column_to_rownames("SampleID") %>% dplyr::select_if(is.double) %>% t %>% data.frame %>% tibble::rownames_to_column("Gene") %>% mutate_if(is.numeric, mx_zscore) %>% gather(Gene,Signal) %>% ggplot(aes(Signal, colour=Signal)) + geom_histogram(binwidth=0.2) + scale_x_continuous(name="Log2 Normalized Signal (Microarray)") +
+  ggsave("Mosely_Zscore_Signal_Hist.jpg", width=5, height=5, dpi=600, plot= last_plot(), units = "in")
+
+
+mouse_gMDSC_sig %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID")
+rownames(mouse_gMDSC_sig) <- "gMDSC_score"
+#mouse %<>% dselect(-gMDSC_score)
+mouse <- left_join(mouse, mouse_gMDSC_sig %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID"), by = "SampleID")
+```
+
+ISR response kinase target signature for George
+1. Take Z-score of all genes for independent replicates of samples. 
+2. Select markers for each Kinase to make a heatmap: examine it to see how specific each marker is for its intended kinase
+3. Calculate a weighted score for GCN2-specific ISR marker score
+
+```{r}
+mouse_z <- mouse %>% tibble::column_to_rownames("SampleID") %>% dplyr::select_if(is.double) %>% t %>% data.frame %>% tibble::rownames_to_column("Gene") %>% mutate_if(is.numeric, mx_zscore)
+save(mouse_z, file="Mosely_data_zscore.rdata")
+load("Mosely_data_zscore.rdata") #mouse_z
+```
+
+ISR signatures
+Missing: Cebpb, Ifit3
+Lokup mouse gene names
+Trfr2 == Tfr2
+Stch ==Hspa13
+```{r}
+Common <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+GCN2 <- c("Hspa5","Slc3a2","Hspa13")
+PRK <- c("Ifit1","Isg15","Usp18")
+PERK <- c("P4hb")
+HRI <- c("Adm2","Slc7a11","Grb10","Nupr1","Soat2","Lrrc1","Glipr2","Arl14ep","Pycr1")
+HRI_sub <-c("Slc7a11","Soat2","Arl14ep","Pycr1") 
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4") # "C6orf48" is missing and removed
+ISR_markers <- c(GCN2,Common,PRK,PERK,HRI_sub,"Eif2ak4",gMDSC_sig_m,mMDSC_sig_m)
+gMDSC_sig <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "DEFA1", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C", "LTF", "F13A1", "PPBP", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "CD24", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1")
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Defa1", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "Ltf", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Cd24", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+load("D:/FLX/Silpa_data/mouse_human_gene.rdata")
+mouseAnnot %>% dfilter(GENE.SYMBOL=="Hspa13")
+```
+
+Mouse z_score and zz_score
+```{r}
+
+mouse_z %>% gather(Cell_line,Signal,-Gene) %>% ggplot(aes(Cell_line, Signal)) + geom_boxplot(outlier.size=0.1, outlier.alpha = 0.1)
+
+mouse_zz <- mouse_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene")
+save(mouse_zz, file="Mosely_data_zzscore.rdata")
+```
+ISR
+gMDSC
+Select marker genes out of dataset and merge back with cell line name
+```{r fig.height=5, fig.width=3}
+isr_z <- mouse_z %>% dfilter(Gene %in% ISR_markers)
+gMDSC_z_score <- mouse_z %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum) %>% mutate(Gene="gMDSC_score") %>% dselect(Gene, everything())
+colnames(gMDSC_z_score) <- c("Gene",paste0(mouse$experimental.group,'_',1:93))
+mMDSC_z_score <- mouse_z %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum)
+colnames(mMDSC_z_score) <- c(paste0(mouse$experimental.group,'_',1:93))
+#mouse_z %>% dfilter(Gene =="Eif2ak4")
+colnames(isr_z) <- c("Gene",paste0(mouse$experimental.group,'_',1:93)) 
+ 
+isr_z %>% mutate(Gene2=Gene) %>% dselect(Gene,Gene2,everything()) %>% arrange(match(Gene,ISR_markers)) %>% write.table(file="ISR_zscore.cdt",row.names = FALSE,sep="\t")
+
+isr_mdsc_z <- rbind(gMDSC_z_score,isr_z)
+
+isr_z %>% arrange(match(Gene,ISR_markers)) %>% write.table(file="ISR_zscore.txt",row.names = FALSE,sep="\t")
+
+isr_z %>% gather(Cell,zscore,-Gene) %>% mutate(Gene=factor(Gene,levels=c(rev(ISR_markers)))) %>% ggplot(aes(x=Gene,y=zscore, fill=Gene)) + geom_violin(show.legend=FALSE) + geom_point(size=0.5,show.legend=FALSE) + coord_flip() +  theme(axis.title = element_text(size=8), axis.text.y = element_text(size=16), axis.text.x = element_text(size=16,hjust=1))
+```
+
+Take z-scores of genes across samples: I.e. take per sample cross_gene z-score, then take per gene cross_sample z-score
+```{r fig.height=5, fig.width=3}
+
+isr_z_z <- isr_z %>% arrange(match(Gene,ISR_markers)) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene")
+
+isr_z_z %>% gather(Cell,zscore,-Gene) %>% mutate(Gene=factor(Gene,levels=rev(ISR_markers))) %>% ggplot(aes(x=Gene,y=zscore, fill=Gene)) + geom_violin(show.legend=FALSE) + geom_point(size=0.5,show.legend=FALSE) + coord_flip() +  theme(axis.title = element_text(size=8), axis.text.y = element_text(size=16), axis.text.x = element_text(size=16,hjust=1))
+
+isr_z %>% arrange(match(Gene,ISR_markers)) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene") %>% mutate(Gene2=Gene) %>% dselect(Gene,Gene2,everything()) %>% write.table(file="ISR_zscore_twice.cdt",row.names = FALSE,sep="\t")
+
+isr_z %>% arrange(match(Gene,ISR_markers)) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene") %>% dselect(Gene,everything()) %>% write.table(file="ISR_zscore_twice.txt",row.names = FALSE,sep="\t")
+```
+
+Correlation of markers
+```{r fig.height=6, fig.width=6}
+  get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+
+isr_genes_z <- isr_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame()
+
+isr_genes_zz <- isr_z %>% arrange(match(Gene,ISR_markers)) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore) %>% tibble::column_to_rownames("experimental.group")  
+
+med_sig_cor <- round(cor(isr_genes_zz),1)
+med_sig_cor <- get_upper_tri(med_sig_cor)
+melt_med_sig_cor <- melt(med_sig_cor)
+melt_med_sig_cor %>% ggplot(aes(x=Var1, y=Var2, fill=value, label=value)) + geom_tile(color = "white")+
+    geom_text(aes(Var1, Var2, label = value), color = "grey30", size = 2) +
+ scale_fill_gradient2(low = "steelblue", high = "red", na.value="white", limit = c(-0.5,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+    scale_x_discrete(position = "top") +
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 0))+
+ coord_fixed() +
+ggsave("Sig_corr_median_heatmap_Sep1.jpg", width=6, height=6, dpi=600, plot= last_plot(), units = "in")  
+
+HRI_sub <-c("Slc7a11","Soat2","Arl14ep","Pycr1") 
+
+``` 
+
+
+
+Calculate GCN2 signature from other ISR signatures
+```{r}
+Common <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+#GCN2 <- c("Hspa5","Slc3a2","Hspa13")
+#PKR <- c("Ifit1","Isg15","Usp18")
+#PERK <- c("P4hb")
+#HRI <- c("Adm2","Slc7a11","Grb10","Nupr1","Soat2","Lrrc1","Glipr2","Arl14ep","Pycr1")
+HRI_sub <-c("Slc7a11","Soat2","Arl14ep","Pycr1") 
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4") # "C6orf48" is missing and removed
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Defa1", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "Ltf", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Cd24", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+
+hypoxia <- read.table("D:/FLX/GCN2/ISR_data/RNA_seq/GSEA_hypoxia.txt",sep="\n", header=TRUE) %>% pull(HALLMARK_HYPOXIA)
+hypoxia <- read.table("/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/GSEA_hypoxia.txt",sep="\n", header=TRUE) %>% pull(HALLMARK_HYPOXIA) %>% .[2:201]
+hypoxia_m <- mouseAnnot %>% dfilter(HumanName %in% hypoxia) %>% dselect(GENE.SYMBOL) %>% pull(GENE.SYMBOL)
+save(hypoxia_m,file="D:/FLX/Reference_tables/hypoxia_x.rdata")
+
+Common_s <- isr_z_z %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,sum)
+PRK_s <- isr_z_z %>% dfilter(Gene %in% PRK) %>% summarise_if(is.numeric,sum)
+PERK_s <- isr_z_z %>% dfilter(Gene %in% PERK) %>% summarise_if(is.numeric,sum)
+HRI_s <- isr_z_z %>% dfilter(Gene %in% HRI_sub) %>% summarise_if(is.numeric,sum)
+GCN2_s <- isr_z_z %>% dfilter(Gene %in% GCN2) %>% summarise_if(is.numeric,sum)
+AAS_s <- isr_z_z %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum)
+gMDSC_s <- isr_z_z %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum)
+mMDSC_s <- isr_z_z %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum)
+
+Common_s <- isr_z %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,sum)
+PRK_s <- isr_z %>% dfilter(Gene %in% PRK) %>% summarise_if(is.numeric,sum)
+PERK_s <- isr_z %>% dfilter(Gene %in% PERK) %>% summarise_if(is.numeric,sum)
+HRI_s <- isr_z %>% dfilter(Gene %in% HRI_sub) %>% summarise_if(is.numeric,sum)
+GCN2_s <- isr_z %>% dfilter(Gene %in% GCN2) %>% summarise_if(is.numeric,sum)
+
+#CN2_s <- (Common_s - PRK_s - PERK_s - HRI_s)
+
+ISR_s <- bind_rows(Common_s,PRK_s,PERK_s,HRI_s,AAS_s,gMDSC_s,mMDSC_s)
+rownames(ISR_s) <- c("Common","PRK","PERK","HRI","AAS","gMDSC","mMDSC")
+ISR_s_t <- ISR_s %>% t %>% data.frame 
+ISR_s_t <- bind_cols(samples.info_tum,ISR_s_t)
+
+ISR_s_t %>% mutate(PRKi= ifelse(PRK<0,0,PRK), PERKi=ifelse(PERK<0,0,PERK), HRIi=ifelse(HRI<0,0,HRI)) %>% 
+  mutate(GCN2_specific = Common - PRKi - PERKi - HRIi) %>% group_by(`experimental group`) %>% dplyr::summarise_if(is.double,mean) %>% dplyr::ungroup() %>% dfilter(`experimental group` %like% "_T$") %>% arrange(desc(GCN2_specific)) %>% mutate(Group=`experimental group`) %>% dselect(-PRKi,-PERKi, -HRIi) %>% dselect(`experimental group`,Group,Common,PRK,PERK,HRI,GCN2_specific,AAS,gMDSC,mMDSC) %>% write.table(file="ISR_scores_grouped_ZZscore_Sep19_MDSC3.cdt", sep="\t",row.names = FALSE, quote=FALSE)
+```
+
+Plot PGE2
+```{r}
+library(Hmisc)
+PGE2 <- mouse_zz %>% dfilter(Gene =="Ptger2") %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID")
+PGE2 <- mouse %>% dfilter(Gene =="Ptger2") %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID")
+
+samples.info_tum %>% dselect(`experimental group`,SampleID) %>% left_join(PGE2,by="SampleID") %>% group_by(`experimental group`) %>% dplyr::summarise_if(is.double,mean) %>% dplyr::ungroup() %>% dfilter(`experimental group` %like% "_T$") %>% arrange(desc(Ptger2)) %>% mutate(`experimental group`=sedit(`experimental group`,'_T','')) %>% ggplot(aes(`experimental group`,Ptger2)) + geom_bar(stat="identity")
+```
+
+Add Hypoxia Signature Feb 27 2020
+Use the whole mouse dataset mouse_zz instead of picking our the genes of interest, because there was no need to do that
+```{r fig.height=8, fig.width=6}
+Common_s <- mouse_zz %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,sum)
+GCN2_s <- mouse_zz %>% dfilter(Gene %in% GCN2) %>% summarise_if(is.numeric,sum)
+PERK_s <- mouse_zz %>% dfilter(Gene %in% PERK) %>% summarise_if(is.numeric,sum)
+HRI_s <- mouse_zz %>% dfilter(Gene %in% HRI) %>% summarise_if(is.numeric,sum)
+AAS_s <- mouse_zz %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum)
+gMDSC_s <- mouse_zz %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum)
+mMDSC_s <- mouse_zz %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum)
+Hypoxia <- mouse_zz %>% dfilter(Gene %in% hypoxia_m) %>% summarise_if(is.numeric,function(x){sum(x)/3})
+
+ISR_s <- bind_rows(Common_s,AAS_s,GCN2_s,PERK_s,HRI_s,gMDSC_s,mMDSC_s,Hypoxia)
+rownames(ISR_s) <- c("ISR_Common","AAS","GCN2","PERK","HRI","gMDSC","mMDSC","Hypoxia")
+ISR_s_t <- ISR_s %>% t %>% data.frame 
+ISR_s_t <- bind_cols(samples.info_tum,ISR_s_t)
+
+
+ISR_s_t  %>% group_by(`experimental group`) %>% dplyr::summarise_if(is.double,mean) %>% dplyr::ungroup() %>% dfilter(grepl("_T$",`experimental group`)) %>% arrange(desc(GCN2)) %>% mutate(Group=`experimental group`) %>% dselect(Group,ISR_Common,AAS,GCN2,PERK,HRI,gMDSC,mMDSC,Hypoxia) %>% dfilter(Group %nin% "") %>% gather(Signature,Score,-Group) %>% ggplot(aes(Signature,Group,fill=Score)) + geom_tile() + scale_fill_gradient2(low="green4", high="purple", mid= "gray90", limits=c(-10,10), oob=squish) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+
+Calculate AAS scores
+```{r}
+
+aas_sig <- c("CLIC4","YARS","SARS","PHGDH","C6orf48","GARS","ASNS","SAT1","SLC3A2","DDIT3","WARS","CHAC1","HERPUD1","PYCR1","TRIB3","CEBPB","PPP1R15A","ATF4")
+
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4") # "C6orf48" is missing and removed
+
+mouseAnnot %>% dfilter(GENE.SYMBOL %in% aas_sig_m)
+```
+
+CrownBio RNA signal
+```{r}
+crownbio <- read.table("D:/FLX/General\ working\ code/Mouse_syngeneic_RNA_CrownBio.txt",sep="\t",header=TRUE)
+CrownBio_RNA <- crownbio %>% dselect(-CANCER.TYPE,-ID) %>% mutate() %>% spread(GENE,LOG2.FPKM.) %>% mutate(GENE=factor(GENE,levels=rev(ISR_markers)))
+gene_order <- c("Clic4","Yars","Sars","Phgdh","Gars","Sat1","Slc3a2","Wars","Chac1","Herpud1","Pycr1","Cebpb","Atf4","Asns","Ddit3","Trib3","Ppp1r15a","Hspa5","Slc3a2","Hspa13","Ifit1","Isg15","Usp18","P4hb","Slc7a11","Soat2","Arl14ep")
+CrownBio_RNA_Z <- CrownBio_RNA %>% mutate_if(is.numeric,mx_zscore)
+
+CrownBio_RNA %>% mutate_if(is.numeric,mx_zscore) %>% mutate(Sample=SAMPLE.NAME) %>% select(SAMPLE.NAME, Sample, everything()) %>% arrange(desc(ASNS)) %>%  write.table(file="CrownBio_RNA_Z.txt", quote=FALSE, sep="\t", row.names = FALSE)
+
+
+Common <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+GCN2 <- c("Hspa5","Slc3a2","Hspa13")
+PRK <- c("Ifit1","Isg15","Usp18")
+PERK <- c("P4hb")
+HRI <- c("Adm2","Slc7a11","Grb10","Nupr1","Soat2","Lrrc1","Glipr2","Arl14ep","Pycr1")
+HRI_sub <-c("Slc7a11","Soat2","Arl14ep","Pycr1") 
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4")
+```
+
+KPC GEMM mouse model scores
+
+Batch normalize Mosely syngeneic mouse data (microarray) with RNA seq data from JHU researchers and see how KPC compares 
+Add public data from GSE131602 to this, these are spontaneous primary tumors from 6 week old mice. Data is in quadruplicate, which is a lot better
+
+The ComBat function of sva directly removes the batch effects
+Make sure there are no NAs in the data, and the data has to be a matrix
+```{r}
+
+#This is the Mosely data
+load("/Volumes/Enterprise/FLX/Silpa_data/mouseData_tum.rdata")
+load("/Volumes/Enterprise/FLX/Silpa_data/samples.info_tum.rdata")
+mouse #data
+samples.info_tum #meta data
+
+#This is the singlicate JHU data
+load(file="/Volumes/Enterprise/FLX/JHU/kallisto/JHU_kallisto_TPM.rdata") # JHU kallisto TPMs
+JHU
+
+#This is the GSE data
+files <- list.files("/Volumes/Enterprise/FLX/KPC/GSE131602_RAW/data/",  full.names=TRUE)
+kpc <- lapply(files, function(i){read.table(i,header=TRUE,skip=3)})
+kpc_tpm <- cbind.data.frame(lapply(kpc,function(j) {j %>% dselect(X0)}))
+file_names <- list.files("/Volumes/Enterprise/FLX/KPC/GSE131602_RAW/data/")
+file_names %<>% data.frame %>% separate(.[1], into=c("Sample"),extra="drop",sep="_quant") %>% mutate(Sample = substr(Sample,12,1000)) %>% .[,1]
+substr()
+colnames(kpc_tpm) <- file_names
+rownames(kpc_tpm) <- kpc[[1]][,1]
+#translate the ENCODE names to HUGO
+read.table("/Volumes/Enterprise/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt", header=TRUE) #gencode_symbol
+gencode_symbol2 <- gencode_symbol %>% separate(Gene, into=c("GENE",NA), sep='[.]',remove=TRUE)
+save(gencode_symbol2, file="GRCm38_GENCODE2SYMBOL2.rdata")
+kpc_tpm %<>% tibble::rownames_to_column("Gene") %>% left_join(gencode_symbol2,by=c("Gene"="GENE")) %>% dselect(-Gene) %>% dselect(Symbol,everything()) %>% rename(Gene=Symbol)
+#Sum up genes and remove NAs
+kpc_tpm %<>% dfilter(!is.na(Gene)) %>% group_by(Gene) %>% summarise_all(sum) 
+save(kpc_tpm, file="/Volumes/Enterprise/FLX/KPC/GSE131602_RAW/data/kpc_tpm_df.rdata")
+
+```
+
+
+Batch normalization with comBat and between sample normalization with limma::normalizeBetweenArrays
+```{r}
+library(sva)
+Syngeneic_JHU <- mouse %>% inner_join(JHU, by=c("Gene"="Symbol"))
+Syngeneic_JHU_KPC <- Syngeneic_JHU %>% inner_join(kpc_tpm, by="Gene") %>% tibble::column_to_rownames("Gene")
+batches <- as.factor(c(rep(1,93),rep(2,30),rep(3,8))) # 93 from Mosely, 30 from JHU, 8 from GSE131602
+#pheno <- data.frame(cbind(seq(1,123),batches))
+#model_combat <- model.matrix(~batches,data=pheno)
+#model_combat
+Syn_JHU_bnorm <- sva::ComBat(dat=as.matrix(Syngeneic_JHU_KPC), batch=batches, par.prior = TRUE,prior.plots=TRUE)
+boxplot(Syngeneic_JHU)
+boxplot(Syn_JHU_bnorm)
+
+save(Syngeneic_JHU, file="Mosely_JHU_joined.rdata")
+save(Syn_JHU_bnorm, file="Mosely_JHU_joined_combat.rdata")
+save(Syn_JHU_bnorm, file="Mosely_JHU_KPC_joined_combat.rdata")
+load(file="Mosely_JHU_joined_combat.rdata")
+
+library(limma)
+Syn_JHU_KPC_combat_limma <- normalizeBetweenArrays(Syn_JHU_bnorm)
+boxplot(Syn_JHU_KPC_combat_limma)
+```
+
+Export normalized expression data for TIL analysis on Xcell
+The rows must be human gene symbols --> So translate on Human gene names and lie to the tool
+
+
+```{r}
+
+load("/Volumes/Enterprise/FLX/Reference_tables/mouse_human_gene.rdata")
+mouseAnnot
+
+Syn_JHU_KPC_combat_limma %>% data.frame %>% dselect(starts_with("GSM"),contains("bulk_tumor_untreated"),AB_1_TIL_untreated,contains("rep")) %>% rename(GEMM_KPC=BTH_04_bulk_tumor_untreated, GEMM_KPC_TIL=AB_1_TIL_untreated) %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") %>% left_join(samples.info_tum %>% dselect(SampleID,`experimental group`), by="SampleID") %>% rename(Group = `experimental group`) %>% mutate(Group=if_else(is.na(Group),SampleID,Group)) %>% mutate(Group = if_else(grepl("K_rep",Group),"GEMM_KPC_reps",Group)) %>% mutate(Group = if_else(grepl("OG_rep",Group),"GEMM_KPC_OG_reps",Group)) %>% dselect(-SampleID) %>% dfilter(!grepl("_CL",Group)) %>% group_by(Group) %>% summarise_all(mean) %>% ungroup() %>% tibble::column_to_rownames("Group") %>% t %>% data.frame %>%  tibble::rownames_to_column("Gene") %>% left_join(mouseAnnot, by=c("Gene"="GENE.SYMBOL")) %>% dselect(-Gene) %>% dselect(HumanName,everything()) %>% write.table(file="Syn_JHU_KPC_TPM.txt", row.names = FALSE, sep="\t", quote=FALSE)
+
+```
+
+Plot XCell results
+```{r fig.height=6, fig.width=16}
+xcell <- read.table("/Volumes/Enterprise/FLX/KPC/XCell_results_all_syngeneic/xCell_Syn_JHU_KPC_TPM_xCell_2054021220.txt", sep="\t", header=TRUE) %>% rename(Celltype=X)
+
+xcell <- read.table("D:/FLX/KPC/XCell_results_all_syngeneic/xCell_Syn_JHU_KPC_TPM_xCell_2054021220.txt", sep="\t", header=TRUE) %>% mutate(Celltype=X) %>% dselect(-X) %>% dselect(Celltype,everything())
+
+cells_interest <- xcell[,1][c(7,10:11,13,31:33,56)]
+
+xcell %>% dfilter(Celltype %in% cells_interest) %>% gather(Cell_line,Infiltration,-Celltype) %>% ggplot(aes(Cell_line,Infiltration)) + geom_point(aes(color=Infiltration,size=Infiltration)) + scale_colour_gradient(low="grey90",high="dodgerblue4", limits=c(0,0.2), oob=squish) +
+  scale_size_area(limits=c(0,0.25), oob=squish) + geom_segment(aes(x=Cell_line,xend=Cell_line,y=0,yend=Infiltration)) + facet_wrap(~Celltype, ncol=14) + coord_flip()+ nolegend() + ggsave("Mouse_model_xcell.jpg", width=16, height=6, dpi=600, plot= last_plot(), units = "in")
+
+tirosh <- read.table("D:/FLX/KPC/XCell_results_all_syngeneic/xCell_Syn_JHU_KPC_TPM_Tirosh_2046021220_RAW.txt", sep="\t", header=TRUE) %>% mutate(Celltype=X) %>% dselect(-X) %>% dselect(Celltype,everything())
+
+tirosh %>% gather(Cell_line,Infiltration,-Celltype) %>% ggplot(aes(Cell_line,Infiltration)) + geom_point(aes(color=Infiltration,size=Infiltration)) + scale_colour_gradient(low="grey90",high="dodgerblue4", limits=c(0,0.2), oob=squish) +
+  scale_size_area(limits=c(0,0.25), oob=squish) + geom_segment(aes(x=Cell_line,xend=Cell_line,y=0,yend=Infiltration)) + facet_wrap(~Celltype, ncol=14) + coord_flip()+ nolegend() 
+ggsave("Mouse_model_xcell.jpg", width=16, height=6, dpi=600, plot= last_plot(), units = "in")
+
+```
+
+
+Take the z-score for the samples, 
+
+```{r}
+Syn_JHU_z <- Syn_JHU_KPC_combat_limma %>% data.frame %>% tibble::rownames_to_column("Gene") %>% mutate_if(is.numeric,mx_zscore2) %>% dselect(Gene,starts_with("GSM"),contains("bulk_tumor_untreated"),AB_1_TIL_untreated,contains("rep")) %>% rename(GEMM_KPC=BTH_04_bulk_tumor_untreated, GEMM_KPC_TIL=AB_1_TIL_untreated)
+```
+
+Signatures
+```{r}
+Pan_ISR <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4") # "C6orf48" is missing and removed
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Defa1", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "Ltf", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Cd24", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+GCN2_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_Seq/GCN2_markers20.txt", header=TRUE, sep="\t") %>% .[,1]
+PERK_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/PERK_signature22.txt", header=TRUE, sep="\t") %>% .[,1]
+HRI_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/HRI_markers.txt", header=TRUE, sep="\t") %>% .[,1]
+
+GCN2_pathway <- read.table(file="D:/FLX/GCN2/ISR_data/RNA_Seq/GCN2_markers20.txt", header=TRUE, sep="\t") %>% .[,1]
+PERK_pathway <- read.table(file="D:/FLX/GCN2/ISR_data/RNA_seq/PERK_signature22.txt", header=TRUE, sep="\t") %>% .[,1]
+HRI_pathway <- read.table(file="D:/FLX/GCN2/ISR_data/RNA_seq/HRI_markers.txt", header=TRUE, sep="\t") %>% .[,1]
+
+All_markers <- c(Pan_ISR,aas_sig_m, gMDSC_sig_m, mMDSC_sig_m, GCN2_pathway, PERK_pathway, HRI_pathway)
+```
+
+Calculate signature scores
+```{r}
+
+ISR_s <- Syn_JHU_z %>% dfilter(Gene %in% Pan_ISR) %>% summarise_if(is.numeric,sum_mx)
+AAS_s <- Syn_JHU_z %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum_mx)
+gMDSC_s <- Syn_JHU_z %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+mMDSC_s <- Syn_JHU_z %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+GCN2_s <- Syn_JHU_z %>% dfilter(Gene %in% GCN2_pathway) %>% summarise_if(is.numeric,sum_mx)
+PERK_s <- Syn_JHU_z %>% dfilter(Gene %in% PERK_pathway) %>% summarise_if(is.numeric,sum_mx)
+HRI_s <- Syn_JHU_z %>% dfilter(Gene %in% HRI_pathway) %>% summarise_if(is.numeric,sum_mx)
+
+combo_z <- rbind(ISR_s,AAS_s,GCN2_s,PERK_s,HRI_s,gMDSC_s,mMDSC_s)
+row.names(combo_z) <- c("Pan_ISR","AAS","GCN2","PERK","HRI","gMDSC","mMDSC")
+```
+
+Transpose and Summarise by strain
+```{r fig.height=8, fig.width=5}
+combo_z %<>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") %>% left_join(samples.info_tum %>% dselect(SampleID,`experimental group`), by="SampleID") %>% rename(Group = `experimental group`) %>% mutate(Group=if_else(is.na(Group),SampleID,Group)) %>% mutate(Group = if_else(grepl("K_rep",Group),"GEMM_KPC_reps",Group)) %>% mutate(Group = if_else(grepl("OG_rep",Group),"GEMM_KPC_OG_reps",Group)) %>% dselect(-SampleID) %>% dfilter(!grepl("_CL",Group)) %>% group_by(Group) %>% summarise_if(is.numeric,mean) %>% ungroup 
+
+library(scales)
+combo_z %>% gather(Signature,Score,-Group) %>% mutate(Signature= factor(Signature,levels=c("Pan_ISR","AAS","GCN2","PERK","HRI","gMDSC","mMDSC"))) %>% dfilter(Group %nin% "") %>% ggplot(aes(Signature,Group,fill=Score)) + geom_tile() + scale_fill_gradient2(low="green4", high="purple", mid= "gray90", limits=c(-5,5), oob=squish) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+Generate the Double Z score values
+```{r fig.height=8, fig.width=5}
+isr_genes_zz <- Syn_JHU_z %>% arrange(match(Gene,All_markers)) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore) %>% tibble::column_to_rownames("experimental.group") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+ISR_s <- isr_genes_zz %>% dfilter(Gene %in% Pan_ISR) %>% summarise_if(is.numeric,sum_mx)
+AAS_s <- isr_genes_zz %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum_mx)
+gMDSC_s <- isr_genes_zz %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+mMDSC_s <- isr_genes_zz %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+GCN2_s <- isr_genes_zz %>% dfilter(Gene %in% GCN2_pathway) %>% summarise_if(is.numeric,sum_mx)
+PERK_s <- isr_genes_zz %>% dfilter(Gene %in% PERK_pathway) %>% summarise_if(is.numeric,sum_mx)
+HRI_s <- isr_genes_zz %>% dfilter(Gene %in% HRI_pathway) %>% summarise_if(is.numeric,sum_mx)
+
+combo_zz <- rbind(ISR_s,AAS_s,GCN2_s,PERK_s,HRI_s,gMDSC_s,mMDSC_s)
+row.names(combo_zz) <- c("Pan_ISR","AAS","GCN2","PERK","HRI","gMDSC","mMDSC")
+
+combo_zz_groom <- combo_zz %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") %>% left_join(samples.info_tum %>% dselect(SampleID,`experimental group`), by="SampleID") %>% rename(Group = `experimental group`) %>% mutate(Group=if_else(is.na(Group),SampleID,Group)) %>% mutate(Group = if_else(grepl("K_rep",Group),"GEMM_KPC_reps",Group)) %>% mutate(Group = if_else(grepl("OG_rep",Group),"GEMM_KPC_OG_reps",Group)) %>% dselect(-SampleID) %>% dfilter(!grepl("_CL",Group)) %>% group_by(Group) %>% summarise_if(is.numeric,mean) %>% ungroup 
+  
+combo_zz_groom %>% gather(Signature,Score,-Group) %>% mutate(Signature= factor(Signature,levels=c("Pan_ISR","AAS","GCN2","PERK","HRI","gMDSC","mMDSC"))) %>% mutate(Group= factor(Group, levels=rev(Group_order[[1]]))) %>% dfilter(!grepl("Cells",Group)) %>% ggplot(aes(Signature,Group,fill=Score)) + geom_tile() + scale_fill_gradient2(low="green4", high="purple", mid= "white", limits=c(-10,10), oob=squish) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+combo_zz_groom %>% arrange(-AAS) %>% write.table(file="KPC_Mosely_heatmap_zz.txt", row.names= FALSE, quote=FALSE, sep="\t")
+save(combo_zz_groom, file="KPC_Mosely_heatmap_zz.rdata")
+
+Group_order <- combo_zz_groom %>% arrange(-AAS) %>% dselect(Group) 
+Group_order[[1]]
+```
+
+##########################
+
+Mosely, KPC, other KPC, and YUMM, now with Hypoxia signature
+
+###########################
+Not sure what happened to the code that generated the YUMM data heatmaps. 
+I remember writing the code, but can't find it. 
+
+```{r fig.height=8, fig.width=5}
+load("Syngeneic_JHU_KPC_YUMM_bnorm.rdata") # Syngeneic_JHU_KPC_YUMM_bnorm. This was comBat and limma::NormalizeBetweenArrays normalized
+#boxplot(Syngeneic_JHU_KPC_YUMM_bnorm) # looks good
+Mouse_YUMM_norm_z <- Syngeneic_JHU_KPC_YUMM_bnorm %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene")
+
+Mouse_YUMM_z_z <- Syngeneic_JHU_KPC_YUMM_bnorm %>% data.frame %>% tibble::rownames_to_column("Gene") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene")
+
+Mouse_YUMM_normz_groom <- Mouse_YUMM_norm_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") %>% left_join(samples.info_tum %>% dselect(SampleID,`experimental group`), by="SampleID") %>% rename(Group = `experimental group`) %>% mutate(Group=if_else(is.na(Group),SampleID,Group)) %>% mutate(Group = if_else(grepl("K_rep",Group),"GEMM_KPC_UWash",Group)) %>% dfilter(!grepl("OG_rep",Group)) %>% dselect(-SampleID) %>% dfilter(!grepl("_CL",Group)) %>% group_by(Group) %>% summarise_if(is.numeric,mean) %>% ungroup %>% dfilter(grepl("_T$|YUMM|GEMM|BTH_04_bulk_tumor_untreated|AB_1_TIL_untreated",Group)) %>% mutate(Group= if_else(Group=="BTH_04_bulk_tumor_untreated","GEMM_KPC_JHU",Group)) %>% mutate(Group= if_else(Group=="AB_1_TIL_untreated","GEMM_KPC_TIL_JHU",Group)) %>% separate(Group,into=c("Model",NA), sep="_T$",extra="drop", remove=TRUE) %>% dselect(Model, everything()) %>% tibble::column_to_rownames("Model") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+Mouse_YUMM_zz_groom <- Mouse_YUMM_z_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") %>% left_join(samples.info_tum %>% dselect(SampleID,`experimental group`), by="SampleID") %>% rename(Group = `experimental group`) %>% mutate(Group=if_else(is.na(Group),SampleID,Group)) %>% mutate(Group = if_else(grepl("K_rep",Group),"GEMM_KPC_UWash",Group)) %>% dfilter(!grepl("OG_rep",Group)) %>% dselect(-SampleID) %>% dfilter(!grepl("_CL",Group)) %>% group_by(Group) %>% summarise_if(is.numeric,mean) %>% ungroup %>% dfilter(grepl("_T$|YUMM|GEMM|BTH_04_bulk_tumor_untreated|AB_1_TIL_untreated",Group)) %>% mutate(Group= if_else(Group=="BTH_04_bulk_tumor_untreated","GEMM_KPC_JHU",Group)) %>% mutate(Group= if_else(Group=="AB_1_TIL_untreated","GEMM_KPC_TIL_JHU",Group)) %>% separate(Group,into=c("Model",NA), sep="_T$",extra="drop", remove=TRUE) %>% dselect(Model, everything()) %>% tibble::column_to_rownames("Model") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+Common_s <- Mouse_YUMM_normz_groom %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,sum_mx)
+AAS_s <- Mouse_YUMM_normz_groom %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum)
+gMDSC_s <- Mouse_YUMM_normz_groom %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+mMDSC_s <- Mouse_YUMM_normz_groom %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+GCN2_s <- Mouse_YUMM_normz_groom %>% dfilter(Gene %in% GCN2) %>% summarise_if(is.numeric,sum_mx)
+PERK_s <- Mouse_YUMM_normz_groom %>% dfilter(Gene %in% PERK_m) %>% summarise_if(is.numeric,sum_mx)
+HRI_s <- Mouse_YUMM_normz_groom %>% dfilter(Gene %in% HRI) %>% summarise_if(is.numeric,sum_mx)
+Hypoxia_s <- Mouse_YUMM_normz_groom %>% dfilter(Gene %in% hypoxia_m) %>% summarise_if(is.numeric,function(x){sum(x)/2})
+
+Common_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,sum_mx)
+AAS_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum)
+gMDSC_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+mMDSC_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+GCN2_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% GCN2) %>% summarise_if(is.numeric,sum_mx)
+PERK_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% PERK_m) %>% summarise_if(is.numeric,sum_mx)
+HRI_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% HRI) %>% summarise_if(is.numeric,sum_mx)
+Hypoxia_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% hypoxia_m) %>% summarise_if(is.numeric,function(x){sum(x)/2})
+
+ISR_s <- bind_rows(Common_s,AAS_s,GCN2_s,PERK_s,HRI_s,gMDSC_s,mMDSC_s,Hypoxia_s)
+rownames(ISR_s) <- c("ISR_Common","AAS","GCN2","PERK","HRI","gMDSC","mMDSC","Hypoxia")
+ISR_s_t <- ISR_s %>% t %>% data.frame 
+
+ISR_s_t %>% tibble::rownames_to_column("Model") %>% gather(Signature,Score,-Model) %>% mutate(Signature= factor(Signature, levels= c("ISR_Common","AAS","GCN2","PERK","HRI","gMDSC","mMDSC","Hypoxia")))  %>% ggplot(aes(Signature,Model,fill=Score)) + geom_tile() + scale_fill_gradient2(low="green4", high="purple", mid= "gray90", limits=c(-5,5), oob=squish) + theme(axis.text.x = element_text(angle = 90, hjust = 0)) + scale_x_discrete(position = "top") + ggsave("Mouse_model_zz_YUMM_hypoxia.jpg", width=5, height=8, dpi=150, plot= last_plot(), units = "in")
+
+ISR_s_t %>% tibble::rownames_to_column("Model") %>% write.table(file="Mouse_model_zz_YUMM_hypoxia.txt", sep="\t", row.names=FALSE, quote=FALSE)
+```
+
+
+########################################
+
+Calculate signature scores from Syngeneic data using GSEA-enrichment scores instead of "sum of z-scores"
+Input data for GSEA enrichment score is z-score data
+
+########################################
+
+```{r}
+Syngeneic_JHU_KPC_YUMM_bnorm
+boxplot(Syngeneic_JHU_KPC_YUMM_bnorm, ylims)
+```
+Take the Z-score
+```{r}
+#syngeneic_z <- Syngeneic_JHU_KPC_YUMM_bnorm %>% data.frame %>% tibble::rownames_to_column("Gene") %>% mutate_if(is.numeric, mx_zscore2)
+
+syngeneic_z <- Syngeneic_JHU_KPC_YUMM_bnorm %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") %>% mutate_if(is.numeric, mx_zscore2) %>% tibble::column_to_rownames("SampleID") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+  
+syngeneic_z %>% gather(Sample, zscore,-Gene) %>% ggplot(aes(Sample,zscore)) + geom_boxplot()
+```
+
+Signatures
+```{r}
+Pan_ISR <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4") # "C6orf48" is missing and removed
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Defa1", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "Ltf", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Cd24", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+GCN2_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_Seq/GCN2_markers20.txt", header=TRUE, sep="\t") %>% .[,1]
+PERK_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/PERK_signature22.txt", header=TRUE, sep="\t") %>% .[,1]
+HRI_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/HRI_markers.txt", header=TRUE, sep="\t") %>% .[,1]
+
+GCN2_pathway <- read.table(file="D:/FLX/GCN2/ISR_data/RNA_Seq/GCN2_markers20.txt", header=TRUE, sep="\t") %>% .[,1]
+PERK_pathway <- read.table(file="D:/FLX/GCN2/ISR_data/RNA_seq/PERK_signature22.txt", header=TRUE, sep="\t") %>% .[,1]
+HRI_pathway <- read.table(file="D:/FLX/GCN2/ISR_data/RNA_seq/HRI_markers.txt", header=TRUE, sep="\t") %>% .[,1]
+
+hypoxia <- read.table("D:/FLX/GCN2/ISR_data/RNA_seq/GSEA_hypoxia.txt",sep="\n", header=TRUE) %>% pull(HALLMARK_HYPOXIA)
+
+```
+
+
+Get Enrichment score
+
+To iterate thru both signatures and the dataset, make a table with all combinations of variables using ____
+Apply two variables to iterate using map()
+```{r fig.height=8, fig.width=5}
+
+syngeneic_z
+enrichmentAUC(geneArray=syngeneic_z$Gene,signalArray =syngeneic_z$GSM2268029, geneSet= GCN2_pathway ,randomize=TRUE,plot=FALSE, returnTable=FALSE)
+
+My_pathway <- aas_sig_m
+runGSEA <- function(i) {enrichmentAUC(geneArray=syngeneic_z$Gene,signalArray = i, geneSet= My_pathway ,randomize=TRUE,plot=FALSE, returnTable=FALSE) %>% .[3] %>% data.frame %>% pull(.) }
+
+   
+GCN2_GSEA <- lapply(syngeneic_z[2:135],runGSEA) %>% cbind.data.frame %>% set_rownames(My_pathway)
+PERK_GSEA <- lapply(syngeneic_z[2:135],runGSEA) %>% cbind.data.frame %>% set_rownames("PERK")
+HRI_GSEA <- lapply(syngeneic_z[2:135],runGSEA) %>% cbind.data.frame %>% set_rownames("HRI")
+PanISR_GSEA <- lapply(syngeneic_z[2:135],runGSEA) %>% cbind.data.frame %>% set_rownames("Pan_ISR")
+AAS_GSEA <- lapply(syngeneic_z[2:135],runGSEA) %>% cbind.data.frame %>% set_rownames("AAS")
+gMDSC_GSEA <- lapply(syngeneic_z[2:135],runGSEA) %>% cbind.data.frame %>% set_rownames("gMDSC")
+mMDSC_GSEA <- lapply(syngeneic_z[2:135],runGSEA) %>% cbind.data.frame %>% set_rownames("mMDSC")
+Hypoxia_GSEA <- lapply(syngeneic_z[2:135],runGSEA) %>% cbind.data.frame %>% set_rownames("Hypoxia")
+
+Syngeneic_GSEA <- rbind(GCN2_GSEA,PERK_GSEA,HRI_GSEA,PanISR_GSEA,AAS_GSEA,gMDSC_GSEA,mMDSC_GSEA,Hypoxia_GSEA)
+save(Syngeneic_GSEA,file="Syngeneic_GSEA.rdata")
+load("Syngeneic_GSEA.rdata")
+Syngeneic_GSEA_groom <- Syngeneic_GSEA  %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") %>% left_join(samples.info_tum, by="SampleID") %>% rename(Group = `experimental group`) %>% mutate(Group=if_else(is.na(Group),SampleID,Group)) %>% mutate(Group = if_else(grepl("K_rep",Group),"GEMM_KPC_UWash",Group)) %>% dfilter(!grepl("OG_rep",Group)) %>% dselect(-SampleID) %>% dfilter(!grepl("_CL",Group)) %>% group_by(Group) %>% summarise_if(is.numeric,mean) %>% ungroup %>% dfilter(grepl("_T$|YUMM|GEMM|BTH_04_bulk_tumor_untreated|AB_1_TIL_untreated",Group)) %>% mutate(Group= if_else(Group=="BTH_04_bulk_tumor_untreated","GEMM_KPC_JHU",Group)) %>% mutate(Group= if_else(Group=="AB_1_TIL_untreated","GEMM_KPC_TIL_JHU",Group)) %>% separate(Group,into=c("Model",NA), sep="_T$",extra="drop", remove=TRUE) %>% dselect(Model, everything()) %>% tibble::column_to_rownames("Model") %>% t %>% data.frame 
+library(scales)
+Syngeneic_GSEA_groom%>% tibble::rownames_to_column("Signature")  %>% dfilter(Signature !="Hypoxia") %>% gather(Model, GSEA_score, -Signature) %>% ggplot(aes(Signature,Model,fill= GSEA_score)) + geom_tile() + scale_fill_gradient2(low="green4", high="purple", mid= "white") + theme(axis.text.x = element_text(angle = 90, hjust = 1)) # , limits=c(-10,10), oob=squish
+                     
+```
+
+Checking markers for George
+
+239918_at	AI139114		Homo sapiens	Oct 6, 2014	Consensus sequence	GenBank	gb:AI139114 /DB_XREF=gi:3645086 /DB_XREF=qc27h06.x1 /CLONE=IMAGE:1710875 /FEA=EST /CNT=7 /TID=Hs.91202.0 /TIER=ConsEnd /STK=4 /UG=Hs.91202 /UG_TITLE=ESTs	AI139114	poliovirus receptor	PVR
+
+32699_s_at	X64116		Homo sapiens	Oct 6, 2014	Consensus sequence	GenBank	Cluster Incl. X64116:H.sapiens PVR gene for poliovirus receptor (exon 1) /cds=(205,1299) /gb=X64116 /gi=35809 /ug=Hs.171844 /len=1300	X64116	poliovirus receptor	PVR
+
+It's a non-high confidence probe
+```{r}
+syngeneic_z_rep
+```
+
+```{r}
+load("/Volumes/Picard/FLX/Reference_tables/affy_mogene_2_1_st_v1_to_HUGO.rdata",objname="mogene")
+lsdata()
+```
+
+Crown data
+chr7:19,716,644-19,749,573 Nectin2
+chr7:19,903,578-19,921,160 Pvr
+
+```{r}
+load("/Volumes/Picard/FLX/CrownBio_data/Crown_unlog_unique.rdata")
+crown_unlog %>% dfilter(Gene_Crown %in% c("Pvr","Nectin","Cd112") )
+
+crown_unlog %>% dfilter(Gene_Crown %in% c("Pvr") ) %>%
+  gather(Syngeneic_model, Pvr_FPKM, -Gene_Crown) %>%  mutate(Syngeneic_model = str_replace(Syngeneic_model,"_Crown","")) %>%
+  ggplot(aes(x=reorder(Syngeneic_model,-Pvr_FPKM), y=Pvr_FPKM, ymin=0, ymax=Pvr_FPKM)) +
+  geom_point() +
+  geom_linerange() +
+  theme(axis.title = element_text(size=12), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=45,size=12,hjust=1))
+```
+
+```{r}
+mx_zscore2
+hist()
+```
+
+#################
+
+For publication: Generate Heatmap with only the Mosely syngeneic models, with Pan-ISR, GCN2_pathway_sig, PERK, HRI, gMDSC and mMDSC signatures
+April 21 2021
+1. Normalize model data by z-score across samples (this is not necessary, but I did it this way the first time, so keeping it consistent)
+2. Pick out all the genes in my signatures, within this subset of genes, take the z-score across genes; this is so relative Z-scores of markers relative to each other is preserved, relatively weaker markers will be weak in the final heatmap
+3. Calculate the signature scores as the mean of gene zz_scores
+############
+Load Mosely data
+```{r}
+#This is the Mosely data
+load("/Volumes/Picard/FLX/Silpa_data/mouseData_tum.rdata")
+load("/Volumes/Picard/FLX/Silpa_data/samples.info_tum.rdata")
+```
+
+Normalize datasets by taking Z-score across samples
+Take Z-score of the data
+```{r}
+syngeneic_z <- t(apply(mouseData_tum,2,mx_zscore2)) #the middle term 1 means rows, and 2 means columns #24818
+syngeneic_z %<>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(!grepl("^Gm|Rik$",Gene)) #18599
+syngeneic_z_mean <- syngeneic_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(meta=samples.info_tum$`experimental group`) %>% dselect(meta,everything()) %>% dfilter(grepl("_T",meta)) %>% mutate(meta=str_replace(meta,"_T","")) %>% group_by(meta) %>% summarise_if(is.numeric,mean)
+save(syngeneic_z_mean,file="syngeneic_z_mean.rdata")
+load(file="syngeneic_z_mean.rdata")
+syngeneic_z_rep <- syngeneic_z_mean %>% tibble::column_to_rownames("meta") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+save(syngeneic_z_rep,file="syngeneic_z_rep.rdata")
+
+```
+Signatures
+```{r}
+Pan_ISR <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Defa1", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "Ltf", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Cd24", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+GCN2_pathway <- read.table(file="/Volumes/Picard/FLX/GCN2/ISR_data/RNA_Seq/GCN2_markers20.txt", header=TRUE, sep="\t") %>% .[,1]
+PERK_pathway <- read.table(file="/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/PERK_signature22.txt", header=TRUE, sep="\t") %>% .[,1]
+HRI_pathway <- read.table(file="/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/HRI_markers.txt", header=TRUE, sep="\t") %>% .[,1]
+
+All_markers <- c(Pan_ISR,aas_sig_m, gMDSC_sig_m, mMDSC_sig_m, GCN2_pathway, PERK_pathway, HRI_pathway)
+```
+
+Select all genes in all signatures, then take the gene-wise Z-score from amongst the marker genes
+
+```{r fig.height=11, fig.width=6}
+syngeneic_z_m <- syngeneic_z_rep %>% dfilter(Gene %in% All_markers) %>% tibble::column_to_rownames("Gene") %>% as.matrix 
+
+syngeneic_zz <- t(apply(syngeneic_z_m,1,mx_zscore2)) %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+ISR_s <- syngeneic_zz %>% dfilter(Gene %in% Pan_ISR) %>% summarise_if(is.numeric,mean)
+#AAS_s <- syngeneic_zz %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,mean)
+gMDSC_s <- syngeneic_zz %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,mean)
+mMDSC_s <- syngeneic_zz %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,mean)
+GCN2_s <- syngeneic_zz %>% dfilter(Gene %in% GCN2_pathway) %>% summarise_if(is.numeric,mean)
+PERK_s <- syngeneic_zz %>% dfilter(Gene %in% PERK_pathway) %>% summarise_if(is.numeric,mean)
+HRI_s <- syngeneic_zz %>% dfilter(Gene %in% HRI_pathway) %>% summarise_if(is.numeric,mean)
+
+combo_zz <- rbind(ISR_s,GCN2_s,PERK_s,HRI_s,gMDSC_s,mMDSC_s)
+row.names(combo_zz) <- c("Pan_ISR","GCN2","PERK","HRI","gMDSC","mMDSC")
+
+library(scales)
+
+
+combo_zz %>% tibble::rownames_to_column("Signature") %>% gather(Model,Score,-Signature) %>% mutate(Signature= factor(Signature,levels=c("Pan_ISR","AAS","GCN2","PERK","HRI","gMDSC","mMDSC"))) %>% mutate(Model=factor(Model,levels=Model_order)) %>% ggplot(aes(Signature,Model,fill=Score)) + geom_tile() + scale_fill_gradient2(low="#4DA167", high="purple", mid= "white", limits=c(-1,1), oob=squish) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+Model_order <- rev(c("Renca","LL2","PAN02","CT26","X4T1","TC1","TRAMPC1","TRAMPC2","MC38","EL4","P815", "B16F0.ATCC","B16F0.ECACC","B16F10.ATCC","B16F10.NCI"))
+
+```
+

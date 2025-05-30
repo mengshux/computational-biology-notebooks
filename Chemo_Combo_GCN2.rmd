@@ -1,0 +1,260 @@
+---
+title: "Chemo_combo_GCN2"
+author: "Mengshu Xu"
+date: "3/24/2020"
+output: html_document
+---
+
+Load Packages
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+library(tidyr)
+library(viridis)
+library(scales)
+library(limma)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("D:/FLX/Files_from_Gene/R_functions.r")
+```
+GSE131823
+daunorubicin
+```{r}
+aml <- read.table(file="D:/FLX/GCN2/Chemo_combo/GSE131823_TS60_RNA-Seq_FPKM.txt.gz", sep="\t", header=TRUE) %>% data.frame %>% dfilter(gene_biotype =="protein_coding") %>% dselect(-gene_biotype,-ensemblId)
+save(aml_norm,file="D:/FLX/GCN2/Chemo_combo/AML_GSE131823_norm.rdata")
+save(aml_zscore,file="D:/FLX/GCN2/Chemo_combo/AML_GSE131823_zscore.rdata")
+```
+
+```{r fig.height=3, fig.width=4}
+boxplot(aml[2:10])
+aml_norm <- normalizeBetweenArrays(aml[2:10])
+boxplot(aml_norm)
+aml_norm <- aml_norm %>% data.frame %>% mutate(symbol=aml$symbol) %>% dselect(symbol, everything())
+
+aml %>% dfilter(symbol == "EIF2AK4") %>% tibble::column_to_rownames("symbol") %>% gather(Sample,RPKM) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R")) %>% ggplot(aes(Sample,RPKM)) + geom_bar(stat="identity")
+
+aml %>% dfilter(symbol %in% GCN2_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(sum_mx) %>% gather(Sample,RPKM) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,RPKM, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point()  
+
+aml %>% dfilter(symbol %in% ISR) %>% tibble::column_to_rownames("symbol") %>% summarise_all(sum_mx) %>% gather(Sample,RPKM) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,RPKM, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point()  
+
+aml %>% dfilter(symbol %in% PERK_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(sum_mx) %>% gather(Sample,RPKM) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R")) %>% ggplot(aes(Sample,RPKM, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point()  
+
+aml %>% dfilter(symbol %in% HRI_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(sum_mx) %>% gather(Sample,RPKM) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,RPKM, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point()  
+
+
+```
+
+```{r}
+#There are duplicates of genes in ~48 cases, summarise these
+unique(aml_norm$symbol) %>% length #19931
+aml_norm$symbol %>% length #19979 reduced to 19931 after summary
+aml_norm %<>% group_by(symbol) %>% summarise_if(is.numeric,mean_mx)
+
+aml_zscore <- aml_norm %>% tibble::column_to_rownames("symbol") %>% t %>% data.frame %>% tibble::rownames_to_column("sample") %>% mutate_if(is.numeric, mx_zscore2) %>% tibble::column_to_rownames("sample") %>% t %>% data.frame %>% tibble::rownames_to_column("symbol")
+```
+
+```{r}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+
+mTor <- read.table("D:/FLX/Reference_tables/mTor_BioCarta.txt", sep="\n") %>% pull(V1)
+```
+
+```{r fig.height=6, fig.width=12}
+a1 <- aml_zscore %>% dfilter(symbol == "EIF2AK4") %>% tibble::column_to_rownames("symbol") %>% gather(Sample,GCN2_RPKM) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R")) %>% ggplot(aes(Sample,GCN2_RPKM, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point()  + nolegend()   
+
+a5 <- aml_zscore %>% dfilter(symbol %in% GCN2_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx) %>% gather(Sample,GCN2_score) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,GCN2_score, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point() + nolegend()
+
+a4 <- aml_zscore %>% dfilter(symbol %in% ISR) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx) %>% gather(Sample,ISR_score) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,ISR_score, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point() + nolegend()
+
+a6 <- aml_zscore %>% dfilter(symbol %in% PERK_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx) %>% gather(Sample,PERK_score) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R")) %>% ggplot(aes(Sample,PERK_score, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point() + nolegend() 
+
+a7 <- aml_zscore %>% dfilter(symbol %in% HRI_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx) %>% gather(Sample,HRI_score) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,HRI_score, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point() + nolegend() 
+
+a2 <- aml_zscore %>% dfilter(symbol %in% aas_sig) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx) %>% gather(Sample,AAS_score) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,AAS_score, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point() + nolegend() 
+
+a3 <- aml_zscore %>% dfilter(symbol %in% hypoxia) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx) %>% gather(Sample,Hypoxia_score) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,Hypoxia_score, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point() + nolegend() 
+
+a8 <- aml_zscore %>% dfilter(symbol %in% mTor) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx) %>% gather(Sample,mTor_score) %>% separate(Sample, into=c(NA,"Sample"), sep="[_.]", extra="drop", remove=TRUE) %>% mutate(Status=c("S","R","R","S","R","R","S","R","R"))  %>% ggplot(aes(Sample,mTor_score, colour=Status)) + geom_boxplot(aes(alpha=0.3)) + geom_point() + nolegend() 
+
+library(gridExtra)
+grid.arrange(a1,a2,a3,a4,a5,a6,a7,a8, nrow = 2)  
+```
+################
+Bohm et al
+High Grade Serious Ovarian Cancer, neoadjuvant chemotherapy with platinum based drug with omentum (tissue surrouding womb and ovary) RNA seq
+GSE71340
+
+This dataset is not properly documented for metadata, I can't tell which are the pre- and post treatment pairs, or even that there are any pairs. 
+Also the uploader doesn't know the difference between tRNA and mRNA. Don't trust this dataset
+################
+
+
+
+```{r}
+ov <- read.table(file="D:/FLX/GCN2/Chemo_combo/GSE71340_refseq_count_data.txt", sep="\t", header=TRUE) %>% data.frame
+save(ov_norm,file="D:/FLX/GCN2/Chemo_combo/OV_GSE71340_norm.rdata")
+save(ov_zscore,file="D:/FLX/GCN2/Chemo_combo/OV_GSE71340_zscore.rdata")
+load(file="D:/FLX/GCN2/Chemo_combo/OV_GSE71340_zscore.rdata")
+load(file="/Volumes/Picard/FLX/GCN2/Chemo_combo/OV_GSE71340_zscore.rdata")
+```
+
+Normalize and Z-score
+
+```{r}
+boxplot(ov[2:36])
+ov_norm <- normalizeBetweenArrays(ov[2:36])
+boxplot(ov_norm)
+ov_norm %<>% data.frame %>% mutate(Gene=ov$gene_id) %>% dselect(Gene, everything())
+
+unique(ov_norm$Gene) %>% length #26227
+ov_norm$Gene %>% length #26229 reduced to 19931 after summary
+ov_norm %<>% group_by(Gene) %>% summarise_if(is.numeric,mean_mx)
+
+ov_zscore <- ov_norm %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("sample") %>% mutate_if(is.numeric, mx_zscore2) %>% tibble::column_to_rownames("sample") %>% t %>% data.frame %>% tibble::rownames_to_column("symbol")
+
+```
+
+
+Plot
+```{r fig.height=5, fig.width=12}
+library(ggbeeswarm)
+a1 <- ov_zscore %>% dfilter(symbol == "EIF2AK4") %>% tibble::column_to_rownames("symbol")  %>% summarise_all(mean_mx) %>% gather(Sample,GCN2_RPKM) %>% dfilter(!grepl("NORMAL",Sample))%>% mutate(Treatment= ifelse(grepl("Pre|PRE",Sample),"Pre_treatment", "Post_treatment")) %>% mutate(Treatment=factor(Treatment,levels=c("Pre_treatment", "Post_treatment"))) %>% ggplot(aes(Treatment,GCN2_RPKM, group= Treatment)) + geom_line() + geom_point()  + nolegend()   
+
+a5 <- ov_zscore %>% dfilter(symbol %in% GCN2_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx)  %>% gather(Sample,GCN2_score) %>% dfilter(!grepl("NORMAL",Sample))%>% mutate(Treatment= ifelse(grepl("Pre|PRE",Sample),"Pre_treatment", "Post_treatment")) %>% ggplot(aes(Treatment,GCN2_score, group=Treatment)) + geom_boxplot(aes(alpha=0.3))  + geom_beeswarm()  + nolegend()   
+
+a4 <- ov_zscore %>% dfilter(symbol %in% ISR) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx)  %>% gather(Sample,ISR_score) %>% dfilter(!grepl("NORMAL",Sample))%>% mutate(Treatment= ifelse(grepl("Pre|PRE",Sample),"Pre_treatment", "Post_treatment")) %>% ggplot(aes(Treatment,ISR_score, group=Treatment)) + geom_boxplot(aes(alpha=0.3))  + geom_beeswarm()  + nolegend()     
+
+a6 <- ov_zscore %>% dfilter(symbol %in% PERK_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx)  %>% gather(Sample,PERK_score) %>% dfilter(!grepl("NORMAL",Sample))%>% mutate(Treatment= ifelse(grepl("Pre|PRE",Sample),"Pre_treatment", "Post_treatment")) %>% ggplot(aes(Treatment,PERK_score, group=Treatment)) + geom_boxplot(aes(alpha=0.3))  + geom_beeswarm()  + nolegend()   
+
+a7 <- ov_zscore %>% dfilter(symbol %in% HRI_h) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx)  %>% gather(Sample,HRI_score) %>% dfilter(!grepl("NORMAL",Sample))%>% mutate(Treatment= ifelse(grepl("Pre|PRE",Sample),"Pre_treatment", "Post_treatment")) %>% ggplot(aes(Treatment,HRI_score, group=Treatment)) + geom_boxplot(aes(alpha=0.3))  + geom_beeswarm()  + nolegend()   
+
+a2 <- ov_zscore %>% dfilter(symbol %in% aas_sig) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx)  %>% gather(Sample,AAS_score) %>% dfilter(!grepl("NORMAL",Sample))%>% mutate(Treatment= ifelse(grepl("Pre|PRE",Sample),"Pre_treatment", "Post_treatment")) %>% ggplot(aes(Treatment,AAS_score, group=Treatment)) + geom_boxplot(aes(alpha=0.3))  + geom_beeswarm()  + nolegend()    
+
+a3 <- ov_zscore %>% dfilter(symbol %in% hypoxia) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx)  %>% gather(Sample,Hypoxia_score) %>% dfilter(!grepl("NORMAL",Sample))%>% mutate(Treatment= ifelse(grepl("Pre|PRE",Sample),"Pre_treatment", "Post_treatment")) %>% ggplot(aes(Treatment,Hypoxia_score, group=Treatment)) + geom_boxplot(aes(alpha=0.3))  + geom_beeswarm()  + nolegend()  
+
+a8 <- ov_zscore %>% dfilter(symbol %in% mTor) %>% tibble::column_to_rownames("symbol") %>% summarise_all(mean_mx)  %>% gather(Sample,mTor_score) %>% dfilter(!grepl("NORMAL",Sample))%>% mutate(Treatment= ifelse(grepl("Pre|PRE",Sample),"Pre_treatment", "Post_treatment")) %>% ggplot(aes(Treatment,mTor_score, group=Treatment)) + geom_boxplot(aes(alpha=0.3))  + geom_beeswarm()  + nolegend() 
+
+library(gridExtra)
+grid.arrange(a1,a2,a3,a4,a5,a6,a7,a8, nrow = 2)
+```
+
+Nagasawa et al. 2020 BRAF inhibitor paper in A375 Melanoma cell lines
+Original code was lost to an Rstudio restart without a proper save of the rmd file
+Salvage data objects 
+
+```{r}
+braf_meta <- read.table(file="/Volumes/Picard/FLX/GCN2/Chemo_combo/GSE136615_meta.txt", header=TRUE, sep="\t") %>% data.frame %>% tibble::column_to_rownames("Sample_title") %>% t %>% data.frame %>% tibble::rownames_to_column("preSample") %>% separate(preSample, into=c(NA,"Sample"),sep="A375_") %>% separate(Description, into=c(NA,"Desc"),sep="A375_")
+
+braf <- read.table(file="/Volumes/Picard/FLX/GCN2/Chemo_combo/GSE136615_data.txt", header=TRUE, sep="\t")
+
+braf_norm <- normalizeBetweenArrays(braf[,2:15])
+braf_norm %<>% data.frame %>% mutate(ID_REF=braf$ID_REF) %>% dselect(ID_REF,everything())
+
+sample_order <- braf_meta %>% pull(Sample) %>% rev
+braf_meta %>% dselect(-GSM)
+```
+Translate probe names and consolidate genes
+
+```{r}
+load(file="/Volumes/Picard/FLX/Reference_tables/AffyHG_U133_Plus2_2_HUGO.rdata")
+annotLookup
+braf_gene <- braf_norm %>% left_join(annotLookup, by="ID_REF") %>% dselect(-ID_REF) %>% dselect(Gene, everything()) %>% group_by(Gene) %>% summarise_if(is.numeric,sum) %>% ungroup
+```
+
+Pick out the ISR genes and graph
+```{r fig.height=3, fig.width=16}
+braf_gene %>% dfilter(Gene %in% c("ATF4","ASNS","DDIT3","TRIB3","PPP1R15A")) %>% gather(GSM, mRNA_signal,-Gene) %>% left_join(braf_meta, by="GSM") %>% mutate(Sample=factor(Sample,levels=sample_order)) %>% dfilter(!grepl("Gln",Sample)) %>% ggplot(aes(Sample,mRNA_signal, fill=mRNA_signal)) + geom_bar(stat="identity", width=0.5) + coord_flip() + facet_wrap(~Gene,ncol=5,scale="free_x")
+
+GCN2_h_sig
+
+braf_gene %>% dfilter(Gene %in% GCN2_h_sig) %>% gather(GSM, mRNA_signal,-Gene) %>% left_join(braf_meta, by="GSM") %>% mutate(Sample=factor(Sample,levels=sample_order)) %>% dfilter(!grepl("Gln",Sample)) %>% ggplot(aes(Sample,mRNA_signal, fill=mRNA_signal)) + geom_bar(stat="identity", width=0.5) + coord_flip() + facet_wrap(~Gene,ncol=7,scale="free_x")
+```
+
+################3
+GSE146965_data.txt
+
+################
+```{r}
+meta <- read.table(file="/Volumes/Picard/FLX/GCN2/Chemo_combo/GSE146965_meta.txt", header=TRUE,sep="\t") %>% tibble::column_to_rownames("X.Sample_title") %>% t %>% data.frame %>% mutate(GSM=X.Sample_geo_accession, Tissue=X.Sample_source_name_ch1,Treatment=X.Sample_characteristics_ch1) %>% separate(Treatment,into=c(NA,"Status"),sep="treatment status: ") %>% dselect(GSM,Tissue,Status) %>% dfilter(!is.na(Status))
+meta %<>% mutate(Patient=c(rep(seq_len(28),each=2)))
+meta %<>% mutate(Patient=factor(Patient))
+rep(seq_len(28),each=2)
+ova <- read.table(file="/Volumes/Picard/FLX/GCN2/Chemo_combo/GSE146965_data.txt", header=TRUE,sep="\t")
+ova <- ova[,1:57] %>% data.frame
+ova %<>% dfilter(grepl("^TC",ID_REF))
+
+save(ova_norm,file="/Volumes/Picard/FLX/GCN2/Chemo_combo/GSE146965_ova_norm.rdata")
+```
+
+Translate the proces to gene name
+
+HTA2-pos-3145774_st
+Clariom_D_Human Affymetrix Human Clariom D Assay
+
+```{r}
+source("http://bioconductor.org/biocLite.R")
+BiocManager::install("clariomdhumantranscriptcluster.db")
+library(clariomdhumantranscriptcluster.db)
+ls("package:clariomdhumantranscriptcluster.db")
+
+y<-clariomdhumantranscriptclusterSYMBOL
+
+AffyClarion <- cbind(ID_REF=mappedLkeys(y),Gene=mappedRkeys(y)) %>% data.frame
+
+save(AffyClarion,file="/Volumes/Picard/FLX/Reference_tables/AffyClariomD_2_HUGO.rdata")
+```
+
+Translate probe to gene and select for gene transcripts
+
+```{r}
+ova %<>% right_join(AffyClarion, by="ID_REF") %>% dselect(Gene,everything()) %>% arrange(Gene)
+ova %<>% dselect(-ID_REF)
+```
+Normalize
+
+```{r}
+ova_norm <- limma::normalizeBetweenArrays(ova[2:57])
+boxplot(ova[2:57])
+boxplot(ova_norm)
+ova_norm %<>% data.frame %>% mutate(Gene= ova$Gene) %>% dselect(Gene, everything())
+```
+ISR plot 
+```{r fig.height=4, fig.width=12}
+ova_norm %>% dfilter(Gene %in% c("TRIB3","ASNS","DDIT3","ATF4")) %>% gather(GSM,mRNA_signal,-Gene) %>% left_join(meta,by="GSM") %>% ggplot(aes(x=interaction(Status),y=mRNA_signal, colour=Status)) + facet_wrap(~Gene,ncol=4, scale="free_y") + geom_boxplot() + geom_point() 
+
+```
+
+```{r fig.height=6, fig.width=12}
+ova_norm %>% dfilter(Gene %in% c("TRIB3","ASNS","DDIT3","ATF4")) %>% gather(GSM,mRNA_signal,-Gene) %>% left_join(meta,by="GSM") %>% group_by(Gene,Patient) %>% mutate(Status=factor(Status,levels=c("pre-treatment","post-treatement"))) %>% mutate(Slope = (mRNA_signal[Status=="post-treatement"] - mRNA_signal[Status=="pre-treatment"]) ) %>% ggplot(aes(x=Status,y=mRNA_signal,group=Patient, colour=Slope > 0, alpha=0.9)) + facet_wrap(Gene ~ Slope >0 ,ncol=8, scale="free_y") + geom_line() + geom_point() + nolegend()
+
+ova_norm %>% dfilter(Gene %in% c("TRIB3","ASNS","DDIT3","ATF4")) %>% gather(GSM,mRNA_signal,-Gene) %>% left_join(meta,by="GSM") %>% group_by(Gene,Patient) %>% mutate(Status=factor(Status,levels=c("pre-treatment","post-treatement"))) %>% mutate(Slope = (mRNA_signal[Status=="post-treatement"] - mRNA_signal[Status=="pre-treatment"]) ) %>% ggplot(aes(x=Status,y=mRNA_signal,group=Gene, colour=Gene)) + facet_wrap(~Patient ,ncol=7, scale="free_y") + geom_line() + geom_point() + scale_x_discrete(guide = guide_axis(n.dodge=2))
+
+```
+
+```{r}
+dat = data.frame(t=rep(c("I","II","III"), each=10), 
+             pairs=rep(1:10,3), 
+             value=rnorm(30), 
+             group=rep(c("A","B"), 15))
+```
+
+```{r}
+ggplot(dat %>% group_by(pairs) %>%
+     mutate(slope = (value[t=="II"] - value[t=="I"])/( value[t=="II"])- value[t=="I"]),
+   aes(t, value, group=pairs, linetype=group, colour=slope > 0)) +
+geom_point() +
+geom_line()
+```
+
+```{r}
+dat %>% group_by(pairs) %>% mutate(slope = (value[t=="II"] - value[t=="I"]))
+
+ova_norm %>% dfilter(Gene %in% c("TRIB3")) %>% gather(GSM,mRNA_signal,-Gene) %>% left_join(meta,by="GSM") %>% dselect(-Tissue,-Gene,-GSM) %>% group_by(Patient) %>% mutate(slope = (mRNA_signal[Status=="post-treatement"] - mRNA_signal[Status=="pre-treatment"]) ) 
+```
+
+```{r}
+
+```
+

@@ -1,0 +1,515 @@
+---
+title: "AtopicD_Tsoi"
+author: "Mengshu"
+date: "1/24/2019"
+output: html_document
+---
+Load packages
+```{r}
+library(data.table) #%like% function
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#install.packages('ggbeeswarm')
+library(ggbeeswarm)
+#install.packages("rlang")
+library(rlang)
+#install.packages("broom") # This is for doing the t.tests
+library(broom)
+```
+Use EDASeq to normalize data
+the featureData has to have colnames of feature data, it can't just be a data.frame of the values
+```{r}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+#BiocManager::install("EDASeq", version = "3.8")
+library(EDASeq)
+
+```
+
+Load data matrix file
+Apparently there are duplicate row names in the data
+```{r}
+ad <- read.table("GSE121212_readcount.txt", sep="\t", header=TRUE) #, row.names=1
+```
+Check row names
+there is an excel error where genes Mar* where changed to dates 1-Mar and 2-Mar
+```{r}
+ad %<>% data.frame %>% mutate(Gene=ad$X) %>% dselect(-X, Gene, everything()) 
+ad %>% count(Gene) %>% filter(n > 1) #find the duplicated genes
+ad %<>% dfilter(Gene != "1-Mar") %>% dfilter(Gene != "2-Mar")
+ad$Gene
+```
+
+Normalize using Limma
+
+```{r}
+ad %<>% tibble::column_to_rownames("Gene")
+ad %<>% dselect(-X)
+ad_norm <- limma::normalizeBetweenArrays(ad %>% as.matrix)
+boxplot(ad_norm)
+```
+
+```{r fig.height=7, fig.width=7}
+ad_norm %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("NOS2","IL17A","CXCL9")) %>% gather(sample,mRNA_reads,-Gene) %>% mutate(
+class = case_when(  sample %like% "^PSO.*.non" ~ "Psoriasis_nonlesional",        
+          sample %like% "^PSO*" ~ "Psoriasis",
+          sample %like% "CTRL*" ~ "Control",
+          sample %like% "*non.lesional$" ~ "AD_Non-Lesional",
+          sample %like% "*chronic_lesion$" ~ "AD_chronic",
+          sample %like% "*_lesional$" ~ "AD_Lesional")) %>% ggplot(aes(x=class, y= mRNA_reads, color=class)) + geom_boxplot() + geom_point() + scale_y_continuous(trans='log10') + facet_wrap(~Gene, ncol=1) +nolegend()
+```
+
+
+Use EDASeq to normalize data
+the featureData has to have colnames of feature data, it can't just be a data.frame of the values
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("EDASeq", version = "3.8")
+library(EDASeq)
+my_feature <- data.frame(ad$Gene)
+rownames(my_feature) <- ad$Gene
+data <- newSeqExpressionSet(counts=as.matrix(ad %>% dselect(-Gene)),
+                            featureData=my_feature,
+                            phenoData=data.frame(
+                              conditions=c(rep(c("AD_L","AD_NL"),21),"AD_NL",rep("CTRL",38),rep("PSO",55),rep(c("AD_NL","AD_CH"),2),rep(c("AD_CH","AD_NL"),3),"AD_CH"),
+                              row.names=colnames(ad %>% dselect(-Gene))))
+                           featureData=data.frame(rownames(ad))
+```
+
+Look at per sample counts
+There is dispersion when looking at all samples, which is expected
+Examine within conditions, and there is still strong dispersion
+```{r fig.height=4, fig.width=20}
+boxplot(data, col="blue")
+boxplot(dataNorm,col="red")
+meanVarPlot(data, log=TRUE, ylim=c(0,16))
+#looking at just CTRL samples
+meanVarPlot(data[,c(1,3,5,7,9,11,13,15,17,19,21)], log=TRUE, ylim=c(0,16)) # STill dispersed
+
+```
+Normalization: betweenLaneNormalization
+Full quantile normalization between data cols
+```{r}
+dataNorm <- betweenLaneNormalization(data, which="full")
+
+ad_norm <- normCounts(dataNorm)
+ad <- ad_norm
+```
+
+```{r}
+ccr4 <- as.data.frame(t(ad))
+#ccr4 <- as.data.frame(t(ad["CCR4",]))
+samples <- colnames(ad)
+ccr4 %<>% mutate(sample=samples)
+
+ccr4 %<>% mutate(
+status = case_when(  
+          #sample %like% "^PSO_[0-9]+_non.lesional" ~ "Psoriasis_Non-lesional",
+          sample %like% "^PSO*" ~ "Psoriasis",
+          sample %like% "CTRL*" ~ "Control",
+          sample %like% "*non.lesional$" ~ "AD_Non-Lesional",
+          sample %like% "*chronic_lesion$" ~ "AD_chronic",
+          sample %like% "*_lesional$" ~ "AD_Lesional"
+          
+  ))
+
+ccr4 %<>% mutate(
+class = case_when(  
+          sample %like% "PSO*" ~ "Psoriasis",
+          sample %like% "CTRL*" ~ "Control",
+          sample %like% "^AD*" ~ "Atopic Dermatitis"
+  ))
+
+ccr4$status <- as.factor(ccr4$status)
+ccr4 %<>% dselect(sample, status,class,everything())
+write.table(ccr4, file="Tsoi_AD_Gene_Expression",row.names=FALSE, col.names=TRUE, sep="\t")
+ccr4 <- read.table("Tsoi_AD_Gene_Expression", header=TRUE, row.names=1, sep="\t")
+
+ccr4 %>% dselect(contains("IL35"))
+```
+
+
+
+Plot
+```{r fig.height=7, fig.width=6}
+
+ggplot(ccr4, aes(sort(factor(status)), CCR4)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=IL13),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+ggsave("AD_Tsoi_CCR4_IL13.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), CCR4)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCL17),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_CCR4_CCL17.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), CCL22)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCR4),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_CCL22_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), CCL17)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCR4),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_CCL17_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), FOXP3)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCR4),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_FOXP3_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), TGFB1)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCR4),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_TGFB1_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), IL37)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCR4),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_IL37_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), TGFB2)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCR4),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_TGFB2_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), GATA3)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCR4),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_GATA3_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ggplot(ccr4, aes(sort(factor(status)), DOK1)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(aes(color=CCR4),width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ggsave("AD_Tsoi_DOK1_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+ccr41 <- ggplot(ccr4, aes(sort(factor(status)), CCR4)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(width=0.15, size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) 
+
+ccl221 <- ggplot(ccr4, aes(sort(factor(status)), CCL22)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(width=0.15, size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) 
+
+
+ccl171 <- ggplot(ccr4, aes(sort(factor(status)), CCL17)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(width=0.15, size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) 
+
+
+foxp31 <- ggplot(ccr4, aes(sort(factor(status)), FOXP3)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(width=0.15, size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) 
+plot_grid(ccr41,ccl221,ccl171,foxp31, nrow =1)
+
+ggsave("AD_Tsoi_Markers.jpg", dpi= 600, width= 14, height= 6, units="in")
+
+as_markers <- c("CCR4", "CCL17", "CCL22", "TGFB1", "TGFB2","IL10","IL34","IL37")
+ccr4 %>% dselect(-class) %>% gather(Gene, RNA_signal, -status) %>% mutate(status = factor(status, levels=c("AD_chromic","AD_Lesional","AD_Non-Lesional","Control","Psoriasis"))) %>% dfilter(Gene %in% as_markers) %>% ggplot(aes(x=Gene, y=RNA_signal)) + 
+  facet_wrap(~Gene) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(width=0.15, size=1.5, alpha=1) +
+  scale_color_gradient(low="grey60", high="red") +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) 
+  ggsave("AD_Tsoi_TGFB1_CCR4.jpg", dpi= 600, width= 6, height= 7, units="in")
+```
+T-tests
+
+```{r}
+#          sample %like% "*non.lesional$" ~ "AD_Non-Lesional",
+ #         sample %like% "*chronic_lesion$" ~ "AD_chronic",
+  #        sample %like% "*_lesional$" ~ "AD_Lesional"
+t_test <- tsoi  %>% dfilter(status %in% c("Control","AD_Lesional")) %>% do(tidy(t.test(FOXP3~status,data=.)))
+t_test
+
+```
+
+
+
+```{r}
+ADonly <- ccr4 %>% dfilter(class==c("Control","Atopic Dermatitis"))
+cor(ADonly$CCR4,ADonly$DOK1)
+ggplot(ADonly, aes(CCR4, DOK1)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  ggsave("AD_Tsoi_CCR4vsDOK1.jpg", dpi= 600, width= 5, height=5, units="in")
+
+ggplot(ADonly, aes(CCR4, CCL17)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_point() +
+  ggsave("AD_Tsoi_CCR4vsCCL.jpg", dpi= 600, width= 5, height=5, units="in")
+
+ggplot(ADonly, aes(CCL22, CCL17)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_point() +
+  ggsave("AD_Tsoi_CCL17vsCCL22.jpg", dpi= 600, width= 5, height=5, units="in")
+
+
+cor(ADonly$CCR4, ADonly$CCL22)
+cor(ADonly$CCR4,ADonly$CCL17)
+cor(ADonly$CCL17,ADonly$CCL22)
+  ggsave("AD_Tsoi_CCL17vsCCL22.jpg", dpi= 600, width= 7, height=7, units="in")
+```
+
+Noh et al. study only 2 samples for T cell, 2 samples for skin
+```{r}
+tcell <- read.table("GSE124701_non-normalized.txt", header=TRUE, skip=4, sep="\t")
+skin <- read.table("GSE124700_non-normalized.txt", header=TRUE, skip=4, sep="\t")
+```
+
+Check CCR4 expression
+```{r}
+tcell %>% dfilter(Gene.Symbol=="CCR4")
+skin %>% dfilter(Gene.Symbol=="CCR4")
+```
+
+Kobayashi et al. Unpublished mouse RNAseq data
+
+```{r}
+my_input <- list.files(path="GSE107687_RAW", full.names=TRUE) #full.names=TRUE is necessary, or the laaply won't be able to see the files within the folder
+merge_tsv <- lapply(my_input, function(i) {
+  read.csv(i, header= TRUE, sep="\t")
+})
+
+chop_tail <- sub("_rsem.genes.results.txt","", my_input)
+names(merge_tsv) <- sub("GSE107687_RAW/GSM28757","", chop_tail)
+
+merge_tsv <- lapply(seq_along(merge_tsv),function(i){
+  name_sample <- names(merge_tsv)[i]
+  merge_tsv[[i]]  %>% dselect(gene_id,FPKM)
+#  merge_tsv[[i]] <- merge_tsv[[i]][!duplicated(merge_tsv[[i]]$Correlated.Gene),] ## tried using the dplyr distinct() function, but it would remove all other cols
+})
+#merge <- do.call('merge',merge_tsv, by="gene_id")
+merge <- Reduce(function(x,y) merge(x,y,by="gene_id"), merge_tsv)
+
+colnames(merge) <- c("Gene","Skin_WT1","Skin_WT2","Skin_WT3","Skin_AD1","Skin_AD2","Skin_AD3","Epi_WT1","Epi_WT2","Epi_WT3","Epi_AD1","Epi_AD2","Epi_AD3")
+
+write.table(merge, file= "Kabayashi_AD_mouse.txt",sep="\t", row.names = FALSE)
+kobayashi <- read.table("Kabayashi_AD_mouse.txt",sep="\t", row.names = 1, header=TRUE)
+
+```
+
+Normalize
+When checking, realized the data is already norm
+```{r}
+m_data <- newSeqExpressionSet(counts=as.matrix(kobayashi))
+```
+
+Look at per sample counts
+There is dispersion when looking at all samples, which is expected
+Examine within conditions, and there is still strong dispersion
+```{r fig.height=4, fig.width=20}
+boxplot(m_data, col="blue")
+boxplot(m_dataNorm,col="red")
+meanVarPlot(m_data, log=TRUE, ylim=c(0,16))
+
+
+```
+Normalization: betweenLaneNormalization
+Full quantile normalization between data cols
+```{r}
+m_dataNorm <- betweenLaneNormalization(m_data, which="full")
+
+m_ad_norm <- normCounts(m_dataNorm)
+
+```
+
+CCR4= ENSMUSG00000037337
+CCL22= ENSMUSG00000031779 - Ensembl, May 2017
+CCL17= ENSMUSG00000031780
+FOXP3= ENSMUSG00000039521
+
+```{r}
+mouse_data <- data.frame(t(m_ad_norm))
+colnames(m_ad_norm)
+m_samples <- colnames(m_ad_norm)
+mouse_data %<>% mutate(sample=m_samples)
+
+mouse_data %<>% mutate(
+status = case_when(  
+          #sample %like% "^PSO_[0-9]+_non.lesional" ~ "Psoriasis_Non-lesional",
+          sample %like% "^Skin_WT*" ~ "Skin_WT",
+          sample %like% "^Skin_AD*" ~ "Skin_AD",
+          sample %like% "^Epi_WT*" ~ "Epithelial_WT",
+          sample %like% "^Epi_AD*" ~ "Epithelial_AD"
+  ))
+
+CCR4 <-ggplot(mouse_data, aes(factor(status), ENSMUSG00000037337.11)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ylab("Ccr4 RSEM") 
+ggsave("AD_Kabayashi_CCR4_makesnosense.jpg", dpi= 600, width= 6, height= 7, units="in")
+
+CCL22 <- ggplot(mouse_data, aes(factor(status), ENSMUSG00000031779.3)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ylab("Ccl22 RSEM")
+CCL17 <- ggplot(mouse_data, aes(factor(status), ENSMUSG00000031780.1)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ylab("Ccl17 RSEM")
+FOXP3 <- ggplot(mouse_data, aes(factor(status), ENSMUSG00000039521.12)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ylab("Foxp3 RSEM")
+plot_grid(CCR4, CCL22, CCL17, FOXP3, nrow =1)
+ggsave("AD_Kobayashi_Markers.jpg", dpi= 600, width= 12, height= 6, units="in")
+
+
+```
+
+
+
+Oetjen et al. 2017 mouse RNAseq data
+
+```{r}
+my_input <- list.files(pattern="*gene_counts.txt") #full.names=TRUE is necessary, or the laaply won't be able to see the files within the folder
+merge_tsv <- lapply(my_input, function(i) {
+  read.csv(i, header= TRUE, sep="\t")
+})
+
+names(merge_tsv) <- sub("_gene_counts.txt","", my_input)
+
+merge_tsv <- lapply(seq_along(merge_tsv),function(i){
+  name_sample <- names(merge_tsv)[i]
+  merge_tsv[[i]]  %>% select(Feature,RPKM)
+#  merge_tsv[[i]] <- merge_tsv[[i]][!duplicated(merge_tsv[[i]]$Correlated.Gene),] ## tried using the dplyr distinct() function, but it would remove all other cols
+})
+#merge <- do.call('merge',merge_tsv, by="gene_id")
+merge <- Reduce(function(x,y) merge(x,y,by="Feature"), merge_tsv)
+
+colnames(merge) <- c("Gene","WT1","WT2","WT3","WT4","AD1","AD2","AD3","AD4")
+
+write.table(merge, file= "Oetjen_AD_mouse.txt",sep="\t", row.names = FALSE)
+
+genes <- merge$Gene
+rownames(merge) <- genes
+merge %<>% select(-Gene)
+```
+
+Normalize
+When checking, realized the data is already norm
+```{r}
+m_data <- newSeqExpressionSet(counts=as.matrix(merge))
+```
+
+Look at per sample counts
+There is dispersion when looking at all samples, which is expected
+Examine within conditions, and there is still strong dispersion
+```{r fig.height=4, fig.width=20}
+boxplot(m_data, col="blue")
+boxplot(m_dataNorm,col="red")
+meanVarPlot(m_data, log=TRUE, ylim=c(0,16))
+
+
+```
+Normalization: betweenLaneNormalization
+Full quantile normalization between data cols
+```{r}
+m_dataNorm <- betweenLaneNormalization(m_data, which="full")
+
+m_ad_norm <- normCounts(m_dataNorm)
+
+```
+
+CCR4= ENSMUSG00000037337
+CCL22= ENSMUSG00000031779 - Ensembl, May 2017
+CCL17= ENSMUSG00000031780
+FOXP3= ENSMUSG00000039521
+```{r}
+mouse_data <- data.frame(t(merge))
+m_samples <- colnames(merge)
+mouse_data %<>% dplyr::mutate(sample=m_samples)
+
+mouse_data %<>% mutate(
+status = case_when(  
+          sample %like% "^WT*" ~ "Ctrl",
+          sample %like% "^AD*" ~ "Treated"
+  ))
+mouse_data %<>% dselect(sample, status, everything())
+
+
+write.table(mouse_data, "Oetjen_norm_t.txt", col.names=TRUE, row.names=TRUE)
+mouse_data <- read.table("Oetjen_norm_t.txt", header=TRUE, row.names=1)
+
+mouse_data %<>% dplyr::rename(CCR4=ENSMUSG00000037337, CCL22=ENSMUSG00000031779, CCL17=ENSMUSG00000031780, FOXP3=ENSMUSG00000039521)
+rename(mouse_data, "ENSMUSG00000037337"="CCR4")
+mouse_data %>% dselect(CCR4)
+
+library(cowplot)
+
+CCR4 <- ggplot(mouse_data, aes(factor(status), ENSMUSG00000037337)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ylab("Ccr4 RPKM")
+
+CCL22 <- ggplot(mouse_data, aes(factor(status), ENSMUSG00000031779)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ylab("Ccl22 RPKM")
+
+CCL17 <- ggplot(mouse_data, aes(factor(status), ENSMUSG00000031780)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ylab("Ccl17 RPKM")
+
+FOXP3 <- ggplot(mouse_data, aes(factor(status), ENSMUSG00000039521)) +
+  geom_boxplot(fill="yellow", alpha=0.2) +
+  geom_beeswarm(size=1.5, alpha=1) +
+  theme(axis.text.x=element_text(angle=45, hjust = 1)) +
+  ylab("Foxp3 RPKM")
+
+plot_grid(CCR4, CCL22, CCL17, FOXP3, nrow =1)
+ggsave("AD_Oetjen_Markers.jpg", dpi= 600, width= 12, height= 4, units="in")
+
+
+```
+ T-tests
+```{r}
+t_test <- mouse_data  %>% do(tidy(t.test(ENSMUSG00000037337~status,data=.))) #CCR4
+t_test <- mouse_data  %>% do(tidy(t.test(ENSMUSG00000031779~status,data=.))) #CCL22
+t_test <- mouse_data  %>% do(tidy(t.test(ENSMUSG00000031780~status,data=.))) #CCL17
+t_test <- mouse_data  %>% do(tidy(t.test(ENSMUSG00000039521~status,data=.))) #FOXP3 
+
+t_test
+
+```
+

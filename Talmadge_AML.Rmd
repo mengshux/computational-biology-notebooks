@@ -1,0 +1,211 @@
+---
+title: "Talmadge_AML.Rmd"
+author: "MX"
+date: "9/28/2020"
+output: html_document
+---
+
+The complete Talmadge dataset is finalized, with 4 batches of data, 9 samples. Batch 5 with 2 AMLs and 1 apheresis did not make it, no cDNA detected.
+
+This Rmd includes analysis for AML1 and AML3 individually
+```{r}
+library(Seurat)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+```
+
+AML data split off from batch4 grouped clustering
+This will contain all the meta data that is relevant to the global analysis, which is useful for comparing back
+```{r}
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+aml1 <- subset(batch4, subset= orig.ident %in% c("aml1"))
+save(aml1,file="Batch4_AML1.rdata")
+aml3 <- subset(batch4, subset= orig.ident %in% c("aml3"))
+save(aml3,file="Batch4_AML3.rdata")
+```
+
+
+Start analysis fresh with just the AML1/AML3 data
+```{r}
+AML1_alone <- subset(batch4, subset= orig.ident %in% c("aml1"))
+AML3_alone <- subset(batch4, subset= orig.ident %in% c("aml3"))
+```
+
+######################
+Feature Selection
+#######################
+Top variable genes: these are mostly Myeloid markers: PPBP and DEFA3 are both gMDSC markers
+ [1] "CAMP","PPBP","LTF"      "DEFA3"    "PF4"      "PTGDS"    "FCER1A","HLA-DQA1" "DEFA4"    "JCHAIN"  
+```{r fig.height=5, fig.width=12}
+AML3_alone <- FindVariableFeatures(AML3_alone, selection.method = "vst", nfeatures = 2000)
+top30 <- head(VariableFeatures(AML3_alone),30)
+
+plot1 <- VariableFeaturePlot(AML3_alone)
+plot2 <- LabelPoints(plot = plot1, points = top30, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+
+AML1_alone <- FindVariableFeatures(AML1_alone, selection.method = "vst", nfeatures = 2000)
+top30 <- head(VariableFeatures(AML1_alone),30)
+
+plot1 <- VariableFeaturePlot(AML1_alone)
+plot2 <- LabelPoints(plot = plot1, points = top30, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+
+```
+
+######################
+Data scaling to median = 0
+Z-score
+Stored in @scale.data
+#######################
+```{r}
+all.genes <- rownames(AML3_alone)
+AML3_alone <- ScaleData(AML3_alone,features = all.genes, assay = "RNA")
+
+all.genes <- rownames(AML1_alone)
+AML1_alone <- ScaleData(AML1_alone,features = all.genes, assay = "RNA")
+
+```
+
+######################
+scTransform
+
+This step supersedes NormalizeData, ScaleData and FindVariableFeatures
+Regularized negative binomial regression to normalize UMI counts: saved in SCT, and this becomes marked default
+Optional step to regress out confounding conditions: sctransform
+https://satijalab.org/seurat/v3.0/sctransform_vignette.html
+I should regress out the mt percentage, because they vary between samples, and shouldn't be biologically relevant
+Also regress out RPL/RPS ribosomal protein %, which removed the RPL and RPS genes from the PCA feature selection
+#######################
+
+```{r}
+AML1_alone <- SCTransform(AML1_alone, vars.to.regress = c("percent.mt","percent.ribo"), verbose = FALSE, assay="RNA")
+#this did not finish, also still not sure that I need to run this
+AML3_alone <- SCTransform(AML3_alone, vars.to.regress = c("percent.mt","percent.ribo"), verbose = FALSE, assay="RNA")
+```
+####################################
+PCA analysis
+I will choose variable RNA features, and all CITE features
+Noticed some RPL and RPS genes in there, go back to scTransform and regress out percent.ribo
+####################################
+
+```{r}
+AML1_alone <- RunPCA(AML1_alone, features =c(VariableFeatures(object=AML1_alone)))
+AML3_alone <- RunPCA(AML3_alone, features =c(VariableFeatures(object=AML3_alone)))
+```
+
+
+#################################
+Visualize PCA
+################################
+
+```{r fig.height=5, fig.width=10}
+DimPlot(AML1_alone, reduction="pca", dims= 1:2)
+DimPlot(AML1_alone, reduction="pca", dims= 2:3)
+DimPlot(AML1_alone, reduction="pca", dims= 3:4)
+
+DimPlot(AML3_alone, reduction="pca", dims= 1:2)
+```
+
+
+Cut off should be at 20 from this plot
+```{r fig.height=14, fig.width=9}
+DimHeatmap(AML1_alone, dims=1:24, cells=500, balanced = TRUE)
+DimHeatmap(AML3_alone, dims=1:20, cells=500, balanced = TRUE)
+#Looks like cut-off at 20
+```
+
+
+Graph-based clustering : embed cells in a graph structure, like a KNN graph
+
+Take many groups, and then merge them later if necessary
+PCs: 24
+Resolution: 1.2
+21 Groups
+
+Batch3 resolution 1.0: 28 clusters
+0.9 -> 28 clusters
+0.8 -> 25
+
+Batch3b 20 PCs
+resolution 
+0.8 -> 23 clusters
+##################################
+###################################
+```{r}
+AML1_alone <- FindNeighbors(AML1_alone, dims=1:20)
+AML1_alone <- FindClusters(AML1_alone, resolution=0.8,random.seed=42) #finds 17 communities
+FindCluster
+table(Idents(AML1_alone))
+
+AML3_alone <- FindNeighbors(AML3_alone, dims=1:20)
+AML3_alone <- FindClusters(AML3_alone, resolution=0.8,random.seed=42) #finds 12 communities
+table(Idents(AML3_alone))
+
+```
+
+
+UMAP and tSNE
+
+Make an experimenting Seurat object called Batch_Exp. I don't want to change the UMAP version to a new one 
+But then accidentally ran the analysis in batch1, so now batch_exp is the permanent one and batch1 is the test
+```{r fig.height=4, fig.width=6}
+AML1_alone <- RunUMAP(AML1_alone, dims=1:20, min.dist = 0.5,random.seed=42)
+#AML1_alone <- RunUMAP(AML1_alone, features=VariableFeatures(AML1_alone), min.dist = 0.5, random.seed=42) #this doesn't separate cluters within major clusters, it moves superclusters apart
+
+AML3_alone <- RunUMAP(AML3_alone, dims=1:20, min.dist = 0.5,random.seed=42)
+
+AML1_alone <- RunTSNE(AML1_alone, dims=1:20, min.dist = 0.5, random.seed=42)
+AML3_alone <- RunTSNE(AML3_alone, dims=1:20, min.dist = 0.5, random.seed=42)
+
+batch4 <- RunUMAP(batch4, dims=1:24, min.dist = 0.5,random.seed=42)
+
+UMAPPlot(AML1_alone, label=TRUE) #+ ggsave("UMAP_batch3b.jpg", width=10, height=6, dpi=300, plot= last_plot(), units = "in")
+UMAPPlot(AML3_alone, label=TRUE) 
+TSNEPlot(AML1_alone, label=TRUE) #+ ggsave("TSNE_batch2_mindist.jpg", width=10, height=6, dpi=300, plot= last_plot(), units = "in")
+TSNEPlot(AML3_alone, label=TRUE)
+
+```
+Try the GF-ICF method
+https://github.com/dibbelab/gficf
+Can only be installed from source, but it's not happening despite R and Rstudio upgrades
+Need to upgrade R. My Current version is 3.5.1. Current version is 4.0.0
+```{r}
+install.packages(pkgs = "gficf",repos = c("https://dibbelab.github.io/Rrepo/","https://cloud.r-project.org")) #doesn't work
+install.packages("gficf") #doesn't work, says not available
+devtools::install_github("dibbelab/gficf")
+```
+
+
+#######
+Identify Clusters by Top markers
+#######
+
+```{r}
+pbmc.markers <- FindAllMarkers(AML1_alone, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.5)
+#save(pbmc.markers, file="MDSC_all_vs_all_DE_batch2.rdata")
+save(pbmc.markers, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/All_vs_all_DE_AML1.rdata")
+
+write.table(pbmc.markers, file="Talmadge_scRNA_cluster_markers_batch4.txt", sep="\t", quote=FALSE,row.names = FALSE)
+
+pbmc.markers  %>% top_n(n = 100, wt = avg_logFC) %>% arrange(cluster)
+pbmc.markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_logFC)
+
+FindMarkers(AML1_alone, ident.1=10, ident.2=14,only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+
+#mRNA_ident <- c("0 gMDSC","1 T cell CD4+ TCF7+","2 NK","3 T cell CD4 CCR7+","4 T cell CD4 CCR7+ TCF7+","5 gMDSC SELL+","6 T cell CD8+","7 mMDSC CD15+","8 Granulocyte","9 mMDSC CD14+/- CD34 med","10 Platelet","11 B cell","12 T cell CD4 RPhigh","13 mMDSC CD15+ CSF1R+","14 Granulocyte CD16+","15 Granulocyte CD16+","16 gMDSC DEFA3+","17 Apoptotic","18 Unknown GAPDH++","19 DC","20 NK XCL+")
+```
+
+Plot CITE markers
+```{r fig.height=15, fig.width=20}
+FeaturePlot(AML1_alone,slot = "data",features = c("CD11b-CITE","CD11c-CITE","CD14-CITE","CD33-CITE","BPI","CD15-CITE","CSF-1R-CITE","CD34-CITE","FCGR3B","CD45RA-CITE","CD45RO-CITE","KIT","MKI67","RPL37"))
+
+DimPlot(AML1_alone) + NoLegend()
+```
+

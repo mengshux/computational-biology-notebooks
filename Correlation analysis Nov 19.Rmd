@@ -1,0 +1,113 @@
+---
+title: "HPK1 Correlation PBMCs"
+author: "Mengshu"
+date: "November 19, 2018"
+output: html_document
+---
+
+Perform correlation analysis for HPK1 in scRNA datasets. Starting with the healthy PBMC dataset. 
+Load the Imputed, normalized and filtered data from Seurat
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(data.table)
+library(ggplot2)
+source("R_functions.r")
+
+install.packages("Hmisc")
+library("Hmisc")
+detach("package:Hmisc")
+detach("package:data.table")
+detach("package:Seurat")
+```
+
+Load Seurat dataset: 10X_8K_PBMC_Seurat_Imputed_original
+
+```{r}
+pbmc<- readRDS("10X_8K_PBMC_Seurat_Imputed_original.rds")
+pbmc_matrix <- as.matrix(pbmc@data)
+dim(pbmc_matrix)
+#18408  8483 : 18K genes, 8K cells
+```
+
+Run rcorr from the Hmisc package
+##This takes too long to run. It ran on the 8 RAM laptop for 2 whole days and never finished
+
+```{r}
+corr_result <- rcorr(pbmc_matrix, type="spearman")
+```
+
+Cluster on cell type subclusters, the 21 classes that were found, so the table would be 18408 by 21
+Go back to the Seurat file and export the average expression values of each cluster. 
+```{r}
+not done yet
+```
+Gene suggested running HPK1 correlation with all other genes
+1. Transpose the matrix so that Genes are cols and Cells are rows. Then save HPK1 into vector y, save matrix as x
+2. HPK1_corr <- rcorr(x,y, type="spearman")
+3. This returns, r: correlations, NA if one number is missing, n: number of observations used, for self-self diagonal cells, n is number of the single variable, and ,p: P-values
+Correlation ran from Mon to Thur morning. 4 Days!
+Unexpectedly, the correlation actually ran all genes vs. all genes, not just HPK1 vs. all genes. 
+```{r}
+pbmc_t <- t(pbmc_matrix)
+dim(pbmc_t)
+#pbmc_t[1:5,1:5]
+HPK1_vector <- pbmc_t[,"MAP4K1"]
+head(HPK1_vector)
+
+hpk1_corr <- rcorr(pbmc_t, HPK1_vector, type="spearman")
+save(hpk1_corr, file="8K_PBMC_HPK1_corr.rdata")
+hpk1_corr <- load("8K_PBMC_HPK1_corr.rdata")
+```
+
+Look at a ranked list of HPK1 correlated genes
+# Don't use Tibble because it doesn't allow row names. 
+```{r}
+hpk1_matrix <- data.frame(hpk1_corr$r)
+hpk1_matrix %<>% mutate(gene=colnames(hpk1_matrix)) #added as last col
+
+class(hpk1_matrix)
+head(hpk1_matrix)
+str(hpk1_matrix)
+head(remove_RP)
+
+remove_RP <- colnames(hpk1_matrix %>% dselect(starts_with("RP")))
+hpk1_matrix %<>% dselect(-remove_RP) %>% dfilter(MAP4K1 >= 0.5)
+hpk1_matrix[,c(ncol(hpk1_matrix),1:(ncol(hpk1_matrix)-1))]
+n <- hpk1_matrix$gene
+p <- colnames(hpk1_matrix)
+t_hpk1 <- as.data.frame(t(hpk1_matrix[,-1]))
+colnames(t_hpk1) <- n
+rownames(t_hpk1) <- head(p,-1) #error
+t_hpk1 %<>% mutate(gene=head(p,-1))
+t_hpk1[,c(ncol(t_hpk1),1:(ncol(t_hpk1)-1))]
+head(t_hpk1)
+tail(p)
+remove_RP2 <- colnames(t_hpk1 %>% dselect(starts_with("RP")))
+t_hpk1 %<>% dfilter(MAP4K1 >= 0.5) %<>% dselect(-remove_RP2)
+write.table(t_hpk1, file="Corr_sort_PBMC_filter.txt", quote= FALSE, sep="\t", row.names=FALSE)
+
+
+hpk1_matrix %<>% dfilter(rownames)
+hpk1_corr_sort <- sort(hpk1_corr$r[,"MAP4K1"], decreasing = TRUE) 
+write.csv(hpk1_corr_sort, file="HPK1_corr_sort_PBMC.txt", quote= FALSE, sep="\t")
+head(hpk1_corr_sort)
+tail(hpk1_corr_sort)
+```
+
+
+
+```{r}
+hpk1_matrix <- data.frame(hpk1_corr$r)
+keeping <- hpk1_matrix$MAP4K1 >= 0.5
+str(keeping)
+hpk1_filter <- hpk1_matrix[keeping,keeping]
+str(hpk1_filter)
+head(hpk1_filter)
+hpk1_filter %<>% mutate(gene= rownames(hpk1_filter))
+hpk1_filter <-hpk1_filter[,c(ncol(hpk1_filter),1:(ncol(hpk1_filter)-1))]
+write.table(hpk1_filter, file="Corr_sort_PBMC_filter.txt", quote= FALSE, sep="\t", row.names=FALSE)
+```
+

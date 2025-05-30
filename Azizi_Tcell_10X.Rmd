@@ -1,0 +1,730 @@
+---
+title: "Azizi BRCA InDrop Seurat"
+author: "Mengshu"
+date: "11/15/2018"
+output: html_document
+---
+Load packages
+```{r}
+library(SAVER)
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+#install.packages("SAVER")
+#devtools::install_github("mohuangx/SAVER")
+```
+
+
+Load data into table
+```{r}
+expression_matrix <- read.table("/Volumes/Picard/FLX/scRNA_data/Azizi2018/GSE114724_rna_raw.tsv", skip=1, header=TRUE, row.names=1, sep="\t",colClasses=c("character",rep("numeric",28013)))
+expression_matrix <- as.matrix(expression_matrix)
+azizi_s3$counts <- expression_matrix
+azizi_s3@assays$RNA@counts <- expression_matrix
+#expression_matrix <- read.table("test.tsv", skip=1, header=TRUE, row.names=1, sep="\t",colClasses=c("character",rep("numeric",28013)))
+str(expression_matrix)
+dim(expression_matrix)
+# 12908 28013 28K cells, 12.9K genes
+```
+
+Impute
+Add row names and delete first column containing names
+Impute
+Save imputed object to rds
+BRCA.impute$estimate contains the data
+```{r}
+rownames(expression_matrix) <- expression_matrix[,1]
+expression_matrix <- expression_matrix[,-1]
+
+BRCA.impute <- saver(expression_matrix,ncores=10)
+saveRDS(BRCA.impute, file="BRCA.SAVER.impute_Azizi.rds")
+saveRDS(BRCA.impute$estimate, file="BRCA.SAVER.impute_only_Azizi.rds")
+BRCA.impute$estimate[1:5,1:5]
+#Impute of the entire dataset with SAVER took 18 hours running on 10 cores
+
+rownames(expression_matrix) <- expression_matrix[,1]
+expression_matrix <- expression_matrix[,-1]
+BRCA.impute$estimate[1:5,1:5]
+```
+
+Load Imputed data
+
+```{r}
+BRCA <- readRDS("BRCA.SAVER.impute_Azizi.rds")
+BRCA.estimate <- BRCA$estimate
+BRCA.estimate[1:5,1:5]
+```
+
+
+Create Seurat object
+
+```{r}
+brca <- CreateSeuratObject(raw.data = BRCA.estimate, min.cells=3, min.genes=200, is.expr = 0.05)
+str(brca)
+
+azizi_raw <- CreateSeuratObject(raw.data = expression_matrix, min.cells=3, min.genes=200, is.expr = 0)
+```
+
+Explore nGENE and nUMI data
+
+```{r fig.height=5, fig.width=20}
+azizi <- readRDS("BRCA_singlet_Azizi.rds")
+azizi_s3 <- UpdateSeuratObject(azizi)
+azizi_raw@meta.data$ident <- azizi@meta.data$ident
+VlnPlot(object=azizi_raw, features.plot=c("nGene"),y.log=TRUE, point.size.use= 0.1)
+VlnPlot(object=azizi_raw, features.plot=c("nUMI"), point.size.use= 0.1, y.max = 40000) #, y.log =TRUE
+hist(azizi_raw@meta.data$nUMI, breaks =seq(0,80000, by=500), xlim=c(0,20000))
+hist(azizi_raw@meta.data$nGene, breaks =seq(0,80000, by=250),xlim=c(0,10000))
+```
+```{r fig.height=15, fig.width=10}
+VlnPlot(object=azizi_raw, features.plot = c("CCR4","GATA3","CD4", "RPS10"), use.raw=TRUE, y.max =50, x.lab.rot = TRUE, nCol=2) 
+ggsave("10X_gene_UMI_sampling_Azizi_RP.jpg", plot= last_plot(), dpi=600, width=10, height=15, units="in")
+
+azizi_s3@active.ident %>% table
+```
+
+```{r fig.height=6, fig.width=9}
+DimPlot(azizi_s3,reduction="umap", label=TRUE,label.size=5, repel=TRUE) + NoLegend() 
+```
+
+```{r fig.height=8, fig.width=14}
+FeaturePlot(azizi_s3,slot = "counts",features = c("NKG7","CD8A","CD4","GZMB","PRF1","FOXP3","CTLA4","CCR4","PDCD1","SELL","CD69","CD274"),ncol=4, cols=c("grey80","red"), max.cutoff = 10) #,"CXCL13","CCR7","PTPRC"
+```
+
+Marker overlap
+```{r fig.height=6, fig.width=5}
+FetchData(azizi_s3, slot="counts", vars=c("CD8A","CD69","PDCD1","FOXP3")) %>% dplyr::filter(CD8A > 2 & (CD69 > 2 | PDCD1 >2) & FOXP3 > 2) #20/1554
+FetchData(CT26_immunome, slot="data", vars=c("Cd8a","Cd69","PD-L1-CITE","Foxp3")) %>% dplyr::filter(Cd8a > 0 ) #27/1897  # & Foxp3 > 0
+FetchData(CT26_immunome, slot="data", vars=c("Cd4","Ctla4","Ikzf2","Foxp3")) %>% dplyr::filter(Cd4 > 0 & Ctla4 == 0 & Ikzf2 ==0) #109/161 FoxP3+ out of CD4+ CTLA4+ IKZF2+  # 37/2553 FoxP3+ out of CD4+ CTLA4- IKZF2-
+FetchData(CT26_immunome, slot="data", vars=c("Cd4","Ctla4","Ikzf2","Foxp3")) %>% dplyr::filter(Cd4 > 0 & (Ctla4 > 0 | Ikzf2 > 0) & Foxp3 > 0) #197/ 468
+
+FetchData(azizi_s3, slot="counts", vars=c("CD8A","CD69","PDCD1","FOXP3")) %>% dplyr::filter(CD8A > 0.5 & (CD69 > 0.5 | PDCD1 >0.5)) %>% dselect(FOXP3) %>% mutate(Cells= "Active_CD8_cells") %>% ggplot(aes(x=FOXP3)) + geom_histogram(bins=200) + ylab("") + scale_y_log10()
+cd8 <- FetchData(azizi_s3, slot="data", vars=c("CD8A","CD69","PDCD1","FOXP3")) %>% dplyr::filter(CD8A > 0) %>% dselect(Foxp3) %>% mutate(Cells= "All_CD8_cells")
+
+RidgePlot(azizi_s3,features = c("FOXP3"),slot="data", sort= "decreasing") + NoLegend() + ylab("")
+
+FetchData(azizi_s3, slot="data", vars=c("ident","FOXP3")) %>% group_by(ident) %>% summarise(mean(FOXP3)) %>% ungroup %>% arrange(-`mean(FOXP3)`)
+
+
+FetchData(azizi_s3, slot="data", vars=c("ident","FOXP3")) %>% dfilter(FOXP3 > 0.25) %>% dselect(ident) %>% table %>% data.frame
+# 3256 total FOXP3+ cells
+azizi_s3@active.ident %>% table %>% data.frame
+```
+
+Look up Markers
+```{r}
+FeaturePlot(object=azizi, features.plot = c("IKBKE","TBK1"), cols.use=c("grey","blue"), no.legend=FALSE,reduction.use="umap") 
+VlnPlot(object=azizi, features.plot = c("IKBKE","TBK1"), x.lab.rot = TRUE, use.raw=TRUE)
+??VlnPlot
+```
+
+
+Add Mito data
+There is no need to filter by nGene or percent.mito, it all looks reasonable
+```{r}
+mito.genes <- grep(pattern="^MT-", x= rownames(x=brca@data), value=TRUE)
+ #calculate percent of genes that are MITO for each cell. Summing total expression for each cell, sumMITO/sumALL
+percent.mito <- Matrix::colSums(brca@raw.data[mito.genes,])/Matrix::colSums(brca@raw.data)
+#add this information into pbmc_mitounder metadata
+brca <- AddMetaData(object=brca, metadata=percent.mito, col.name= "percent.mito")
+
+VlnPlot(object=brca, features.plot=c("nGene", "nUMI", "percent.mito"),point.size.use = 0.05)
+#the reason all cells have the same nGene is due to the Imputation, it makes sure all genes have a non-0 value, even if it's small..To filter, set the is.expr filter to just above 0
+```
+
+Examine Ribosomal protein expression 
+```{r fig.height=6, fig.width=16}
+#gathers the values for all MT rows
+ribo.genes <- grep(pattern="^RP", x= rownames(x=brca@data), value=TRUE)
+ #calculate percent of genes that are MITO for each cell. Summing total expression for each cell, sumMITO/sumALL
+percent.ribo <- Matrix::colSums(brca@raw.data[ribo.genes,])/Matrix::colSums(brca@raw.data)
+#add this information into pbmc_mitounder metadata
+brca<- AddMetaData(object=brca, metadata = percent.ribo, col.name= "percent.ribo")
+
+VlnPlot(object=brca, features.plot=c("nGene", "nUMI", "percent.mito","percent.ribo"), nCol=4,  point.size.use = 0.1, x.lab.rot = TRUE)
+
+#Add RPS10 and RPL17
+RPS10 <- brca@raw.data[RPS10,]
+RPL17 <- brca@raw.data[RPL17,]
+brca<- AddMetaData(object=brca, metadata = RPS10, col.name= "RPS10")
+brca<- AddMetaData(object=brca, metadata = RPL17, col.name= "RPL17")
+```
+
+
+Normalize data
+LogNormalize: normalize each cell by total expression, multiply by scale factor 10000, and log2 transform
+```{r}
+brca<- NormalizeData(object=brca, normalization.method="LogNormalize", scale.factor=10000)
+```
+
+This step identifies variable genes for downstream analysis
+Cutoff for high average expression, which should exclude the RPL genes, which are not very informative)
+```{r fig.height=15, fig.width=20}
+brca<- FindVariableGenes(brca, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0125, x.high.cutoff = 2.5, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+```
+```{r}
+length(x=brca@var.genes)
+```
+! Re-do ScaleData. Regress RP genes. They were contributing to a division that wasn't meaningful. The problem with T cells is that some very abundant transcripts like CXCL13 are actually meaningful, so an abundance cut off will get rid of useful data. Also regress out percent.mito and nUMI in case it does make a difference
+```{r}
+brca <- ScaleData(object=brca, vars.to.regress=c("percent.ribo","percent.mito","nUMI","RPS10","RPL17"), display.progress = TRUE, assay.type = "RNA", check.for.norm = TRUE)
+```
+
+Perform linear dimensional reduction
+```{r}
+brca<- RunPCA(object = brca, pc.genes = brca@var.genes, pcs.compute = 20, do.print = TRUE, pcs.print = 1:20, 
+    genes.print = 5)
+```
+
+Determine statistically significant components
+A resampling test inspired by the JackStraw procedure. Randomly permutate a subset of data (1% default) and rerun PCA, looking for PCs that are enriched for genes that change PC grouping when changed. 
+This step takes a long time
+```{r fig.height=20, fig.width=20}
+#this process can take a long time
+brca<- JackStraw(object = brca, num.replicate = 100, display.progress = FALSE, num.pc = 40)
+JackStrawPlot(object = brca, PCs = 1:40) 
+ggsave("JackstrawPlot of PCs.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+```
+
+The PCE elbow plot is a more ad hoc way of determining a cut-off. 
+Here it looks like the cutoff is around 15, but from the JackStraw and heatmaps, all PCs are significant. PCs beyond 15 probably have minimal impact on clustering. Use 20 clusters. 
+```{r}
+PCElbowPlot(object = brca)
+#Elbow looks like it's at PC 14
+```
+Examine PCA results visually
+```{r}
+#Just print PCA results
+PrintPCA(object=brca, pcs.print=1:9, genes.print = 10, use.full = FALSE)
+
+```
+#############################
+#############################
+
+          CLUSTERING
+
+#############################
+#############################
+
+Cluster cells into groups. Using graph-cased clustering. The method embeds cells in a graph structure, like a K-nearest neighbour graph, and then refines the edges. The cells are grouped iteratively. 
+```{r}
+brca <- FindClusters(brca,reduction.type = "pca",
+  dims.use = 1:9, k.param = 30, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = FALSE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 0.4, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+
+PrintFindClustersParams(object=brca)
+```
+###################
+Run t-SNE to cluster cells for visualization
+#####################
+Default perplexity is 30
+Try 50
+```{r}
+brca <- RunTSNE(object = brca, reduction.use = "pca", cells.use = NULL, dims.use = 1:9,
+  genes.use = NULL, seed.use = 1, tsne.method = "Rtsne", add.iter = 0,
+  dim.embed = 2, distance.matrix = NULL, reduction.name = "tsne",
+  reduction.key = "tSNE_", perplexity = 50)
+
+```
+
+##################
+Run UMAP for visualization as comparison
+###################
+Seurat has a UMAP function, install the python version of umap on the local machine first, Seurat will call the python code from R
+In Terminal> sudo pip install umap-learn, then restart the R session
+n_neighbors = 30L   determines preservation of global structures (larger numbers). Typical range 5-50.
+Metrics: for this dataset, "manhattan"" works the best
+metric: chebyshev = manhattan (better borders) > cosine  > correlation > canberra (chaotic and clumpy) >>>> Jaccard (for binary data) >> Haversine (doens't run)
+```{r}
+library(umap)
+brca <- RunUMAP(brca, cells.use = NULL, dims.use = 1:9, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 10L,
+  min_dist = 0, metric = "manhattan", seed.use = 42)
+```
+
+Graph Clustering Results
+Plot tSNE and UMAP graphs
+#The global separation is not very distint, adjust the perplexity 
+Perplexity 100 doens't look any different from 50. 50 is a bit better than 30
+UMAP looks better than t-SNE for global relationships, and has fewer stray cells that don't agree with the clustering
+```{r fig.height=6, fig.width=8}
+par(mfrow=c(1,2)) #this doesn't work for Seurat plots
+TSNEPlot(object = brca, do.label = TRUE, pt.size = 0.5, label.size = 4) 
+DimPlot(object = brca, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 4) 
+DimPlot(object = BRCA_singlet, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 4) 
+ggsave("UMAP_BRCA_Azizi_nn10_manhattan.jpg", width=12, height=8, dpi=600, plot= last_plot(), units="in")
+
+write.table(table(pbmc_mito@ident), "PBMC_Cluster_counts.txt")
+
+```
+
+##############
+##############
+Save clustered data that isn't labelled -> Version A
+Save clustered data that isn't labelled, run 2 with regressing for percent.ribo, percent.mito, nUMI -> Version B # It didn't make much difference
+Save clustered data that isn't labelled, regression for RPS10 and RPL17, and only taking PC1-15-> Version C has 1 global cluster
+Tried running Clutering on just 9 PCs, still have 22 clusters, so the number of clusters is valid, and apparently very robust. 
+##############
+#############
+```{r}
+
+saveRDS(brca, file="BRCA_Seurat_Imputed_A.rds")
+
+saveRDS(brca, file="BRCA_Seurat_Imputed_B.rds")
+
+saveRDS(brca, file="BRCA_Seurat_Imputed_C.rds")
+brca <- readRDS("BRCA_Seurat_Imputed_C.rds")
+
+saveRDS(brca, file="BRCA_Seurat_Imputed_D.rds") # Dec 12 2018 9 clusters
+brca2 <- readRDS("BRCA_Seurat_Imputed_D.rds")
+
+saveRDS(brca,file="BRCA_singlet_Azizi.rds")
+brca <- readRDS("BRCA_singlet_Azizi.rds")
+
+saveRDS(brca,file="BRCA_singlet_Azizi_CD4.rds")
+brca.CD4 <- readRDS("BRCA_singlet_Azizi_CD4.rds")
+
+```
+
+
+#################
+Identify cell clusters using cell markers
+#################
+, "percent.mito", "IFIT3", PPARGC1A is a marker of mitocohndrial activity in T cells
+IL7R- helper, TIGIT: T FH, CXCL13 T FH, Cxcr5 T fh, BCL6 T fh
+```{r} 
+#fig.height=12, fig.width=15
+FeaturePlot(object=brca, features.plot =c("NKG7","CD8A","CD4","GZMB","PRF1","FOXP3","CTLA4","CCL4","PDCD1","CXCL13","CCR7","PTPRC","SELL","MTRNR2L12","RPS10","percent.ribo"), cols.use=c("grey90","blue"), nCol=4, no.legend=FALSE, reduction.use = "umap") 
+ggsave("UMAP_BRCA_Azizi_feature_D_2.jpg", width=20, height=15, dpi=600, plot= last_plot(), units="in")
+
+FeaturePlot(object=azizi, features=c("NKG7","CD8A","CD4","GZMB","PRF1","FOXP3","CTLA4","CCL4","PDCD1","CD36"), cols=c("grey90","blue")) 
+Tcell_azizi <- UpdateSeuratObject(azizi)
+## Markers that cause global cluster separation
+FeaturePlot(object=brca, features.plot =c("MTRNR2L12","RPS10","percent.ribo"), cols.use=c("grey90","blue"), nCol=3, no.legend=FALSE, reduction.use = "umap") 
+ggsave("UMAP_BRCA_Azizi_feature_RPS10_HT.jpg", width=20, height=6, dpi=600, plot= last_plot(), units="in")
+# Plot to difeerentiate T cell stage
+#CD57 = B3GAT1, CD31 = PECAM1, 
+FeaturePlot(object=brca, features.plot =c("NKG7","CD8A","CD4","GZMB","PRF1","FOXP3","CTLA4","CCL4","PDCD1","CCR7","PTPRC","SELL","CD27","CD28","CD57","KLRG1","PECAM1","LAG3","HLA-DRA","percent.ribo"), cols.use=c("grey90","blue"), nCol=4, no.legend=FALSE, reduction.use = "umap") 
+
+
+FeaturePlot(object=brca, features.plot = c("CD34","IL7R","CREM","SELL","NKG7", "TIGIT","ITGAE","BCL6"), cols.use=c("grey90","blue"), nCol=3, no.legend=FALSE, reduction.use = "umap") +
+ggsave("UMAP_BRCA_Azizi_feature_D_3.jpg", width=20, height=15, dpi=600, plot= last_plot(), units="in")
+FeaturePlot(object=brca, features.plot = c("MTRNR2L12","RPS10"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") +
+ggsave("UMAP_BRCA_MTRNR2L12_RPS10_C.jpg", width=10, height=4, dpi=600, plot= last_plot(), units="in")
+
+#T cell lifecycle markers #
+FeaturePlot(object=brca, features.plot =c("CD8A","CD4","CCR7","SELL","CD27","CD28","B3GAT1","percent.ribo","HLA-DRA","PRF1","GZMB","GZMK","GNLY","KLRG1","PDCD1","ITGAE","CXCL13","MTRNR2L12"), cols.use=c("grey90","blue"),nCol=3, no.legend=FALSE, reduction.use = "umap") 
+ggsave("UMAP_BRCA_Azizi_progression.jpg", width=24, height=24, dpi=600, plot= last_plot(), units="in")
+#Exhaustion markers
+FeaturePlot(object=brca, features.plot =c("CTLA4","LAG3","TIGIT","EOMES","PDCD1","TBX21", "MTOR","percent.mito","BAX", "BCL2", "EGR2", "EGR3"), cols.use=c("grey90","blue"),nCol=3, no.legend=FALSE, reduction.use = "umap") 
+ggsave("UMAP_BRCA_Azizi_exhaustion.jpg", width=24, height=20, dpi=600, plot= last_plot(), units="in")
+
+#TH1, TH2, TH17 TREG groups
+FeaturePlot(object=brca, features.plot = c("SELL","CD4","GZMK","PRF1","NKG7","FOXP3","CCR4","CD28","IL2RA","CD38","CCR5","CCR6","CXCR3","GATA3"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap", nCol = 3) 
+ggsave("CD4cells_featureplot.jpg", width= 20, height=32, dpi=600, plot=last_plot(), units = "in")
+
+FeaturePlot(object=azizi_pbmc, features.plot = c("IKBKE","TBK1"), cols.use=c("grey","blue"), no.legend=FALSE,reduction.use="umap", use.imputed=TRUE) 
+VlnPlot(object=azizi_pbmc, features.plot = c("IKBKE","TBK1"), x.lab.rot = TRUE) 
+```
+
+```{r fig.height=12, fig.width=15}
+FeaturePlot(object=brca, features.plot = c("CD34","IL7R","CREM","SELL","NKG7", "TIGIT","ITGAE","CTLA4","IL12A","IFNG"), cols.use=c("grey90","blue"), nCol=3, no.legend=FALSE, reduction.use = "umap")
+```
+
+#################################################
+#################################################
+
+               DIFFERENTIAL ANALYSIS
+
+#################################################
+#################################################
+Cluster Biomarkers: Find differentially expressed genes
+Seurat can perform differential expression analysis. It compares each group against all other groups, or only certain groups to each other
+First, identify cell types by running group against all
+
+```{r}
+all.markers <- FindAllMarkers(object=azizi_s3, min.pct=0.5, logfc.threshold = 0.5)
+
+all.markers %>% dfilter(cluster=="4. CD4 T reg") %>% arrange(-avg_logFC) %>% write.table(file="Azizi_Treg_DE_markers.txt", sep="\t",row.names = FALSE,quote=FALSE)
+
+Treg <- FindMarkers(object=brca, ident.1="CD4 T reg",ident.2=NULL min.pct=0.5, logfc.threshold = 0.3)
+FindMarkers()
+#min.pct is the minimum proportion of cells expression the marker in either group. 
+all.markers %>% group_by(cluster) %>% filter(avg_logFC >= 0) %>% top_n(20, avg_logFC)
+```
+
+```{r}
+Tcells_8vs2 <- FindMarkers(object=brca, ident.1=c(8), ident.2 =c(2), min.pct=0.5, logfc.threshold = 0.3)
+Tcells_8vs2 %>% mutate(gene=rownames(Tcells_8vs2)) %>% arrange(-avg_logFC)
+
+Tcells3_vs_16 <- FindMarkers(object=brca, ident.1=c(3), ident.2 =c(1,6), min.pct=0.5, logfc.threshold = 0.3)
+Tcells3_vs_16 %>% mutate(name=rownames(Tcells3_vs_16)) %>% arrange(-avg_logFC)
+
+Tcells9_vs_All <- FindMarkers(object=brca, ident.1="9. Mixed", min.pct=0.5, logfc.threshold = 0.3)
+Tcells9_vs_All %>% mutate(name=rownames(Tcells9_vs_All)) %>% arrange(-avg_logFC)
+```
+
+##########
+Violin Plots
+##########
+
+```{r fig.height=24, fig.width=14}
+VlnPlot(object=BRCA_singlet, features.plot = c("NKG7","CD8A","CD4","GNLY","GZMB","PRF1","FOXP3","CTLA4","CCL4","PDCD1","CXCL13","CCR7","SELL","GZMK","MAP4K1","percent.ribo"), do.sort=TRUE,use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE, point.size.use = 0.1) + theme(plot.margin=grid::unit(c(1,1,1,1), "in")) +
+
+VlnPlot(object=brca, features.plot = c("CCR4"), do.sort=TRUE,use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE, point.size.use = 0.1) + theme(plot.margin=grid::unit(c(1,1,1,1), "in")) 
+ggsave("BRCA_Azizi_Vln.jpg", width=14, height=24, dpi=300, plot= last_plot(), units="in")
+
+VlnPlot(object=BRCA_singlet, features.plot = c("nGene","nUMI"), use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE, point.size.use = 0.1 ) + theme(plot.margin=grid::unit(c(1,1,1,1), "in"))
+# Cluster 9 is doublets
+```
+ 
+ 
+  CALCULATE AVERAGE EXPRESSION PER CLUSTER
+
+#################################################
+#################################################
+
+```{r}
+cluster.averages <- AverageExpression(object = BRCA_singlet, return.seurat = TRUE)
+```
+```{r}
+str(cluster.averages@data)
+
+export_cluster9 <- as.data.frame(as.matrix(cluster.averages@data))
+head(export_cluster9) #The row names need to be added to the data table, or write_tsv will omit them
+export_cluster9 %<>% mutate(Gene=rownames(export_cluster9))
+export_cluster9 %<>% dselect(Gene, 1:9)
+write_tsv(export_cluster9, "Azizi_Tcell_cluster_Ave_Expression.txt")
+```
+
+Differential expression table
+
+```{r}
+View(cluster.averages)
+```
+From visualizing the PCs across clusters, it's obvious that PC9 is the last one that separates clusters from each other. Try reclustering with just 9 PCs
+
+
+```{r}
+DoHeatmap(object = cluster.averages, genes.use = PCTopGenes(object = brca, pc.use = 5, do.balanced = TRUE), group.label.rot = TRUE, group.cex = 0)
+ggsave("Heatmap_PC20_Trm.jpg", width= 9, height=7, dpi=600, plot= hi, units = "in")
+```
+
+############
+Re-label Cluster Names
+#############
+```{r}
+current.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+current.cluster.ids <- c("0. Naive CD4 T","1. Effector GZMK CD8 T" ,"2. Memory CD4 T","3. Effector GNLY CD8 T","4. CD4 T reg","5. Follicular Helper CD4 T","6. Effector memory CD8 T","7. Resident memory CD8 T","8. Central memory CD4 T")
+
+new.cluster.ids <- c("0. Naive CD4 T","1. Effector CD8 T","2. Memory CD4 T","3. CD8 T Effector memory", "4. CD4 T reg", "5. Follicular Helper CD4 T","6. Effector memory CD8 T","7. Resident memory CD8 T","8. Central memory CD4 T")
+
+brca@ident <- plyr::mapvalues(x = brca@ident, from = current.cluster.ids, to = new.cluster.ids)
+levels(brca@ident)
+```
+##########
+##########
+HPK1
+Violin Plots
+##########
+##########
+```{r fig.height=10, fig.width=10}
+VlnPlot(object=brca, features.plot = c("MTRNR2L12"), use.raw = FALSE, y.log = FALSE, x.lab.rot = TRUE, point.size.use = 0.05, single.legend=TRUE, do.sort=TRUE) + theme(plot.margin=grid::unit(c(1,1,1,1), "in")) 
+ggsave("BRCA_Azizi_HPK1.jpg", width=8, height=8, dpi=300, plot= last_plot(), units="in")
+
+FeaturePlot(object=BRCA_singlet, features.plot = c("MAP4K1","percent.ribo"),cols.use=c("grey90","blue"), nCol=2, no.legend=FALSE, reduction.use = "umap") 
+```
+
+
+
+##########
+##########
+Kinase Look-up
+Violin Plots
+##########
+##########
+
+```{r fig.height=25, fig.width=25}
+VlnPlot(object=brca_siglet, features.plot = c("CDK9",	"CDK7",	"CLK2",	"CDK6",	"GSK3B",	"CSNK1D",	"DYRK1A",	"DYRK1B",	"CDK2",	"CDK9",	"GSK3A",	"CSNK1E"), use.raw = FALSE, y.log = TRUE, x.lab.rot = TRUE, point.size.use = 0.05, single.legend=TRUE) 
+
+VlnPlot(object=brca_siglet, features.plot = c("CLK2"), use.raw = FALSE, y.log = FALSE, x.lab.rot = TRUE, point.size.use = 0.05, single.legend=TRUE) 
+
+VlnPlot(object=brca, features.plot = c("EIF2AK2",	"LIMK1",	"SGK1","CAMK1D","CDK4",	"DYRK2","CDK2",	"TAOK2",	"PRKAA1","CSNK1G3",	"CDK5",	"PKMYT1","PRKAG2",	"CDK1",	"RPS6KA1"), use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE, point.size.use = 0.05) 
+
+ggsave("BRCA_Azizi_Vln_Kinases_2.jpg", width=25, height=25, dpi=300, plot= last_plot(), units="in")
+
+#second batch
+VlnPlot(object=BRCA_singlet, features.plot = c("CDK16",	"CDK19","CDK4",	"CDK5",	"CDK6",	"CSNK1A1",	"CSNK1G1",	"CSNK2A1",	"CLK1",	"CLK4",	"DAPK3","HIPK2","CHUK",	"ITK","MAP3K11","MELK","MINK1","NEK1","PASK",	"PIM1",	"PIM3",	"PRKX",	"RPS6KA2",	"RPS6KA3",	"RPS6KA4",	"RPS6KA5"), use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE, point.size.use = 0.05) 
+
+BRCA_singlet@data[c("CDK9",	"CDK7",	"CLK2",	"CDK6",	"GSK3B",	"CSNK1D",	"DYRK1A",	"DYRK1B",	"CDK2",	"CDK9",	"GSK3A","CSNK1E","EIF2AK2",	"LIMK1",	"SGK1","CAMK1D","CDK4",	"DYRK2","CDK2",	"TAOK2",	"PRKAA1","CSNK1G3",	"CDK5",	"PKMYT1","PRKAG2",	"CDK1",	"RPS6KA1","CDK16",	"CDK19","CDK4",	"CDK5",	"CDK6",	"CSNK1A1",	"CSNK1G1",	"CSNK2A1",	"CLK1",	"CLK4",	"DAPK3","HIPK2","CHUK",	"ITK","MAP3K11","MELK","MINK1","NEK1","PASK",	"PIM1",	"PIM3",	"PRKX",	"RPS6KA2",	"RPS6KA3",	"RPS6KA4",	"RPS6KA5"),]
+head(rownames(BRCA_singlet@data))
+str(cluster.averages)
+```
+##################
+Write averages to text output
+####################
+
+```{r}
+library(data.table)
+ave.kinase <- as.data.frame(as.matrix(cluster.averages@data[c("CDK9",	"CAMK1D",	"CDK1",	"CDK16",	"CDK19",	"CDK2",	"CDK2",	"CDK4",	"CDK4",	"CDK5",	"CDK5",	"CDK6",	"CDK6",	"CDK7",	"CDK9",	"CHUK",	"CLK1",	"CLK2",	"CLK4",	"CSNK1A1",	"CSNK1D",	"CSNK1E",	"CSNK1G1",	"CSNK1G3",	"CSNK2A1",	"DAPK3",	"DYRK1A",	"DYRK1B",	"DYRK2",	"EIF2AK2",	"GSK3A",	"GSK3B",	"HIPK2",	"ITK",	"LIMK1",	"MAP3K11",	"MELK",	"MINK1",	"NEK1",	"PASK",	"PIM1",	"PIM3",	"PKMYT1",	"PRKAA1",	"PRKAG2",	"PRKX",	"RPS6KA1",	"RPS6KA2",	"RPS6KA3",	"RPS6KA4",	"RPS6KA5","SGK1",	"TAOK2"),]))
+write.table(ave.kinase, file="Kinase_average_expression_Azizi.txt", col.names= TRUE, quote=FALSE, sep="\t")
+```
+Heatmap of Cell cluster averages
+
+```{r}
+DoHeatmap(object = cluster.averages, genes.use = c("CDK9",	"CAMK1D",	"CDK1",	"CDK16",	"CDK19",	"CDK2",	"CDK2",	"CDK4",	"CDK4",	"CDK5",	"CDK5",	"CDK6",	"CDK6",	"CDK7",	"CDK9",	"CHUK",	"CLK1",	"CLK2",	"CLK4",	"CSNK1A1",	"CSNK1D",	"CSNK1E",	"CSNK1G1",	"CSNK1G3",	"CSNK2A1",	"DAPK3",	"DYRK1A",	"DYRK1B",	"DYRK2",	"EIF2AK2",	"GSK3A",	"GSK3B",	"HIPK2",	"ITK",	"LIMK1",	"MAP3K11",	"MELK",	"MINK1",	"NEK1",	"PASK",	"PIM1",	"PIM3",	"PKMYT1",	"PRKAA1",	"PRKAG2",	"PRKX",	"RPS6KA1",	"RPS6KA2",	"RPS6KA3",	"RPS6KA4",	"RPS6KA5","SGK1",	"TAOK2"),use.scaled = FALSE, group.label.rot = TRUE, group.cex = 0, disp.max=2,col.low="black", col.mid="blue",col.high="yellow", group.order= c("1. Effector GZMK CD8 T","3. Effector GNLY CD8 T","6. Effector CD8 T","7. Resident memory CD8 T","0. Naive CD4 T","8. CD4 T","5. Helper CXCL13 CD4 T","2. Memory CD4 T","4. CD4 T reg")) +
+
+ggsave("BRCA_Azizi_Vln_Kinases_Heatmap.jpg", width=8, height=12, dpi=600, plot= last_plot(), units="in")
+```
+
+
+###########
+Filter out Cluster 9 doublet cells
+##########
+```{r}
+brca_siglet <- SubsetData(brca, ident.remove = "9. Mixed", accept.low = -Inf, accept.high = Inf,
+  accept.value = NULL, do.center = FALSE, do.scale = FALSE,
+  max.cells.per.ident = Inf, random.seed = 1)
+```
+
+#####################
+#####################
+
+Subset  CD4 cells to find functional clusters
+
+#####################
+SubsetData does not subset the raw data, which is still the same as the original file in @raw.data
+subset.raw = TRUE to subset the raw data as well
+#####################
+
+```{r}
+# Can I create a Seurat object of just the NK cells and B cells?
+levels(brca@ident)
+table(brca@ident)
+brca.CD4.subset <- SubsetData(object =brca, subset.raw = TRUE, ident.use = c("0. Naive CD4 T","2. Memory CD4 T","4. CD4 T reg","8. Central memory CD4 T"))
+brca.Th <- SubsetData(object =brca, subset.raw = TRUE, ident.use = c("2. Memory CD4 T","8. Central memory CD4 T"))
+levels(brca.CD4.subset@ident)
+```
+
+This step identifies variable genes for downstream analysis
+Cutoff for high average expression, which should exclude the RPL genes, which are not very informative)
+```{r fig.height=15, fig.width=20}
+brca.Th <- FindVariableGenes(brca.Th, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0, x.high.cutoff = 3, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+
+brca.CD4.subset <- FindVariableGenes(brca.CD4.subset, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0, x.high.cutoff = 3, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+length(brca.CD4.subset@var.genes) #2403
+```
+
+PCA
+```{r}
+brca.Th <- RunPCA(object = brca.Th, pc.genes = brca.CD4.subset@var.genes, pcs.compute = 20, do.print = TRUE, pcs.print = 1:20, 
+    genes.print = 10)
+brca.CD4.subset <- RunPCA(object = brca.CD4.subset, pc.genes = brca.CD4.subset@var.genes, pcs.compute = 20, do.print = TRUE, pcs.print = 1:20, 
+    genes.print = 10)
+PrintPCA(object = brca.CD4.subset, pcs.print = 1:20, genes.print = 10, use.full = FALSE)
+#this process can take a long time
+brca.CD4.subset <- JackStraw(object = brca.CD4.subset, num.replicate = 100, display.progress = FALSE, num.pc = 20)
+
+PCElbowPlot(object = brca.CD4.subset)
+PCElbowPlot(object = brca.Th)
+#Elbow looks like it's at PC 14
+```
+
+Cluster cells into groups. Using graph-cased clustering. The method embeds cells in a graph structure, like a K-nearest neighbour graph, and then refines the edges. The cells are grouped iteratively. 
+```{r}
+brca.Th <- FindClusters(brca.Th,reduction.type = "pca",
+  dims.use = 1:15, k.param = 6, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = TRUE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 0.4, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+levels(brca.Th@ident)
+
+brca.CD4.subset <- FindClusters(brca.CD4.subset,reduction.type = "pca",
+  dims.use = 1:15, k.param = 6, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = TRUE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 0.4, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+levels(brca.CD4.subset@ident)
+PrintFindClustersParams(object=brca.CD4.subset)
+```
+
+
+##################
+Run UMAP for visualization as comparison
+###################
+```{r}
+brca.Th <- RunUMAP(brca.Th,dims.use = 1:15, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 200L,
+  min_dist = 0.7, seed.use = 42, metric="manhattan")
+
+brca.CD4.subset <- RunUMAP(brca.CD4.subset,dims.use = 1:15, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 200L,
+  min_dist = 0.7, seed.use = 42, metric="manhattan")
+```
+
+```{r fig.height=20, fig.width=20}
+DimPlot(object = brca.CD4.subset, do.label = TRUE, reduction.use = 'umap', pt.size = 2, label.size = 6) 
+ggsave("UMAP_CT26_CD4.jpg", width=8, height=6, dpi=600, plot= last_plot(), units="in")
+
+DimPlot(object = brca.Th, do.label = TRUE, reduction.use = 'tsne', pt.size = 2, label.size = 6) 
+
+# CD25 = Il2RA
+FeaturePlot(object=brca.Th, features.plot = c("SELL","CCR7","CD3D","CD8A","CD4","GZMK","PRF1","NKG7","FOXP3","CCR4","CD28","IL2RA","CD38","CCR5","CCR6","CXCR3","GATA3","CXCL13"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "tsne", nCol = 3) 
+ggsave("CD4cells_AziziT_featureplot.jpg", width= 10, height=16, dpi=600, plot=last_plot(), units = "in")
+FeaturePlot(object=CD4.subset, features.plot = c("IL4","IL13"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") 
+
+FeaturePlot(object=brca.Th, features.plot = c("SELL","CCR7","CD3D","CD8A","CD4","GZMK","PRF1","NKG7","FOXP3","CCR4","CD28","IL2RA","CD38","CCR5","CCR6","CXCR3","GATA3","CXCL13"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "tsne", nCol = 3) 
+
+FeaturePlot(object=brca, features.plot = c("CD8A","CD4","CCR4","CCR5","CCR6","GATA3","DOK1","AZGP1","FOXP3"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "tsne", nCol = 3) 
+
+ggsave("CD4cells_AziziT_The_missing_Th2.jpg", width= 16, height=10, dpi=600, plot=last_plot(), units = "in")
+FeaturePlot(object=CD4.subset, features.plot = c("IL4","IL13"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") 
+
+VlnPlot(object=brca.CD4.subset, features.plot = c("CCR4","GATA3","CXCR3","FOXP3","NELL2"))
+table(T.subset@ident)
+
+```
+```{r}
+Group1 <- FindMarkers(object=brca.Th, ident.1=1, min.pct=0.5, logfc.threshold = 0.5)
+Group1 %>% mutate(gene=rownames(Group1)) %>% arrange(-avg_logFC)
+```
+
+
+
+```{r fig.height=10, fig.width=10}
+DoHeatmap(object = brca.CD4.subset, genes.use = PCTopGenes(object = brca.CD4.subset, pc.use = 4, 
+    do.balanced = TRUE), group.label.rot = TRUE, group.cex = 0) #, group.by=T.subset@ident
+```
+Overlay
+```{r}
+Th1
+FeaturePlot(object=brca.Th, features.plot = c("CCR4","CCR6"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "tsne") #,min.cutoff= 'q20'
+Th17 none
+FeaturePlot(object=brca.CD4.subset, features.plot = c("NAGS","DOK1"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE)
+s5_CATGCCTGTCTCTTTA.1
+#T H1, H2, H17 overlaps?
+FeaturePlot(object=brca.CD4.subset, features.plot = c("CCR4","GATA3"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE)
+
+FeaturePlot(object=brca.CD4.subset, features.plot = c("DOK1","GATA3"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE,pt.size =1)
+
+FeaturePlot(object=brca.CD4.subset, features.plot = c("CCR4","CXCL13"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE)
+
+FeaturePlot(object=brca.CD4.subset, features.plot = c("DOK1","CCR4"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE)
+
+FeaturePlot(object=brca.CD4.subset, features.plot = c("CD8A","CD8B"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE)
+
+ggsave("DOK1_FOXP3_AziziTcells.jpg", width= 8, height=5, dpi=600, plot=last_plot(), units = "in")
+```
+
+Differential Analysis
+```{r}
+DA <- FindAllMarkers(CD4.subset)
+DA %>% dfilter(cluster==4) %>% arrange(-avg_logFC)
+c2 <- DA %>% dfilter(cluster==2) %>% arrange(-avg_logFC) %>% dselect(gene)
+c2
+```
+
+Find number of cells that have overlapping expression
+Use the raw data matrix, it's hard to find cutoffs for imputed data
+CD4 cell clusters: 15559 cells out of 28000 total T cells
+```{r}
+
+expression_matrix <- read.table("GSE114724_rna_raw.tsv", skip=1, header=TRUE, row.names=1, sep="\t",colClasses=c("character",rep("numeric",28013)))
+expression_matrix <- as.matrix(expression_matrix)
+# Median 0.113, cutoff 0.2
+
+hist(expression_matrix["CXCL13",], xlim=range(1,100)) #Th1 marker
+hist(expression_matrix["CCR7",]) #Th1 marker
+hist(expression_matrix["CCR6",]) # Th17 marker
+hist(expression_matrix["GATA3",]) # Th2 marker
+hist(expression_matrix["FOXP3",]) # Th2 marker
+
+ccr7 <- expression_matrix["CCR7",] > 1 # 
+cxcl13 <- expression_matrix["CXCL13",] > 15 # 
+nags <- expression_matrix["NAGS",] > 0 # 
+znf436 <- expression_matrix["ZNF436",] > 0 # 
+dok1 <- expression_matrix["DOK1",] > 0 # CRTH2 
+tbet <- expression_matrix["TBX21",] > 0#TBET TBX21
+PTGDR2  <- expression_matrix["PTGDR2 ",] > 0 # CRTH2
+cd8a <- expression_matrix["CD8A",] > 0
+cd8b <- expression_matrix["CD8B",] > 0
+cd4 <- expression_matrix["CD4",] > 0
+il2ra <- expression_matrix["IL2RA",] > 0
+ccr4 <- expression_matrix["CCR4",] > 0
+ccr5 <- expression_matrix["CCR5",] > 0
+cxcr3 <- expression_matrix["CXCR3",] > 0
+ccr6 <- expression_matrix["CCR6",] > 0
+gata3 <- expression_matrix["GATA3",] > 0
+foxp3 <- expression_matrix["FOXP3",] > 0
+length(ccr7[ccr7 == TRUE]) #5223 in clustering; 6248 here
+length(cxcl13[cxcl13 == TRUE]) #2607
+length(tbet[tbet == TRUE]) #4938
+length(nags[nags == TRUE]) #312
+length(znf436[znf436 == TRUE]) #287
+length(dok1[dok1 == TRUE]) #2227
+length(cd8b[cd8b ==TRUE]) #11796 10826
+length(cd4[cd4 ==TRUE]) #8271
+length(il2ra[il2ra == TRUE]) # 2299
+length(ccr4[ccr4 == TRUE]) # 3235
+length(ccr5[ccr5 == TRUE]) # 3384
+length(ccr6[ccr6 == TRUE]) # 2578
+length(cxcr3[cxcr3 == TRUE]) # 15142
+length(gata3[gata3 == TRUE]) # 10766; >1 3770
+length(foxp3[foxp3 == TRUE]) # 3279
+expression_matrix[c("CCR4","CCR5"),"s5_CATGCCTGTCTCTTTA.1"]
+ccr4ccr5 <- expression_matrix
+
+ccr4ccr5 <- expression_matrix["CCR7",] > 1 & expression_matrix["CCR4",] > 0
+length(ccr4ccr5[ccr4ccr5 == TRUE]) # 485
+
+combo <- expression_matrix["CCR4",] > 0 & expression_matrix["DOK1",] > 0 
+length(combo[combo == TRUE]) # 485
+
+
+expression_matrix[c("CCR4","CCR5"),"s5_TGGCTGGTCTTTAGGG.1"] # checks out
+#ccr4[ccr4 == TRUE][1:5] == ccr5[ccr5 == TRUE][1:5] # this is indiscriminate for the barcode, it just compares the boolean
+
+len(ccr4)
+len(cxcr3)
+table(ccr4 == cxcr3)
+median(expression_matrix["CCR4",])
+```
+
+```{r fig.height=10, fig.width=5}
+VlnPlot(brca, features.plot = c("CCR4"), x.lab.rot = TRUE, do.sort=TRUE, use.raw = TRUE) +
+  ggsave("Violin_CCR4_brca.jpg",plot= last_plot(), width = 7, height = 10, units="in" , dpi=600)
+
+VlnPlot(brca.CD4.subset, features.plot = c("CCR4"), x.lab.rot = TRUE, do.sort=TRUE, use.raw = TRUE)
+```
+

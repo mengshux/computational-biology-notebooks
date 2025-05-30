@@ -1,0 +1,362 @@
+---
+title: "Guttman_data"
+author: "Mengshu"
+date: "8/7/2019"
+output: html_document
+---
+
+This data is Affy_HG_U133_plus_2
+The probe suffix meaning are as follows:
+_at = probe matches a single transcript perfectly
+_a_at = matches multiple trancripts of a gene
+_s_at = matches genes in the same family
+_x_at = matches identical or similar loci
+```{r}
+library(data.table) #%like% function
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+library(tidyr)
+library(tidyverse)
+library(tibble)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+library(ggbeeswarm)
+library(rlang)
+library(broom)
+library(DESeq2)
+```
+
+JAK inhibitor treatment: Oral JAK/SYK-inhibition (ASN002) suppresses inflammation and improves epidermal barrier markers in atopic dermatitis
+https://doi.org/10.1016/j.jaci.2019.07.013
+
+Dupilumab Treatment, Day 0, 4, 16 Lesional and NL. GSE130588
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE130588
+
+
+The Array data is already normalized
+Get the logical sample order
+Select markers of interest from data matrix, transpose
+Merge with the metadata to get it in the correct order 
+gather and plot
+```{r}
+AD_JAK <- read.table("/Volumes/Enterprise/FLX/Atopic_Dermatitis/Guttman_data/RNA_matrix.txt", header=TRUE, sep="\t")
+AD_DUPI <- read.table("/Volumes/Picard/FLX/Atopic_Dermatitis/Guttman_data/GSE130588_Dupi_matrix.txt", header=TRUE, sep="\t")
+
+boxplot(AD_DUPI[2:209])
+
+AD_JAK_meta <- read.table("/Volumes/Picard/FLX/Atopic_Dermatitis/Guttman_data/meta_data.txt", header=FALSE, sep="\t")
+AD_meta <- AD_JAK_meta %>% dselect(-V1) %>% t %>% data.frame %>% separate(X1, remove=FALSE, into=c("Num","Treatment","Skin","Day"))
+AD_meta %>% dselect(-Sample) %>% table
+AD_meta %<>% mutate(Day=base::substring(Day,4,6)) %>% mutate(Treatment= factor(Treatment,levels=c("Placebo","20mg","40mg","80mg")), Skin=factor(Skin, levels=c("NL","LS"))) %>% arrange(Treatment,Skin,Day) %>% dselect(-X1, -Num)
+colnames(AD_meta) <- c("Treatment", "Skin", "Day", "Sample")
+save(AD_meta, file="AD_Meta.rdata")
+
+AD_Dupi_meta <- read.table("/Volumes/Picard/FLX/Atopic_Dermatitis/Guttman_data/GSE130588_meta.txt", header=FALSE, sep="\t")
+rownames(AD_Dupi_meta) <- c("Info","Sample","Treatment")
+AD_Dupi_meta %<>% dselect(-V1)  %>% t %>% data.frame %>% separate(Info, sep=" |,", into=c("Trash","Subject","at", "week","Week","Skin_type")) %>% dselect(-Trash,-at,-week) 
+AD_Dupi_meta  %<>% mutate(Skin_type= factor(Skin_type,levels=c("Normal","non-lesional","lesional"))) %>% mutate(Treatment = case_when(
+  Treatment %like% "Dupilumab$" ~ "Dupilumab",
+  Treatment %like% "Placebo$" ~ "Placebo",
+  Treatment %like% "NA$" ~ "Control"))
+
+# mutate(Skin_type=ifelse(is.na(Skin_type),"normal",Skin_type)) %>% 
+```
+
+Translate array spots to genes
+#FOXP3 has 3 proves on the U133 array, but none of them appear in this dataset
+No CCR4 in the dataset
+Hierarchy of probes:
+_at = probe matches a single transcript perfectly
+_a_at = matches multiple trancripts of a gene
+_s_at = matches genes in the same family
+_x_at = matches identical or similar loci
+```{r}
+BiocManager::install("pd.hg.u133.plus.2")
+source("http://www.bioconductor.org/biocLite.R")
+require("biomaRt")
+listMarts() # find the name for the ENSEMBL database
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+listDatasets(mart) #find the species
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+listAttributes(mart) # find the data slot that you want to retrieve
+
+annotLookup <- getBM(
+  mart = mart,
+  attributes = c(
+    "ensembl_transcript_id_version",
+    "external_gene_name")
+  )
+colnames(annotLookup) <- c("ID_REF","Gene")
+save(annotLookup,file="Human_ENSEMBL_transcript_2_HUGO.rdata")
+
+load(file="AffyHG_U133_Plus2_2_HUGO.rdata")
+
+AD_JAK <- left_join(AD_JAK,annotLookup, by="ID_REF") %>% dselect(ID_REF, Gene, everything())
+AD_JAK %>% arrange(Gene)
+length(unique(AD_JAK$Gene))
+length(AD_JAK$Gene)
+save(AD_JAK, file="AD_JAK_HUGO.rdata")
+load("AD_JAK_HUGO.rdata")
+
+AD_DUPI <- left_join(AD_DUPI,annotLookup, by="ID_REF") %>% dselect(ID_REF, Gene, everything())
+save(AD_DUPI, file="/Volumes/Picard/FLX/Atopic_Dermatitis/Guttman_data/AD_DUPI.rdata")
+
+```
+
+Groom data for QuantiSeq, and for other analysis: requires unique gene rows
+
+Remove duplicate probes, selection for the more specific probe classes in each case
+_a_at   _at _f_at _g_at _i_at _r_at _s_at _x_at 
+  594 19096     3    10     8    11  9067  3649 
+  Unfiltered: 32438 probes
+  Unique: 16256 probes
+  Then only the keep the first, most specific probe type for a gene. Get rid of the rest
+```{r}
+AD_JAK %>% mutate(probe_type= sub("^[0-9]*","",ID_REF)) %>% dselect(probe_type) %>% table 
+
+AD_JAK_unique <- AD_JAK %>% mutate(probe_type= sub("^[0-9]*","",ID_REF)) %>% dselect(ID_REF, probe_type,Gene, everything()) %>% mutate(probe_type=factor(probe_type, levels=c("_at","_a_at","_s_at","_x_at" ,"_i_at", "_f_at", "_g_at","_r_at"))) %>% arrange(Gene,probe_type) %>% group_by(Gene) %>% dfilter(row_number() == 1) %>% ungroup()
+#AD_JAK_unique %>% dfilter(Gene=="IL34")
+save(AD_JAK_unique,file="AD_JAK_unique.rdata")
+load("AD_JAK_unique.rdata")
+write.table(AD_JAK_unique %>% dselect(-ID_REF,-probe_type) %>% dfilter(!is.na(Gene)),file="AD_JAK_unique_matrix.txt", row.names = FALSE, sep="\t")
+
+AD_DUPI_unique <- AD_DUPI %>% mutate(probe_type= sub("^[0-9]*","",ID_REF)) %>% dselect(ID_REF, probe_type,Gene, everything()) %>% mutate(probe_type=factor(probe_type, levels=c("_at","_a_at","_s_at","_x_at" ,"_i_at", "_f_at", "_g_at","_r_at"))) %>% arrange(Gene,probe_type) %>% group_by(Gene) %>% dfilter(row_number() == 1) %>% ungroup()
+
+```
+
+QuantiSeq data analysis
+```{r}
+QS <- read.table("quanTIseq_cell_fractions.txt", sep="\t", header=TRUE)
+QS_Treg <- QS %>% dselect(Sample,Tregs) %>% mutate(Treg_QuantiSeq=Tregs) %>% dselect(-Tregs)
+QS_Treg_gather <- left_join(AD_meta, QS_Treg, by="Sample") %>% gather(Treg_QuantiSeq, Signal, -Treatment,-Skin,-Day,-Sample)
+
+ggplot(QS_Treg_gather %>% dfilter(Day !=15), aes(x=Treatment, y=Signal, colour=Skin, fill=Day)) + 
+  facet_wrap(~Treg_QuantiSeq, ncol=1, scales="free_y") + 
+  geom_boxplot(varwidth=TRUE, outlier.size = 1, size=0.3) + 
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.65)) + 
+  scale_fill_manual(values=c("lightsteelblue1","royalblue1")) +
+  ylim(0.025,0.1) +
+  scale_colour_manual(values=c("darkorange2","blue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) +
+  ggsave("AD_Treg_sig_QuantiSeq.jpg", dpi= 600, width= 7, height= 4, units="in")
+```
+
+
+
+
+
+,"DOK1"
+Select markers of interest
+```{r fig.height=15, fig.width=24}
+AD_markers_h <- c("CCR4", "CCL17", "CCL22","CXCR6","FOXP3","GATA3","IFNG","IL5","IL6","IL9","IL10","IL13","IL17B","IL20","IL22","IL33","IL34","IL35","IL37","IL4","IL5","PDCD1","TGFB1","TGFB2","TSLP","KCNK6","IL1B","NLRP3")
+AD_JAK %>% dfilter(Gene %in% AD_markers_h) %>% arrange(Gene)
+#AD_JAK_strict <- AD_JAK %>% dfilter(ID_REF %like% "_a_at"| ID_REF %like% "_s_at"|ID_REF %like% "[0-9]_at") #ID_REF %like% "_s_at" |
+AD_JAK_t <-  AD_JAK_unique %>% dfilter(Gene %in% AD_markers_h) %>% arrange(Gene) %>% dselect(-ID_REF, -probe_type) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") 
+AD_JAK_gather <- left_join(AD_meta, AD_JAK_t, by="Sample") %>% gather(Gene, Signal, -Treatment,-Skin,-Day,-Sample) 
+
+ggplot(AD_JAK_gather, aes(x=interaction(Treatment,Skin), y=Signal, colour=Skin, fill=Day)) + 
+  facet_wrap(~Gene, ncol=3, scales="free_y") + 
+  geom_boxplot(varwidth=TRUE, outlier.size = 1, size=0.3) + 
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.65)) + 
+  scale_fill_brewer() +
+  scale_colour_manual(values=c("darkorange2","blue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) +
+  ggsave("AD_JAK_panel.jpg", dpi= 600, width= 20, height= 12, units="in")
+
+
+AD_DUPI_t <-  AD_DUPI_unique %>% dfilter(Gene %in% AD_markers_h) %>% arrange(Gene) %>% dselect(-ID_REF, -probe_type) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") 
+AD_DUPI_gather <- left_join(AD_Dupi_meta %>% dselect(-Subject), AD_DUPI_t, by="Sample") %>% gather(Gene, Signal, -Treatment,-Skin_type,-Week,-Sample) %>% mutate(Treatment = factor(Treatment, levels=c("Control","Placebo","Dupilumab")))
+
+ggplot(AD_DUPI_gather %>% dfilter(Week != 4), aes(x=interaction(Treatment), y=Signal, colour=Skin_type, fill=Week)) + 
+  facet_wrap(~Gene, ncol=5, scales="free_y") + 
+  geom_boxplot(varwidth=TRUE, outlier.size = 1, size=0.3) + 
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.65)) + 
+  scale_fill_manual(values=c("lightsteelblue1","royalblue1")) +
+  scale_colour_manual(values=c("firebrick3","darkorange2","blue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) +
+  ggsave("AD_DUPI_panel.jpg", dpi= 600, width= 24, height= 15, units="in")
+
+ggplot(AD_DUPI_gather %>% dfilter(Week != 4), aes(x=Skin_type, y=Signal, colour=Treatment, fill=Week)) + 
+  facet_wrap(~Gene, ncol=4, scales="free_y") + 
+  geom_boxplot(varwidth=TRUE, outlier.size = 1, size=0.3) + 
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.6)) + 
+  scale_fill_manual(values=c("lightsteelblue1","royalblue1")) +
+  scale_colour_manual(values=c("firebrick3","darkorange2","blue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) 
+```
+
+Proxy of T reg cells using xCell signature genes
+9 differnt signatures exist
+Treg_allMarker has 39 markers
+```{r}
+Tregs_BLUEPRINT_1 <- c("CCR3","CTLA4","IL2RA","PLCL1","PPM1B","TTN","ZNF236","STAM","UBE4A","CXCR6","IPCEF1","ICOS","VPS54","LAX1","BANP","ATG2B","ZCCHC8","TULP4","IKZF4","ZMYM1","ZFC3H1","MCM9")
+Tregs_BLUEPRINT_2 <- c("CTLA4","IL2RA","PLCL1","ZNF236","STAM","IPCEF1","ICOS","BANP","IKZF4")
+Tregs_BLUEPRINT_3 <- c("CTLA4","IL2RA","PLCL1","PPM1B","ZNF236","STAM","IPCEF1","ICOS","VPS54","BANP","ATG2B","ZCCHC8","TULP4","IKZF4","ZFC3H1")
+Tregs_FANTOM_1 <- c("CTLA4","IL2RA","PLCL1","ZNF236","STAM","IPCEF1","ICOS","BANP","IKZF4")
+Tregs_FANTOM_2 <- c("CTLA4","IL2RA","PLCL1","PPM1B","ZNF236","STAM","IPCEF1","ICOS","VPS54","BANP","ATG2B","ZCCHC8","TULP4","IKZF4","ZFC3H1")
+Tregs_FANTOM_3 <- c("CD5","CD28","CCR4","CCR8","CTLA4","GPR25","IL2RA","IL10RA","ITGB7","KCNA2","PLCL1","RGS1","SPTAN1","HS3ST3B1","MCF2L2","GALNT8","SIT1","ICOS","FOXP3","LRP2BP","TULP4")
+Tregs_HPCA_1 <- c("CCR4","CCR8","CTLA4","GPR25","IL2RA","KCNA2","LAIR2","RGS1","HS3ST3B1","MCF2L2","ICOS","FOXP3")
+Tregs_HPCA_2 <- c("CCR4","CCR8","CTLA4","GPR25","IL2RA","KCNA2","LAIR2","HS3ST3B1","MCF2L2","FOXP3")
+Tregs_HPCA_3 <- c("CCR4","CCR8","CTLA4","GPR25","IL2RA","KCNA2","LAIR2","RGS1","HS3ST3B1","MCF2L2","FOXP3")
+
+Treg_allMarker <- unique(c("CCR3","CTLA4","IL2RA","PLCL1","PPM1B","TTN","ZNF236","STAM","UBE4A","CXCR6","IPCEF1","ICOS","VPS54","LAX1","BANP","ATG2B","ZCCHC8","TULP4","IKZF4","ZMYM1","ZFC3H1","MCM9","CD5","CD28","CCR4","CCR8","CTLA4","GPR25","IL2RA","IL10RA","ITGB7","KCNA2","PLCL1","RGS1","SPTAN1","HS3ST3B1","MCF2L2","GALNT8","SIT1","ICOS","FOXP3","LRP2BP","TULP4","CCR4","CCR8","CTLA4","GPR25","IL2RA","KCNA2","LAIR2","RGS1","HS3ST3B1","MCF2L2","ICOS","FOXP3"))
+
+Th2_IRIS_1 <- c("GZMK","IL5","IL13","MAD2L1","RRM2","BAG2","CXCR6","CEP55")
+Th2_IRIS_2 <- c("IL5","IL13","MAD2L1","BAG2","CXCR6","RRAS2","CEP55","NUP37")
+Th2_IRIS_3 <- c("GPR15","GZMA","IL5","IL13","SMAD2","CDK2AP1","RGS9","BAG2","SLC25A44","RAD50","CXCR6","TMEM39B","UBAP2","THADA","RNF34","NPHP4")
+```
+
+Z-score the whole data matrix
+
+Both datasets
+```{r}
+function(x) {(x-mean(x,na.rm=TRUE)) / sd(x,na.rm=TRUE)}
+
+AD_JAK_zscore <- AD_JAK_unique %>% dselect(-probe_type,-ID_REF) %>% mutate_if(is.numeric, mx_zscore)
+boxplot(AD_JAK_zscore[4:113])
+
+
+AD_DUPI_zscore <- AD_DUPI_unique %>% dselect(-probe_type,-ID_REF) %>% mutate_if(is.numeric, mx_zscore)
+boxplot(AD_DUPI_zscore[4:113])
+```
+Get signature scores for each sample JAKi dataset
+```{r}
+Treg_BP1 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_1) %>% summarize_if(is.numeric, sum)
+Treg_BP2 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_2) %>% summarize_if(is.numeric, sum)
+Treg_BP3 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_3) %>% summarize_if(is.numeric, sum)
+Treg_FM1 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_FANTOM_1) %>% summarize_if(is.numeric, sum)
+Treg_FM2 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_FANTOM_2) %>% summarize_if(is.numeric, sum)
+Treg_FM3 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_FANTOM_3) %>% summarize_if(is.numeric, sum)
+Treg_HP1 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_HPCA_1) %>% summarize_if(is.numeric, sum)
+Treg_HP2 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_HPCA_2) %>% summarize_if(is.numeric, sum)
+Treg_HP3 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_HPCA_3) %>% summarize_if(is.numeric, sum)
+Treg_All <- AD_JAK_zscore %>% dfilter(Gene %in% Treg_allMarker) %>% summarize_if(is.numeric, sum)
+
+Treg_scores <- rbind(Treg_BP1,Treg_BP2,Treg_BP3,Treg_FM1,Treg_FM2,Treg_FM3,Treg_HP1,Treg_HP2,Treg_HP3,Treg_All)
+Treg_scores %<>% data.frame %>% mutate(Treg_sig= c("Treg_BP1","Treg_BP2","Treg_BP3","Treg_FM1","Treg_FM2","Treg_FM3","Treg_HP1","Treg_HP2","Treg_HP3","Treg_All")) %>% dselect(Treg_sig, everything())
+
+Treg_scores <- rbind(Treg_BP1,Treg_BP2,Treg_BP3,Treg_FM1,Treg_FM2,Treg_FM3,Treg_HP1,Treg_HP2,Treg_HP3)
+Treg_scores %<>% data.frame %>% mutate(Treg_sig= c("Treg_BP1","Treg_BP2","Treg_BP3","Treg_FM1","Treg_FM2","Treg_FM3","Treg_HP1","Treg_HP2","Treg_HP3")) %>% dselect(Treg_sig,everything())
+Treg_scores %<>% summarise_if(is.numeric,mean)
+rownames(Treg_scores) <- "Treg_xCell"
+
+Th2_IRIS_1_score <-  AD_JAK_zscore %>% dfilter(Gene %in% Th2_IRIS_1) %>% summarize_if(is.numeric, sum)
+Th2_IRIS_2_score <-  AD_JAK_zscore %>% dfilter(Gene %in% Th2_IRIS_2) %>% summarize_if(is.numeric, sum)
+Th2_IRIS_3_score <-  AD_JAK_zscore %>% dfilter(Gene %in% Th2_IRIS_3) %>% summarize_if(is.numeric, sum)
+Th2_scores <- rbind(Th2_IRIS_1_score,Th2_IRIS_2_score,Th2_IRIS_3_score)
+Th2_scores %<>% data.frame %>% mutate(Th2_sig= c("Th2_IRIS_1_score","Th2_IRIS_2_score","Th2_IRIS_3_score")) %>% dselect(Th2_sig, everything())
+Th2_scores %<>% summarise_if(is.numeric,mean)
+rownames(Th2_scores) <- "Th2_xCell"
+```
+
+
+Get signature scores for each sample: DUPI dataset
+```{r}
+Treg_BP1 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_1) %>% summarize_if(is.numeric, sum)
+Treg_BP2 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_2) %>% summarize_if(is.numeric, sum)
+Treg_BP3 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_3) %>% summarize_if(is.numeric, sum)
+Treg_FM1 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_FANTOM_1) %>% summarize_if(is.numeric, sum)
+Treg_FM2 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_FANTOM_2) %>% summarize_if(is.numeric, sum)
+Treg_FM3 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_FANTOM_3) %>% summarize_if(is.numeric, sum)
+Treg_HP1 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_HPCA_1) %>% summarize_if(is.numeric, sum)
+Treg_HP2 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_HPCA_2) %>% summarize_if(is.numeric, sum)
+Treg_HP3 <- AD_DUPI_zscore %>% dfilter(Gene %in% Tregs_HPCA_3) %>% summarize_if(is.numeric, sum)
+
+Treg_scores <- rbind(Treg_BP1,Treg_BP2,Treg_BP3,Treg_FM1,Treg_FM2,Treg_FM3,Treg_HP1,Treg_HP2,Treg_HP3)
+Treg_scores %<>% data.frame %>% mutate(Treg_sig= c("Treg_BP1","Treg_BP2","Treg_BP3","Treg_FM1","Treg_FM2","Treg_FM3","Treg_HP1","Treg_HP2","Treg_HP3")) %>% dselect(Treg_sig,everything())
+Treg_scores %<>% summarise_if(is.numeric,mean)
+rownames(Treg_scores) <- "Treg_xCell"
+
+Th2_IRIS_1_score <-  AD_DUPI_zscore %>% dfilter(Gene %in% Th2_IRIS_1) %>% summarize_if(is.numeric, sum)
+Th2_IRIS_2_score <-  AD_DUPI_zscore %>% dfilter(Gene %in% Th2_IRIS_2) %>% summarize_if(is.numeric, sum)
+Th2_IRIS_3_score <-  AD_DUPI_zscore %>% dfilter(Gene %in% Th2_IRIS_3) %>% summarize_if(is.numeric, sum)
+Th2_scores <- rbind(Th2_IRIS_1_score,Th2_IRIS_2_score,Th2_IRIS_3_score)
+Th2_scores %<>% data.frame %>% mutate(Th2_sig= c("Th2_IRIS_1_score","Th2_IRIS_2_score","Th2_IRIS_3_score")) %>% dselect(Th2_sig, everything())
+Th2_scores %<>% summarise_if(is.numeric,mean)
+rownames(Th2_scores) <- "Th2_xCell"
+```
+
+Which markers are actually in the data??
+```{r}
+Treg_BP1 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_1) %>% dselect(Gene) %>% unique()
+Treg_BP2 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_2) %>% summarize_if(is.numeric, sum)
+Treg_BP3 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_BLUEPRINT_3) %>% summarize_if(is.numeric, sum)
+Treg_FM1 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_FANTOM_1) %>% summarize_if(is.numeric, sum)
+Treg_FM2 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_FANTOM_2) %>% summarize_if(is.numeric, sum)
+Treg_FM3 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_FANTOM_3) %>% dselect(Gene) %>% unique()
+Treg_HP1 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_HPCA_1) %>% summarize_if(is.numeric, sum)
+Treg_HP2 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_HPCA_2) %>% dselect(Gene) %>% unique()
+Treg_HP3 <- AD_JAK_zscore %>% dfilter(Gene %in% Tregs_HPCA_3) %>% summarize_if(is.numeric, sum)
+Th2_IRIS_1_score <-  AD_JAK_zscore %>% dfilter(Gene %in% Th2_IRIS_1) %>% dselect(Gene) %>% unique()
+Th2_IRIS_2_score <-  AD_JAK_zscore %>% dfilter(Gene %in% Th2_IRIS_2) %>% summarize_if(is.numeric, sum)
+Th2_IRIS_3_score <-  AD_JAK_zscore %>% dfilter(Gene %in% Th2_IRIS_3) %>% dselect(Gene) %>% unique()
+```
+
+
+Plot
+```{r fig.height=4, fig.width=7}
+AD_Treg_t <-  Treg_scores %>% tibble::column_to_rownames("Treg_sig") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") 
+AD_Treg_gather <- left_join(AD_meta, AD_Treg_t, by="Sample") %>% gather(Gene, Signal, -Treatment,-Skin,-Day,-Sample)
+
+AD_Treg_t <-  Treg_scores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") 
+AD_Treg_gather <- left_join(AD_Dupi_meta, AD_Treg_t, by="Sample") %>% dselect(-Sample,-Subject) %>% gather(Gene, Signal, -Treatment,-Skin_type,-Week) %>% mutate(Treatment=factor(Treatment, levels=c("Control","Placebo","Dupilumab")))
+#Change the LS samples to Day0 to plot them together with the timecourse samples
+
+
+ggplot(AD_Treg_gather, aes(x=Treatment, y=Signal, colour=Skin, fill=Day)) + 
+  facet_wrap(~Gene, ncol=3, scales="free_y") + 
+  geom_boxplot(varwidth=TRUE, outlier.size = 1, size=0.3) + 
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.65)) + 
+  scale_fill_brewer() +
+  scale_colour_manual(values=c("darkorange2","blue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) +
+  ggsave("AD_Treg_sig_xCell.jpg", dpi= 600, width= 7, height= 4, units="in")
+
+#JAK
+ggplot(AD_Treg_gather %>% dfilter(Day !=15), aes(x=Treatment, y=Signal, colour=Skin, fill=Day)) + 
+  facet_wrap(~Gene, ncol=3, scales="free_y") + 
+  geom_boxplot(varwidth=TRUE, outlier.size = 1, size=0.3) + 
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.68)) + 
+  scale_fill_manual(values=c("lightsteelblue1","royalblue1")) +
+  scale_colour_manual(values=c("darkorange2","dodgerblue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) +
+  ggsave("AD_Treg_sig_xCell_no15.jpg", dpi= 600, width= 7, height= 4, units="in")
+
+#DUPI
+ggplot(AD_Treg_gather %>% dfilter(Week !=4), aes(x=Treatment, y=Signal, colour=Skin_type, fill=Week)) + 
+  facet_wrap(~Gene, ncol=3, scales="free_y") + 
+  geom_boxplot(outlier.size = 1, size=0.3) +  #varwidth=TRUE,
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.75)) + 
+  scale_fill_manual(values=c("lightsteelblue1","royalblue1")) +
+  scale_colour_manual(values=c("firebrick3","darkorange2","blue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) +         
+  ggsave("AD_Treg_Dupi_xCell_no4.jpg", dpi= 600, width= 7, height= 4, units="in")
+```
+```{r fig.height=4, fig.width=7}
+AD_Th2_t <-  Th2_scores %>% tibble::column_to_rownames("Th2_sig") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") 
+AD_Th2_gather <- left_join(AD_meta, AD_Th2_t, by="Sample") %>% gather(Gene, Signal, -Treatment,-Skin,-Day,-Sample)
+
+AD_Th2_t <-  Th2_scores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") 
+AD_Th2_gather <- left_join(AD_Dupi_meta, AD_Th2_t, by="Sample")  %>% dselect(-Sample,-Subject) %>% gather(Gene, Signal, -Treatment,-Skin_type,-Week) %>% mutate(Treatment=factor(Treatment,levels=c("Control","Placebo","Dupilumab")))
+
+ggplot(AD_Th2_gather %>% dfilter(Day !=15), aes(x=Treatment, y=Signal, colour=Skin, fill=Day)) + 
+  facet_wrap(~Gene, ncol=3, scales="free_y") + 
+  geom_boxplot(varwidth=TRUE, outlier.size = 1, size=0.3) + 
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.7)) + 
+  scale_fill_manual(values=c("lightsteelblue1","royalblue1")) +
+  #scale_fill_brewer() +
+  scale_colour_manual(values=c("darkorange2","blue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) +
+  ggsave("AD_Th2_xCell_no15.jpg", dpi= 600, width=7, height= 4, units="in")
+
+ggplot(AD_Th2_gather %>% dfilter(Week !=4), aes(x=Treatment, y=Signal, colour=Skin_type, fill=Week)) + 
+  facet_wrap(~Gene, ncol=3, scales="free_y") + 
+  geom_boxplot(varwidth=TRUE,outlier.size = 1, size=0.3) +  #varwidth=TRUE,
+  geom_point(size=1, position=position_jitterdodge(jitter.width=0, dodge.width = 0.6)) + 
+  scale_fill_manual(values=c("lightsteelblue1","royalblue1")) +
+  scale_colour_manual(values=c("firebrick3","darkorange2","blue4")) +
+  theme(axis.text.x = element_text(angle=45,size=14, hjust=1), strip.text = element_text(size=14)) +         
+  ggsave("AD_Th2_Dupi_xCell_no4.jpg", dpi= 600, width= 7, height= 4, units="in")
+```
+

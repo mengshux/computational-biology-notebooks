@@ -1,0 +1,69 @@
+---
+title: "HPK1_assay_correlation"
+author: "MX"
+date: "4/13/2021"
+output: html_document
+---
+
+```{r}
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+library(readxl)
+```
+
+
+```{r}
+hpk <- readxl::read_xlsx("/Volumes/Picard/FLX/HPK1/Correlation plot_excel_Mengshu.xlsx")
+hpk %>% dfilter(!is.na(`High ATP_HPK1_biochemical_ADPGlo`)) %>% summarise(n=n()) # only 24 samples of HIGH ADP
+```
+
+HPK1_BSA SLP76
+```{r fig.height=4, fig.width=5}
+hpk %>% dselect(HPK1_ADPGlo_P_BSA,`HPK1_p-SLP-76 AlphaLISA`) %>% dfilter(!is.na(HPK1_ADPGlo_P_BSA),!is.na(`HPK1_p-SLP-76 AlphaLISA`)) %>% mutate_all(log10) %>%
+  ggplot(aes(HPK1_ADPGlo_P_BSA,`HPK1_p-SLP-76 AlphaLISA`)) + 
+  geom_point() +
+  #scale_x_log10() +
+  #scale_y_log10() +
+  stat_regline_equation(label.y=-4) +
+  stat_cor() +
+  geom_smooth(method="lm",se=FALSE) +
+  theme_bw()
+
+hpk %>% dselect(`High ATP_HPK1_biochemical_ADPGlo`,`HPK1_p-SLP-76 AlphaLISA`) %>% dfilter(!is.na(`High ATP_HPK1_biochemical_ADPGlo`),!is.na(`HPK1_p-SLP-76 AlphaLISA`)) %>% mutate_all(log10) %>%
+  ggplot(aes(`High ATP_HPK1_biochemical_ADPGlo`,`HPK1_p-SLP-76 AlphaLISA`)) + 
+  geom_point() +
+  #scale_x_log10() +
+  #scale_y_log10() +
+  stat_cor() +
+  stat_regline_equation(label.y=-5.5) +
+  geom_smooth(method="lm",se=FALSE) +
+  theme_bw()
+```
+Filter to compounds run with all 3 assays
+```{r fig.height=8, fig.width=8}
+hpk_m <- hpk %>% dfilter(!is.na(HPK1_ADPGlo_P_BSA),!is.na(`HPK1_p-SLP-76 AlphaLISA`),!is.na(`High ATP_HPK1_biochemical_ADPGlo`)) %>% dselect(-Reg_ID, -ID) %>% as.matrix #%>% gather(Assay,KD,-ID) %>% as.matrix
+
+hpk <- hpk %>% dfilter(!is.na(HPK1_ADPGlo_P_BSA),!is.na(`HPK1_p-SLP-76 AlphaLISA`),!is.na(`High ATP_HPK1_biochemical_ADPGlo`)) %>% dselect(-Reg_ID, -ID)
+
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor * r)
+}
+pairs(hpk_m, lower.panel = NULL, log = "xy") 
+cor(hpk_m[,3],hpk_m[,2])   #ADP, SLP76, High ATP 
+ml <- lm(`High ATP_HPK1_biochemical_ADPGlo`~HPK1_ADPGlo_P_BSA, hpk)
+summary(ml)
+#ADP vs. SLP76 Pearson cor= 0.843, R2 = 0.7
+#high ATP vs. SLP76 Pearson cor= 0.787 R2 = 0.59
+#ADP vs. High ATP Pearson cor =0.79 R2 = 0.6
+```
+

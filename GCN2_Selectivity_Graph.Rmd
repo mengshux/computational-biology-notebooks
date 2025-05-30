@@ -1,0 +1,86 @@
+---
+title: "GCN2_Selectivity_Graph"
+author: "Mengshu"
+date: "5/16/2019"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+Import the raw data
+
+```{r}
+glist <- data.frame(read.table("GCN2_Selectivity_percent.txt", header=TRUE, sep="\t"))
+head(glist)
+glist %>% dfilter(X=="GCN2(h)")
+```
+
+```{r}
+glist %>% arrange(X20309...0.3.µM) %>% dselect(X20309...0.3.µM)
+my_cols <- colnames(glist)[2:8]
+sort_col <- function(col) (glist %>% arrange(eval(paste0(col))) %>% dselect(eval(paste0(col))))
+sorted<- lapply(my_cols,sort_col)
+#Error because my_cols passes columns with "" on them, and data.frame only accepts the bare word
+col_1 <- glist %>% arrange(X20309...0.3.µM) %>% dselect(X20309...0.3.µM)
+col_2 <- glist %>% arrange(X20309...1.5.µM) %>% dselect(X20309...1.5.µM)
+col_3 <- glist %>% arrange(X20310...0.3.µM) %>% dselect(X20310...0.3.µM)
+col_4 <- glist %>% arrange(X20310...1.5.µM) %>% dselect(X20310...1.5.µM)
+col_5 <- glist %>% arrange(X20376...0.3.µM) %>% dselect(X20376...0.3.µM)
+col_6 <- glist %>% arrange(X20376...1.5.µM) %>% dselect(X20376...1.5.µM)
+col_7 <- glist %>% arrange(X20421...0.3.µM) %>% dselect(X20421...0.3.µM)
+col_8 <- glist %>% arrange(X20421...1.5.µM) %>% dselect(X20421...1.5.µM)
+
+sorted_glist <- cbind(col_1,col_2,col_3,col_4,col_5,col_6,col_7,col_8)
+sorted_glist %<>% tibble::rownames_to_column() 
+sorted_glist$rowname <- factor(sorted_glist$rowname, levels=(sorted_glist$rowname))
+head(sorted_glist)
+  
+```
+
+reshape2::melt
+```{r fig.height=10, fig.width=30}
+library(reshape2)
+melt_glist <- melt(sorted_glist, id.vars="rowname")
+
+
+ggplot(melt_glist, aes(rowname,value, col=variable, group=variable)) + 
+  geom_point(size=3) + 
+  geom_line() +
+  scale_colour_manual(values=c("red1","red2","blue","blue3","green3","green4","orange1","orange3"))
+  
+glist_zoom <- head(sorted_glist, n=60) 
+glist_zoom <- melt(glist_zoom, id.vars="rowname")
+
+glist_zoom2 <- glist_zoom %>% mutate(conc=sub("^.*\\.\\.(\\d+\\..*µM)","\\1",variable), cmpd=sub("^X(\\w+).*","\\1",variable))
+ggplot(glist_zoom, aes(rowname,value, col=variable, group=variable)) + 
+  geom_point(size=5) + 
+  geom_line(size=3) +
+  scale_colour_manual(values=c("red1","red2","blue","blue3","green3","green4","orange1","orange3")) +
+  scale_y_continuous(name="Percent remaining activity") +
+  scale_x_discrete(name="Rank of Target Kinase") +
+  theme( axis.text.y  = element_text(size=26), axis.text.x  = element_text(size=26), axis.title = element_text(size=26, vjust=1),legend.text =element_text(size=24))
+
+ggplot(glist_zoom2, aes(rowname,value, color=cmpd, group=cmpd)) + 
+  geom_point(size=5) + 
+  geom_line(size=3) +
+#  scale_colour_manual(values=c("red1","red2","blue","blue3","green3","green4","orange1","orange3")) +
+  scale_y_continuous(name="Percent remaining activity") +
+  scale_x_discrete(name="Rank of Target Kinase") +
+  theme( axis.text.y  = element_text(size=26), axis.title = element_text(size=26, vjust=1),legend.text =element_text(size=24), strip.text = element_text(size=24)) +
+  geom_hline(yintercept = 50, linetype=2) +
+  facet_wrap( ~conc) +
+
+ggsave("GCN2_Compound_KinasePanel_Facet.jpg", width= 40, height=10, dpi=600, plot= last_plot(), units = "in")
+```
+
+```{r}
+head(melt_glist)
+```
+

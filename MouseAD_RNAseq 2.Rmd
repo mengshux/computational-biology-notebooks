@@ -1,0 +1,123 @@
+---
+title: "MouseADRNAseq"
+author: "Mengshu"
+date: "7/24/2019"
+output: html_document
+---
+
+This script is for looking at Mouse AD model bulk RNA sequencing results. 
+This experiment is designed to detect low abundance transcripts of IL22, IL17 etc. which are functional markers of TH2 cells. 
+1ug of total RNA was submitted for library building, with notes to load as much RNA as possible. 
+Each sample was sequenced Illumina HiSeq PE100 at 80 Million reads. 
+Alignment was done with Kallisto to the GRCm38/mm10 transcriptome build fasta file, downloaded from UCSC Table Browser. The exact parameters are recorded in Apple Notes. 
+
+
+```{r}
+library(limma)
+library(tibble)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+Load the gene translation table
+
+```{r}
+gencode_symbol <- read.table("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/GRCm38_GENCODE2SYMBOL.txt", header=FALSE)
+colnames(gencode_symbol) <- c("Gene","Symbol")
+```
+
+Load the data
+Select the est_counts for this table
+Merge the data, rename the columns, and tranlate the ENCODE genes to symbols
+
+```{r}
+files <- list.files("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/kallisto_tsv/")
+data_files <- lapply(files, function(i){read.table(paste0("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/kallisto_tsv/",i),header=TRUE)})
+AD_counts <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+colnames(AD_counts) <- c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC")
+AD_counts %<>% mutate(Gene = data_files[[1]]$target_id) %>% dselect(Gene, everything())
+AD_counts <- left_join(AD_counts, gencode_symbol, by="Gene") %>% dselect(-Gene) %>% dselect(Symbol, everything())
+save(AD_counts,file="/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_TPM.rdata")
+``` 
+There are multible transcripts per gene. I might need to fix this from the initial FASTA file, but I can fix this by summing by Gene
+```{r}
+AD_gene_counts <- AD_counts %>% group_by(Symbol) %>% summarize_if(is.numeric,sum) 
+save(AD_gene_counts,file="/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_Gene_TPM.rdata")
+load("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_Gene_TPM.rdata")
+```
+
+Look at global signals
+```{r}
+boxplot(AD_gene_counts[,2:7])
+```
+Normalize between arrays
+```{r}
+AD_gene_norm <- normalizeBetweenArrays(AD_gene_counts[,2:7])
+boxplot(AD_gene_norm)
+AD_gene_norm %<>% data.frame %>% mutate(Gene=AD_gene_counts$Symbol) %>% dselect(Gene,everything())
+```
+
+Look at the counts for the interleukins
+
+```{r}
+Th2_markers <- c("Ccr4","Ccl22","Il9", "Ccl17","Foxp3")
+AD_gene_norm %>% dfilter(Gene %in% Th2_markers)
+```
+Plot
+```{r fig.height=5, fig.width=12}
+AD_gene_norm %>% dfilter(Gene %in% Th2_markers) %>% gather(Condition, TPM, -Gene) %>% mutate(Condition=factor(Condition,levels=c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC"))) %>% 
+  ggplot(aes(x=Condition, y=TPM, fill=Condition)) +
+geom_bar(stat="identity") + 
+  facet_wrap(~Gene, scales="free_y",ncol=5) + 
+  theme(axis.text.x = element_text(angle=45,size=12, hjust=1)) + 
+  scale_fill_brewer(palette="Paired") +
+  ggsave("MouseAD_RNAseq_TPM.jpg", width= 12, height=5, dpi=600, plot= last_plot(), units = "in")
+```
+
+Plot genes of interest from raw data
+Ccl22
+Foxp3
+Gata3
+Ifnb1
+Ifng
+Il13
+Il17a
+Il17b
+Il17F
+Il22
+Il33
+Il4
+Il5
+Pdcd1
+Tgfb1
+Tgfb2
+Tgfb3
+Tslp
+Il22 was not detected at all
+```{r fig.height=, fig.width=12}
+AD_markers <- c("Ccr4","Ccl17","Ccl22","Il9","Foxp3","Gata3","Ifnb1","Ifng","Il13","Il17a","Il17b","Il17f","Il33","Il4","Il5","Pdcd1","Tgfb1","Tgfb2","Tgfb3","Tslp")
+AD_gene_norm %>% dfilter(Gene %in% AD_markers) %>% gather(Condition, TPM, -Gene) %>% 
+  mutate(Condition=factor(Condition,levels=c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC"))) %>% 
+  ggplot(aes(x=Condition, y=TPM, fill=Condition)) +
+geom_bar(stat="identity") + 
+  facet_wrap(~Gene, scales="free_y",ncol=6) + 
+  theme(axis.text.x = element_text(angle=45,size=12, hjust=1)) + 
+  scale_fill_brewer(palette="Paired") +
+  ggsave("MouseAD_RNAseq_panel.jpg", width= 12, height=8, dpi=600, plot= last_plot(), units = "in")
+```
+
+```{r}
+AD_gene_counts %>% dfilter(Symbol=="Il22")
+```
+Differential analysis with DESeq2
+
+```{r}
+BiocManager::install("DESeq2")
+hist(AD_gene_counts$DEX_FITC)
+AD_gene_counts %>% dselect(DEX_FITC) %>% dfilter(DEX_FITC > 0.1) %>% summarise_all(median)
+```
+

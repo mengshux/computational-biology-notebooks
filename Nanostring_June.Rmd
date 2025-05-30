@@ -1,0 +1,527 @@
+---
+title: "Nanostring"
+author: "Mengshu"
+date: "6/11/2019"
+output: html_document
+---
+
+Analyze Aparna's Mouse AD Nanostring dataset exported from nSolver software
+Experimental setup: with no biological replicates
+	Treatment	Challenge
+1	Vehicle	  ETOH
+2	Vehicle	  FITC
+3	DEX	      ETOH
+4	DEX	      FITC
+5	FLX193	  ETOH
+6	FLX193	  FITC
+
+The challenge (ETOH mock, or FITC) was performed on the left and right ears of each mouse
+Sample input was normalized by total ng of RNA across samples: due to sample limitations, 50ng was pipetted in as 1uL for each sample qc'd to 50ng/uL (this reduced precision of input amount)
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(limma) #quantileNormalization
+library(tibble)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+```
+AD samples: QC and Normalize
+```{r}
+raw <- read.table("Aparna_raw_June.txt", sep="\t", header=TRUE)
+colnames(raw) <- c("Gene","Class",
+                   "Vehicle_ETOH_A","Vehicle_FITC_A","DEX_ETOH_A","DEX_FITC_A","FLX193_ETOH_A","FLX193_FITC_A",
+                   "Vehicle_ETOH_B","Vehicle_FITC_B","DEX_ETOH_B","DEX_FITC_B","FLX193_ETOH_B","FLX193_FITC_B",
+                   "Vehicle_ETOH_C","Vehicle_FITC_C","DEX_ETOH_C","DEX_FITC_C","FLX193_ETOH_C","FLX193_FITC_C")
+raw %<>% dselect(-Class)
+
+boxplot(raw[,2:19], log="y")
+raw %<>% tibble::column_to_rownames(var="Gene")
+raw["BI_mid",] <- raw["BD",] * 100
+raw["BI_high",] <- raw["BD",] * 1000
+raw["BI_superhigh",] <- raw["BD",] * 10000
+raw["Total_countx0.01",] <- colSums(raw)/100
+QN <- normalizeQuantiles(raw, ties=TRUE)
+rownames(QN) <- rownames(raw)
+boxplot(QN,log="y")
+#Plot Normalized Binding Density
+col_sums <- colSums(QN)
+
+barplot(col_sums)
+
+barplot(as.matrix(QN["Total_countx0.01",]))
+barplot(as.matrix(QN["BD",]))
+barplot(as.matrix(QN["BI_mid",]))
+barplot(as.matrix(QN["BI_high",]))
+barplot(as.matrix(QN["BI_superhigh",]))
+```
+
+Gather for plotting
+
+# Both they Key and Value are newly created for the gathered data. Specity the column that doesn't change in the 3rd term with -
+```{r}
+plot_AD <- QN  %>% rownames_to_column %>% gather(key= Sample, value= "Count", -rowname) # Both they Key and Value are newly created for the gathered data. Specity the column that doesn't change in the 3rd term with -
+colnames(plot_AD) <- c("Gene","Sample","Count")
+plot_AD$Sample <- factor(plot_AD$Sample, levels= c(
+                   "Vehicle_ETOH_A","Vehicle_FITC_A","DEX_ETOH_A","DEX_FITC_A","FLX193_ETOH_A","FLX193_FITC_A",
+                   "Vehicle_ETOH_B","Vehicle_FITC_B","DEX_ETOH_B","DEX_FITC_B","FLX193_ETOH_B","FLX193_FITC_B",
+                   "Vehicle_ETOH_C","Vehicle_FITC_C","DEX_ETOH_C","DEX_FITC_C","FLX193_ETOH_C","FLX193_FITC_C"))
+
+plot_raw <- raw  %>% rownames_to_column %>% gather(key= Sample, value= "Count", -rowname) 
+colnames(plot_raw) <- c("Gene","Sample","Count")
+plot_raw$Sample <- factor(plot_raw$Sample, levels= c(
+                   "Vehicle_ETOH_A","Vehicle_FITC_A","DEX_ETOH_A","DEX_FITC_A","FLX193_ETOH_A","FLX193_FITC_A",
+                   "Vehicle_ETOH_B","Vehicle_FITC_B","DEX_ETOH_B","DEX_FITC_B","FLX193_ETOH_B","FLX193_FITC_B",
+                   "Vehicle_ETOH_C","Vehicle_FITC_C","DEX_ETOH_C","DEX_FITC_C","FLX193_ETOH_C","FLX193_FITC_C"))
+```
+Alternative method: Use Bioconductor package
+```{r}
+#source('http://bioconductor.org/biocLite.R')
+#BiocManager::install('preprocessCore')
+library(preprocessCore)
+
+raw_QNBio <- normalize.quantiles(as.matrix(raw[,2:7]))
+boxplot(log(raw[,2:7]))
+#boxplot(log(raw_QN))
+boxplot(log(raw_QNBio))
+```
+
+Plot Aparna Housekeeping genes
+```{r fig.height=6, fig.width=9}
+
+housekeeping= c("Cltc","Gapdh","Gusb","Hprt","Pgk1","Tubb5")
+
+ggplot(plot_AD %>% dfilter(Gene == "Gapdh"| Gene == "Cltc" | Gene == "Gusb" | Gene == "Hprt" | Gene == "Pgk1" | Gene == "Tubb5"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y",ncol=2) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_HK_QN.jpg", width= 9, height=6, dpi=600, plot= last_plot(), units = "in")
+
+ggplot( plot_raw %>% dfilter(Gene == "Gapdh"| Gene == "Cltc" | Gene == "Gusb" | Gene == "Hprt" | Gene == "Pgk1" | Gene == "Tubb5"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=2) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_AD_HK_raw.jpg", width= 9, height=6, dpi=600, plot= last_plot(), units = "in")
+
+#NEW HOUSEKEEPING GENES
+
+ggplot(plot_AD %>% dfilter(Gene == "Mapkapk2"| Gene == "Mapk14" | Gene == "Map2k4" | Gene == "Map3k7" | Gene == "Atf2" | Gene == "Cfl1"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=2) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_AD_QN_New_HK.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+```
+Find Housekeeping gene for Aparna's samples:
+
+```{r}
+t_AD <- data.frame(t(raw))
+colnames(t_AD) <- rownames(raw)
+
+gene_list <- rownames(raw)
+
+rsq_t_AD <- function (x) cor(t_AD[,x],t_AD[,"Total_countx0.01"]) ^ 2  
+rsquared_list <- t(data.frame(lapply(gene_list,rsq_t_AD)))
+rownames(rsquared_list) <- rownames(raw)
+sort(rsquared_list[,1], decreasing=TRUE)
+rsquared_list[,1]
+```
+Plot Correlations
+
+```{r fig.height=30, fig.width=30}
+gene_gather <- t_AD %>% gather(key= Genes, value= "Count", -Total_countx0.01)
+
+#ggplot(gene_gather, aes(x=Binding_index, y= Count)) + 
+#  geom_point() +
+#  facet_wrap(~Genes,scales="free_y", ncol=12)
+
+ggplot(gene_gather, aes(x=Total_countx0.01, y= Count)) + 
+  geom_point() +
+  facet_wrap(~Genes,scales="free_y", ncol=12) +
+  theme(axis.text.x = element_text(angle = 55, hjust = 1)) +
+  ggsave("Nanostring_AD_CountsvsTotalCounts.jpg", width= 30, height=30, dpi=600, plot= last_plot(), units = "in")
+```
+Calculate R^2 values
+```{r}
+rsq <- function (x, y) cor(x, y) ^ 2  
+rsq(t_AD[,"Gapdh"],t_AD[,"Total_countx0.01"]) #0.75
+rsq(t_AD[,"Cltc"],t_AD[,"Total_countx0.01"]) #0.92
+rsq(t_AD[,"Gusb"],t_AD[,"Total_countx0.01"]) #0.71
+rsq(t_AD[,"Hprt"],t_AD[,"Total_countx0.01"]) #0.92
+rsq(t_AD[,"Pgk1"],t_AD[,"Total_countx0.01"]) #0.73
+rsq(t_AD[,"Tubb5"],t_AD[,"Total_countx0.01"]) #0.33
+
+rsq(t_AD[,"Atf2"],t_AD[,"Total_countx0.01"]) #0.93
+rsq(t_AD[,"Cfl1"],t_AD[,"Total_countx0.01"]) #0.93
+rsq(t_AD[,"Map3k7"],t_AD[,"Total_countx0.01"]) #0.93
+rsq(t_AD[,"Map2k4"],t_AD[,"Total_countx0.01"]) #0.94
+rsq(t_AD[,"Mapkapk2"],t_AD[,"Total_countx0.01"]) #0.97
+rsq(t_AD[,"Mapk14"],t_AD[,"Total_countx0.01"]) #0.95
+
+```
+Plot Markers
+
+Plot genes of interest:
+CCL22
+FOXP3
+GATA3
+IFNB1
+IFNG
+IL13
+IL17a
+IL17b
+IL17F
+IL22
+IL33
+IL4
+IL5
+Pdcd1
+Tgfb1
+Tgfb2
+Tgfb3
+Tslp
+
+"CCL22","IFNB1","IFNG","IL13","IL17a","IL22","IL4","IL5","Tgfb1","Tgfb2","Tgfb3","Tslp"
+NOT in the dataset: "FOXP3" "GATA3" "IL17b" "IL17F" "IL33" "Pdcd1"
+DEX_ETOH     DEX_FITC  FLX193_ETOH  FLX193_FITC Vehicle_ETOH Vehicle_FITC
+
+Too low signal
+Gene == "Ifnb1" 
+Gene == "Ifng" 
+Gene == "Il13" 
+Gene == "Il17a" 
+Gene == "Il22" 
+Gene == "Il4" 
+Gene == "Il4" 
+Gene == "Il5" 
+```{r fig.height=6, fig.width=12}
+markers_AD <- c("Ccl22","Ifnb1","Ifng","Il13","Il17a","Il22","Il4","Il4","Il5","Tgfb1","Tgfb2","Tgfb3","Tslp")
+
+ggplot(plot_AD %>% dfilter(Gene %in% markers_AD), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(0.5,0.5,0.5,0.5), "cm")) #+
+ggsave("Nanostring_AD_QN_Markers.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+```
+
+
+Buvana samples
+Quantile Normalize
+```{r}
+all <- read.table("/Volumes/Picard/FLX/Nanostring/Buvana_raw_June.txt", sep="\t", header=TRUE)
+all <- all %>% select(-2)
+boxplot(all[,3:20],log="y")
+methods(plot)
+#Find the total counts per sample, compare to binding density
+col_sums <-colSums(all[,3:20])
+
+length(colnames(all)) #20
+BI <- as.matrix(all[1,3:20])
+barplot(col_sums)
+barplot(BI)
+head(all)
+
+boxplot(all[,3:20],log="y")
+all_QN <- normalizeQuantiles(all[,3:20], ties=TRUE)
+boxplot(all_QN,log="y")
+BI_QN <- as.matrix(all_QN[1,])
+barplot(BI_QN)
+col_sums_QN <-colSums(all_QN[,1:18])
+#Add back the gene names
+rownames(all_QN) <- all[1:269,1]
+write.table(all_QN, file="Nanostring_Buvana_QuantileNorm.txt", sep="\t", quote= FALSE, row.names=TRUE)
+
+plot_QN <- all_QN %>% rownames_to_column %>% gather(key= Sample, value= "QN_Count", -rowname)
+plot_raw <- all %>% select(-X..Samples.above.Threshold) %>% gather(key= Sample, value= "Count", -Probe.Name)
+colnames(plot_raw) <- c("Gene","Sample","Count")
+colnames(plot_QN) <- c("Gene","Sample","QN_Count")
+plot_raw$Sample <- factor(plot_raw$Sample, levels=c("CT26Vehicle1A","CT26Vehicle2A","CT26_282_1A",  "CT26_282_2A",  "CT26_659_1A", "CT26_659_2A",  "CT26.TumorCtrl" ,"CT26.OVA.TumorOE","CT26..LMP1.TumorOE" ,"CT26..LMP1.TumorOE.1","X3.3Ctrl", "X6.1Treatment","CT26Vehicle1C","CT26Vehicle2C","CT26_282_1C",  "CT26_282_2C",  "CT26_659_1C",  "CT26_659_2C"))
+
+plot_QN$Sample <- factor(plot_QN$Sample, levels=c("CT26Vehicle1A","CT26Vehicle2A","CT26_282_1A",  "CT26_282_2A",  "CT26_659_1A", "CT26_659_2A",  "CT26.TumorCtrl" ,"CT26.OVA.TumorOE","CT26..LMP1.TumorOE" ,"CT26..LMP1.TumorOE.1","X3.3Ctrl", "X6.1Treatment","CT26Vehicle1C","CT26Vehicle2C","CT26_282_1C",  "CT26_282_2C",  "CT26_659_1C",  "CT26_659_2C"))
+levels(plot_raw$Sample) == colnames(all)[3:20]
+
+# Parse New HK-normalized data table
+#is below 
+
+```
+
+Plot Housekeeping genes
+```{r fig.height=6, fig.width=8}
+#Example data gather
+#Buvi <- all %>% select(-Class) %>% gather(key= Sample, value= "Count", -Gene) # Both they Key and Value are newly created for the gathered data. Specity the column that doesn't change in the 3rd term with '-'
+
+housekeeping= c("Cltc","Gapdh","Gusb","Hprt","Pgk1","Tubb5")
+
+ggplot(plot_raw %>% dfilter(Gene == "Gapdh"| Gene == "Cltc" | Gene == "Gusb" | Gene == "Hprt" | Gene == "Pgk1" | Gene == "Tubb5"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y",ncol=2) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_CT26_HKraw.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+ggplot(plot_QN %>% dfilter(Gene == "Gapdh"| Gene == "Cltc" | Gene == "Gusb" | Gene == "Hprt" | Gene == "Pgk1" | Gene == "Tubb5"), aes(x=Sample, y= QN_Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=2) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_CT26_QN_HK.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+#NEW HOUSEKEEPING GENES
+
+ggplot(plot_QN %>% dfilter(Gene == "Daxx"| Gene == "Nfe2l2" | Gene == "Hmgb2" | Gene == "Mapk1" | Gene == "Mapkapk2" | Gene == "Rela"), aes(x=Sample, y= QN_Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=2) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_CT26_QN_New_HK.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+
+#NEW housekeeping genes after Normalizing to these genes
+
+#ggplot(plot_HKcorr %>% dfilter(Gene == "Daxx"| Gene == "Nfe2l2" | Gene == "Hmgb2" | Gene == "Mapk1" | Gene == "Mapkapk2" | Gene == "Rela"), aes(x=Sample, y= Count,fill=Gene)) +
+#  geom_bar(stat = "identity") +
+#  facet_wrap(~Gene, scales="free_y", ncol=2) +
+#  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+#ggsave("Nanostring_CT26_NormNewHK_HK.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+```
+
+Normalize to NEW Housekeeping genes
+Take the geometric mean of the 6 New Housekeeping genes. Find the Mean of the means, and generate a correction factor for each sample and multiply across columns
+To multiply a vector across a matric by rows or by columns, use sweep: sweep(matrix, MARGIN=2, vector, `*` )  MARGIN refers to 1= ROWs and 2 = COLUMNS, last term `*` says "perform multiplication"
+```{r}
+dim(all)
+geomMean<-function(values){
+  prod(values)^(1/length(values))
+}
+#test
+values<-c(2,4,6,8)
+geomMean(values)
+
+HKs <- all %>% dfilter(Probe.Name == "Daxx"| Probe.Name == "Nfe2l2" | Probe.Name == "Hmgb2" | Probe.Name == "Mapk1" | Probe.Name == "Mapkapk2" | Probe.Name == "Rela") %>% dselect(-1,-2) %>% summarise_all(geomMean) 
+rowMeans(HKs) # 538.4613
+#Get the correction factors for each sample as a vector of 18 elements
+correction_factor <- as.vector(t(538/HKs)[,1])
+str(correction_factor)
+#Apply correction factor across all
+all_HKcorr <- sweep(as.matrix(all[,3:20]),MARGIN=2, correction_factor,`*`)
+rownames(all_HKcorr) <- all$Probe.Name
+all_HKcorr <- data.frame(all_HKcorr)
+all_HKcorr %<>% tibble::rownames_to_column()
+colnames(all_HKcorr)[1] <- "Gene"
+
+
+plot_HKcorr <- all_HKcorr %>% gather(key= Sample, value= "Count", -Gene)
+plot_HKcorr$Sample <- factor(plot_HKcorr$Sample, levels=c("CT26Vehicle1A","CT26Vehicle2A","CT26_282_1A",  "CT26_282_2A",  "CT26_659_1A", "CT26_659_2A",  "CT26.TumorCtrl" ,"CT26.OVA.TumorOE","CT26..LMP1.TumorOE" ,"CT26..LMP1.TumorOE.1","X3.3Ctrl", "X6.1Treatment","CT26Vehicle1C","CT26Vehicle2C","CT26_282_1C",  "CT26_282_2C",  "CT26_659_1C",  "CT26_659_2C"))
+```
+
+Markers Buvana
+
+```{r fig.height=10, fig.width=20}
+
+#genes_of_interest = c("Ccl22","Tgfb1","Tgfb2","Tgfb3","Il1b","Ifng","Ddit3")  
+ggplot(plot_QN %>% dfilter(Gene == "Csf1" | Gene == "Il1b"| Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Il1b" | Gene == "Ifng" | Gene == "Ddit3"| Gene == "Arg1" | Gene == "Cd163"| Gene == "Cd4"| Gene == "Daxx"| Gene == "Il10" | Gene == "Il2"| Gene == "Nos2"| Gene == "Ccl8" | Gene == "Il6" | Gene == "Mrc1"), aes(x=Sample, y= QN_Count,fill=Gene)) + 
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=6) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_Markers_QN.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+
+plot_QN %>% dfilter (Gene == "Ccl8")
+
+ggplot(plot_raw %>% dfilter(Gene == "Csf1" | Gene == "Il1b"| Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Il1b" | Gene == "Ifng" | Gene == "Ddit3"| Gene == "Arg1" | Gene == "Cd163"| Gene == "Cd4"| Gene == "Daxx"| Gene == "Il10" | Gene == "Il2"| Gene == "Nos2"| Gene == "Ccl8" | Gene == "Il6" | Gene == "Mrc1"), aes(x=Sample, y= Count,fill=Gene)) + 
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=6) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_Markers_raw.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+
+
+
+ggplot(plot_HKcorr %>% dfilter(Gene == "Csf1" | Gene == "Il1b"| Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Il1b" | Gene == "Ifng" | Gene == "Ddit3"| Gene == "Arg1" | Gene == "Cd163"| Gene == "Cd4"| Gene == "Daxx"| Gene == "Il10" | Gene == "Il2"| Gene == "Nos2"| Gene == "Ccl8" | Gene == "Il6" | Gene == "Mrc1"), aes(x=Sample, y= Count,fill=Gene)) + 
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=6) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_Markers_HKcorr.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+```
+
+```{r fig.height=10, fig.width=20}
+plot_batch3 <- plot_QN %>% dfilter(Sample == "CT26Vehicle1C"| Sample == "CT26Vehicle2C" | Sample == "CT26_282_1C" | Sample == "CT26_282_2C" | Sample == "CT26_659_1C" | Sample == "CT26_659_2C")
+plot_batch3$Sample <- factor(plot_batch3$Sample, levels = c("CT26Vehicle1C","CT26Vehicle2C","CT26_282_1C",  "CT26_282_2C",  "CT26_659_1C",  "CT26_659_2C"))
+
+plot_batch3_HKcorr <- plot_HKcorr %>% dfilter(Sample == "CT26Vehicle1C"| Sample == "CT26Vehicle2C" | Sample == "CT26_282_1C" | Sample == "CT26_282_2C" | Sample == "CT26_659_1C" | Sample == "CT26_659_2C")
+plot_batch3$Sample <- factor(plot_batch3$Sample, levels = c("CT26Vehicle1C","CT26Vehicle2C","CT26_282_1C",  "CT26_282_2C",  "CT26_659_1C",  "CT26_659_2C"))
+
+ggplot(plot_batch3 %>% dfilter(Gene == "Csf1" | Gene == "Il1b"| Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Il1b" | Gene == "Ifng" | Gene == "Ddit3"| Gene == "Arg1" | Gene == "Cd163"| Gene == "Tnf"| Gene == "Daxx"| Gene == "Il10" | Gene == "Il2"| Gene == "Nos2"| Gene == "Ccl8" | Gene == "Il6" | Gene == "Mrc1"), aes(x=Sample, y= QN_Count,fill=Gene)) + 
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=6) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_Markers_QN_batch3.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+
+ggplot(plot_batch3_HKcorr %>% dfilter(Gene == "Csf1" | Gene == "Il1b"| Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Il1b" | Gene == "Ifng" | Gene == "Ddit3"| Gene == "Arg1" | Gene == "Cd163"| Gene == "Tnf"| Gene == "Daxx"| Gene == "Il10" | Gene == "Il2"| Gene == "Nos2"| Gene == "Ccl8" | Gene == "Il6" | Gene == "Mrc1"), aes(x=Sample, y= Count,fill=Gene)) + 
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y", ncol=6) +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_Markers_HKcorr_batch3.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+
+
+```
+Housekeeping gene and Total RNA correlations
+
+("Cltc","Gapdh","Gusb","Hprt","Pgk1","Tubb5")
+#```{r}
+#plot(all_QN["Gapdh",],all_QN["Binding_index",])
+#ggplot(all_QN, aes(x="Gapdh", y="Binding_Index")) +
+ # geom_point()
+
+t_all <- data.frame(t(all[,3:20]))
+colnames(t_all) <- all[1:269,1]
+t_all %<>% tibble::rownames_to_column()
+rownames_save <- rownames(t_all)
+t_all$rowname <- factor(t_all$rowname, levels=c("CT26Vehicle1A","CT26Vehicle2A","CT26_282_1A",  "CT26_282_2A",  "CT26_659_1A", "CT26_659_2A",  "CT26.TumorCtrl" ,"CT26.OVA.TumorOE","CT26..LMP1.TumorOE" ,"CT26..LMP1.TumorOE.1","X3.3Ctrl", "X6.1Treatment","CT26Vehicle1C","CT26Vehicle2C","CT26_282_1C",  "CT26_282_2C",  "CT26_659_1C",  "CT26_659_2C"))
+ggplot(t_all, aes(x=Gapdh, y= Binding_index)) + 
+  geom_point(aes(color=rowname)) +
+  geom_abline(slope = 1.1/38000, intercept=0.1)
+
+
+rsq <- function (x, y) cor(x, y) ^ 2  
+rsq(t_all[,"Gapdh"],t_all[,"Binding_index"]) #0.95
+rsq(t_all[,"Cltc"],t_all[,"Binding_index"]) #0.94
+rsq(t_all[,"Gusb"],t_all[,"Binding_index"]) #0.94
+rsq(t_all[,"Hprt"],t_all[,"Binding_index"]) #0.96
+rsq(t_all[,"Pgk1"],t_all[,"Binding_index"]) #0.91
+rsq(t_all[,"Tubb5"],t_all[,"Binding_index"]) #0.64
+
+rsq(t_all[,"Mafk"],t_all[,"Binding_index"]) #0.92
+rsq(t_all[,"Cebpb"],t_all[,"Binding_index"]) #0.92
+rsq(t_all[,"Mapkapk2"],t_all[,"Binding_index"]) #0.97
+rsq(t_all[,"Daxx"],t_all[,"Binding_index"]) #0.95
+rsq(t_all[,"Mapk1"],t_all[,"Binding_index"]) #0.97
+rsq(t_all[,"Hmgb2"],t_all[,"Binding_index"]) #0.96
+rsq(t_all[,"Rela"],t_all[,"Binding_index"]) #0.95
+
+
+rsq(t_all[,"Gapdh"],t_all[,"total_count"]) #0.97
+rsq(t_all[,"Cltc"],t_all[,"total_count"]) #0.95
+rsq(t_all[,"Gusb"],t_all[,"total_count"]) #0.96
+rsq(t_all[,"Hprt"],t_all[,"total_count"]) #0.97
+rsq(t_all[,"Pgk1"],t_all[,"total_count"]) #0.92
+rsq(t_all[,"Tubb5"],t_all[,"total_count"]) #0.64
+
+rsq(t_all[,"Mafk"],t_all[,"total_count"]) #0.96
+rsq(t_all[,"Cebpb"],t_all[,"total_count"]) #0.97
+rsq(t_all[,"Mapkapk2"],t_all[,"total_count"]) #0.98
+rsq(t_all[,"Daxx"],t_all[,"total_count"]) #0.99
+rsq(t_all[,"Mapk1"],t_all[,"total_count"]) #0.98
+rsq(t_all[,"Hmgb2"],t_all[,"total_count"]) #0.98
+rsq(t_all[,"Rela"],t_all[,"total_count"]) #0.98
+
+gene_list <- list(colnames(t_all)[2:255])
+
+rsq_t_all <- function (x) cor(t_all[,x],t_all[,"total_count"]) ^ 2  
+rsquared_list <- lapply(gene_list,rsq_t_all)
+rsquared_list
+#```
+
+Make a scatter plot of Binding_density versus all gene signals. I want to see whether it's true that at low Counts, Binding_density does not correlate well with Count:
+i.e. quantile normalization is not possible at low Count. 
+
+It's impossible to tell because a non-linear relationship can be due to:
+1) sampling noise or 
+2) actual biology
+
+An actual good use for this plot is for finding appropriate HOUSEKEEPING GENES
+
+#```{r fig.height=30, fig.width=30}
+BI <- t_all[,"Binding_index"]
+#t_all %<>% mutate(total_count= rowSums(.)) %>% mutate(Sample=rownames_save)
+
+gene_gather <- t_all %>% gather(key= Genes, value= "Count", -Binding_index, -total_count, -Sample)
+
+ggplot(gene_gather, aes(x=Binding_index, y= Count)) + 
+  geom_point() +
+  facet_wrap(~Genes,scales="free_y", ncol=12)
+
+ggplot(gene_gather, aes(x=total_count, y= Count)) + 
+  geom_point() +
+  facet_wrap(~Genes,scales="free_y", ncol=12) +
+  theme(axis.text.x = element_text(angle = 55, hjust = 1)) +
+  ggsave("Nanostring_CountsvsTotalCounts.jpg", width= 30, height=30, dpi=600, plot= last_plot(), units = "in")
+#```
+
+Plot genes of interest from raw data
+CCL22
+FOXP3
+GATA3
+IFNB1
+IFNG
+IL13
+IL17a
+IL17b
+IL17F
+IL22
+IL33
+IL4
+IL5
+Pdcd1
+Tgfb1
+Tgfb2
+Tgfb3
+Tslp
+
+"CCL22","IFNB1","IFNG","IL13","IL17a","IL22","IL4","IL5","Tgfb1","Tgfb2","Tgfb3","Tslp"
+NOT in the dataset: "FOXP3" "GATA3" "IL17b" "IL17F" "IL33" "Pdcd1"
+DEX_ETOH     DEX_FITC  FLX193_ETOH  FLX193_FITC Vehicle_ETOH Vehicle_FITC
+
+Too low signal
+Gene == "Ifnb1" 
+Gene == "Ifng" 
+Gene == "Il13" 
+Gene == "Il17a" 
+Gene == "Il22" 
+Gene == "Il4" 
+Gene == "Il4" 
+Gene == "Il5" 
+#```{r fig.height=8, fig.width=12}
+#table(AD$Sample)
+
+ggplot(AD_QN %>% dfilter(Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Tslp"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) 
+ggsave("Nanostring_AD_ALLHK_All_robust.jpg", width= 11, height=6, dpi=600, plot= last_plot(), units = "in")
+
+FITC_QN <- AD_QN %>% dfilter(Sample =="DEX_FITC" | Sample=="FLX193_FITC" | Sample=="Vehicle_FITC")
+
+FITC_QN$Sample <- factor(FITC_QN$Sample, levels=c("Vehicle_FITC","DEX_FITC","FLX193_FITC"))
+ggplot(FITC_QN %>% dfilter(Gene == "Ccl22"| Gene == "Ifnb1" | Gene == "Ifng" | Gene == "Il13" | Gene == "Il17a" | Gene == "Il22"| Gene == "Il4" | Gene == "Il4" | Gene == "Il5" | Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Tslp"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) +
+ggsave("Nanostring_AD_QN.jpg", width= 11, height=6, dpi=600, plot= last_plot(), units = "in")
+
+FITC_QN$Sample <- factor(FITC_QN$Sample, levels=c("Vehicle_FITC","DEX_FITC","FLX193_FITC"))
+ggplot(FITC_QN %>% dfilter(Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Tslp"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) +
+ggsave("Nanostring_AD_QN_robust.jpg", width= 11, height=6, dpi=600, plot= last_plot(), units = "in")
+
+FITC <- AD %>% dfilter(Sample =="DEX_FITC" | Sample=="FLX193_FITC" | Sample=="Vehicle_FITC")
+FITC$Sample <- factor(FITC$Sample, levels=c("Vehicle_FITC","DEX_FITC","FLX193_FITC"))
+ggplot(FITC %>% dfilter(Gene == "Ccl22"| Gene == "Ifnb1" | Gene == "Ifng" | Gene == "Il13" | Gene == "Il17a" | Gene == "Il22"| Gene == "Il4" | Gene == "Il4" | Gene == "Il5" | Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Tslp"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) +
+ggsave("Nanostring_AD_ALLHK_All_markers.jpg", width= 11, height=6, dpi=600, plot= last_plot(), units = "in")
+
+ggplot(FITC %>% dfilter(Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Tslp"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_AD_CltcGapdhGusb_robust_FITC.jpg", width= 6, height=6, dpi=600, plot= last_plot(), units = "in")
+AD$Sample <- factor(AD$Sample, levels=c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","FLX193_ETOH","FLX193_FITC"))
+ggplot(AD %>% dfilter(Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Tslp"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) +
+ggsave("Nanostring_AD_CltcGapdhGusb_robust_ALL.jpg", width= 6, height=6, dpi=600, plot= last_plot(), units = "in")
+
+#```
+

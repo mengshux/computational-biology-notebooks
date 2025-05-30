@@ -1,0 +1,288 @@
+---
+title: "RAPT_Talmadge_2021.Rmd"
+author: "MX"
+date: "3/11/2021"
+output: html_document
+---
+
+```{r}
+library(Seurat)
+#library(sctransform)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+library(tibble)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+```
+
+Load latest batch4 and save a version for modification as batch4_
+
+```{r}
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+batch4B <- batch4
+save(batch4B, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4B.Robj")
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4B.Robj")
+```
+
+Global view of the cells 
+
+```{r fig.height=7, fig.width=10}
+UMAPPlot(batch4B, label=TRUE) 
+```
+
+Remove clusters with low nFeature RNA cells:
+10: low myeloid
+28: low NK
+16: low T cell (GZMB)
+9: lymphoid unknown
+
+
+Keep:
+5: Median 300 nFeature RNA neutrophils
+13: Median 150 nFeature RNA neutrophils
+22: cDC split population, some with the highest, some with lowest nFeature_RNA
+
+```{r}
+keep everything but the specified clusters
+batch4B <- subset(batch4B, idents= c(10,28,16,9), invert=TRUE)
+```
+
+Filtered Object
+```{r fig.height=6, fig.width=9}
+UMAPPlot(batch4B, label=TRUE) 
+```
+Plot update for nFeature plots
+Plot nFeature_RNA as a heatmap
+
+```{r fig.height=5, fig.width=7}
+library(viridis)
+library(scales)
+batch4B$umap[[1:27775]] %>% cbind(nFeature=FetchData(batch4B, vars= c("nFeature_RNA"))) %>% data.frame %>% mutate(nFeature_log = log(nFeature_RNA,10)) %>% ggplot(aes(UMAP_1,UMAP_2, colour=nFeature_log)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="inferno", limits=c(2,5), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+
+##Upper range: Monocytes
+batch4B$umap[[1:27775]] %>% cbind(nFeature=FetchData(batch4B, vars= c("nFeature_RNA"))) %>% data.frame %>% ggplot(aes(UMAP_1,UMAP_2, colour=nFeature_RNA)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="magma", limits=c(2000,4000), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+
+##Mid range: Lymphocytes
+batch4B$umap[[1:27775]] %>% cbind(nFeature=FetchData(batch4B, vars= c("nFeature_RNA"))) %>% data.frame %>% mutate(nFeature_log = log(nFeature_RNA,10)) %>% ggplot(aes(UMAP_1,UMAP_2, colour=nFeature_RNA)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="magma", limits=c(1000,3000), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+
+#Lower range: Neutrophils
+batch4B$umap[[1:27775]] %>% cbind(nFeature=FetchData(batch4B, vars= c("nFeature_RNA"))) %>% data.frame %>% mutate(nFeature_log = log(nFeature_RNA,10)) %>% ggplot(aes(UMAP_1,UMAP_2, colour=nFeature_RNA)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="magma", limits=c(50,1000), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+
+batch4B$umap[[1:27775]] %>% cbind(nFeature=FetchData(batch4B, vars= c("percent.mt"))) %>% data.frame %>% ggplot(aes(UMAP_1,UMAP_2, colour=percent.mt)) + geom_point(size=0.9, pch=19) + scale_color_viridis(option="magma", limits=c(0,50), oob=squish) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+```
+```{r fig.height=4, fig.width=10}
+VlnPlot(batch4B, features=c("nFeature_RNA"),ncol =1,pt.size = 0.1, slot="counts", sort=TRUE, log=TRUE) + theme(panel.grid.major.y = element_line(colour="orange", size = (0.5)), panel.grid.minor = element_line(size = (0.2), colour="grey")) + xlab("Cluster") + ylab("Number of Genes Expressed")
+
+VlnPlot(batch4B, features=c("nCount_RNA"),ncol =1,pt.size = 0.1, slot="counts", sort=TRUE, log=TRUE) #
+```
+
+Make a table of immune cell content by donor
+10: low myeloid
+28: low NK
+16: low T cell (GZMB)
+9: lymphoid unknown
+```{r}
+cluster_ident <- data.frame(Ident.ident=as.factor(c(0:27)), Cell_type=c("CD4 T", "CD4 T", "Neutrophil","Neutrophil","CD8 T","Apoptotic Neutrophil","NK","Monocyte","Neutrophil","Apoptotic Lymphoid","Apoptotic monocyte","Monocyte","mMDSC","Apoptotic Neutrophil","Platelets","Monocyte","Apoptotic NK","B cell","CD8 T CCR7+","CD8 T","gMDSC","Neutrophil","cDC","B cell","NK XCL+","Monocyte","Apoptotic CD4 T","DC"))
+
+cluster_ident2 <- data.frame(Ident.ident=as.factor(c(0:27)), Cell_type=c("CD4 T", "CD4 T", "Neutrophil","Neutrophil","CD8 T","Neutrophil Apoptotic","NK","Monocyte","Neutrophil","Apoptotic Lymphoid","Apoptotic monocyte","Monocyte","mMDSC","Neutrophil Apoptotic","Platelets","Monocyte","Apoptotic NK","B cell","CD8 T","CD8 T","gMDSC","Neutrophil","DC","B cell","NK","Monocyte","CD4 T","DC"))
+
+cbind(Ident=FetchData(batch4B, vars= c("ident", "orig.ident"))) %>% data.frame %>% left_join(cluster_ident2, by="Ident.ident") %>% dselect(-Ident.ident) %>% table
+```
+
+
+```{r fig.height=3, fig.width=10}
+cell_type_counts <- cbind(Ident=FetchData(batch4B, vars= c("ident", "orig.ident"))) %>% data.frame %>% left_join(cluster_ident2, by="Ident.ident") %>% dselect(-Ident.ident) %>% count(Ident.orig.ident,Cell_type) # group_by(Ident.orig.ident,Cell_type) %>% summarise(n=n()) 
+
+cell_order <- cbind(Ident=FetchData(batch4B, vars= c("ident", "orig.ident"))) %>% data.frame %>% left_join(cluster_ident2, by="Ident.ident") %>% dselect(-Ident.ident) %>% count(Ident.orig.ident,Cell_type) %>% arrange(-n) %>% pull(Cell_type) %>% unique
+cell_order <- rev(c("Neutrophil","Neutrophil Apoptotic","CD4 T","Monocyte","CD8 T","mMDSC","Platelets","NK","B cell","gMDSC","DC"))
+
+cell_type_counts %>% mutate(Cell_type= factor(Cell_type, levels=cell_order)) %>% group_by(Ident.orig.ident) %>% mutate(Total_cells=sum(n)) %>% ungroup %>% mutate(Immune_cell_percent= round((n/Total_cells)*100,digits=1)) %>% ggplot(aes(x=Ident.orig.ident, fill=Cell_type,y=Immune_cell_percent)) + 
+  geom_bar(position="stack",stat="identity") + coord_flip() + 
+  theme(text = element_text(size=18)) +
+scale_fill_manual(values=rev(c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))) #,"#356E46","#69597D","#052344"
+
+#(discrete = T)
+```
+CITE markers
+
+```{r fig.height=9, fig.width=18}
+FeaturePlot(batch4B,slot = "data",cols=c("grey90","red"),features = c("ITGAM","ITGAX","CD11c-CITE","CD14","CD14-CITE","CD33-CITE","CD4","CD4-CITE","FUT4","CD15-CITE","CD8A","CD79A","LYZ","GZMB","HLA-DRA","DEFA4","CD34-CITE","ARG1","CXCR2","S100A9","CEBPE","GAPDH","FCGR3B","nFeature_RNA"), ncol=6, order=TRUE) 
+```
+
+```{r}
+FeaturePlot(batch4B,slot = "data",cols=c("grey90","red"),features = c("CXCL9","CXCL13","nFeature_RNA"), order=TRUE) 
+```
+
+###################
+###################
+
+Logicle tranform to plot data more like FACs
+May 21
+flowcore imports FCS: Flow cytometry standard format, or it can be created manually from a matrix
+1. use batch3c_matrix to select markers for FACs analysis
+###################
+###################
+7198 91816    93    37    22    42   226   479 19036    83 13663 10416 47687
+```{r}
+BiocManager::install("flowCore")
+library(flowCore)
+library(Biobase)
+
+facs_matrix <- FetchData(batch4B, vars= c("nFeature_RNA","nCount_RNA","PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B","CD14-CITE","CD15-CITE","CD4-CITE","CD33-CITE","CD34-CITE"), slot="counts") %>% as.matrix
+colnames(facs_matrix) <- c("nFeature_RNA","nCount_RNA","PTPRC","CD3G","CD8A","CD79A","GNLY","HLA_DRA","CD11b_CITE","FCGR3B","CD14_CITE","CD15_CITE","CD4_CITE","CD33_CITE","CD34_CITE")
+facs_cells <- rownames(facs_matrix)
+count_max <- facs_matrix %>% data.frame %>% summarise_all(max) %>% t %>% data.frame %>% pull(.data$.)
+facs_matrix[1:5,]
+#c("FL1-H","FL2-H","FL3-H","FL4-H","FL5-H","FL6-H","FL7-H","FL8-H","FL9-H","FL10-H"),
+para <- data.frame(name=c("nFeature_RNA","nCount_RNA","PTPRC","CD3G","CD8A","CD79A","GNLY","HLA_DRA","CD11b_CITE","FCGR3B","CD14_CITE","CD15_CITE","CD4_CITE","CD33_CITE","CD34_CITE"),desc=c("nFeature_RNA","nCount_RNA","PTPRC","CD3G","CD8A","CD79A","GNLY","HLA_DRA","CD11b_CITE","FCGR3B","CD14_CITE","CD15_CITE","CD4_CITE","CD33_CITE","CD34_CITE"), range=c(as.numeric(rep(1024,15))), minRange=c(as.numeric(rep(0,15))), maxRange=count_max)
+
+my_flowframe <- flowFrame(exprs=facs_matrix,parameters=AnnotatedDataFrame(data=para) )
+
+lgcl <- logicleTransform(transformationId="defaultlogicleTransform", w=0.3, t=226, m=1, a=0) 
+lgcl <- estimateLogicle(my_flowframe,channels=c("PTPRC","CD3G")) #,"CD79A","GNLY","HLA_DRA","CD11b_CITE","FCGR3B","CD14_CITE","CD15_CITE"
+
+gate1 <- transform(my_flowframe, lgcl)
+rownames(gate1) <- facs_cells
+exprs(gate_counts)
+
+
+```
+
+
+
+###################
+###################
+
+Manually cluster like FACs
+
+Mar 23, 2021
+
+Re-do with filtered batch4 data
+Adding in markers CD33 and CD34
+the exprs(gate#) lines are logicle normalized
+###################
+###################
+
+
+All cells
+```{r}
+FetchData(batch4B, slot="data",vars= c("PTPRC","CD3G","CD8A")) %>% mutate(CD45_a= jitter(PTPRC,amount=0.2),CD3G_a= jitter(CD3G,amount=0.2)) %>% ggplot(aes(CD3G_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,30),oob=squish) 
+```
+
+GATE 1: CD45+, CD3G-, CD8A-
+```{r fig.height=4, fig.width=4.5}
+# normalized data with jitter 
+FetchData(batch4B, slot="data",vars= c("PTPRC","CD3G","CD8A")) %>% mutate(CD45_a= jitter(PTPRC,amount=0.2),CD3G_a= jitter(CD3G,amount=0.2)) %>% ggplot(aes(CD3G_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,30),oob=squish) 
+
+#does not look good
+exprs(gate1) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything())  %>% mutate(CD45_a= jitter(PTPRC,amount=0.2),CD3G_a= jitter(CD3G,amount=0.2))  %>% mutate(CD45_log_a= ifelse(CD45_a > 0.50, log2(CD45_a),CD45_a),CD3G_log_a= ifelse(CD3G_a > 0.50, log2(CD3G_a),CD3G_a))  %>% ggplot(aes(CD3G_log_a,CD45_log_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,100),oob=squish) + nolegend()
+
+```
+
+Apply Gate 1 CD45+, CD3G-, CD8A-
+Plot Gate 2 GNLY and CD79A
+
+```{r fig.height=4, fig.width=4}
+
+exprs(gate_counts) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% ggplot(aes(nFeature_RNA,nCount_RNA)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,150),oob=squish) + nolegend()
+
+#gate 1
+FetchData(batch4B, vars= c("PTPRC","CD3G","CD8A")) %>% ggplot(aes(CD3G,PTPRC)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend()
+
+FetchData(batch4B, vars= c("PTPRC","CD3G","CD8A")) %>% mutate(CD45_a = ifelse(PTPRC==0,runif(27775,min=-2,max=-1),PTPRC), CD3G_a = ifelse(CD3G==0,runif(27775,min=-2,max=-1),CD3G)) %>% ggplot(aes(CD3G_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend() 
+#gate 1b CD4-cite
+FetchData(batch4B, vars= c("PTPRC","CD3G","CD8A","CD4-CITE")) %>% mutate(CD45_a = ifelse(PTPRC==0,runif(27775,min=-2,max=-1),PTPRC), CD4_a = ifelse(`cite_CD4-CITE`==0,runif(27775,min=-2,max=-1),`cite_CD4-CITE`)) %>% ggplot(aes(CD4_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend() 
+
+FetchData(batch4B, vars= c("PTPRC","CD3G","CD8A","CD4-CITE")) %>% mutate(CD45_a = ifelse(PTPRC==0,runif(27775,min=-2,max=-1),PTPRC),CD3G_a = ifelse(CD3G==0,runif(27775,min=-2,max=-1),CD3G)) %>% mutate(CD45_a= jitter(CD45_a,amount=0.2),CD3G_a= jitter(`CD3G_a`,amount=0.2)) %>% ggplot(aes(CD3G_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend() + xlim(0,6)
+
+#exprs(gate1) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% mutate(CD3_a=jitter(CD3G,amount=0.2),CD45_a=jitter(PTPRC,amount=0.2)) %>% ggplot(aes(CD3G,PTPRC)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,150),oob=squish) + nolegend()
+
+exprs(gate1) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% mutate(CD45_a = ifelse(PTPRC==0,runif(28888,min=-1,max=-0.1),PTPRC), CD3G_a = ifelse(CD3G==0,runif(28888,min=-1,max=-0.1),CD3G)) %>% mutate(CD3G_a=jitter(CD3G_a,amount=0.2),CD45_a=jitter(CD45_a,amount=0.2)) %>% ggplot(aes(CD3G_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,100),oob=squish) + nolegend()
+
+exprs(gate1b) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% mutate(CD45_a= jitter(PTPRC,amount=0.2),CD4_CITE_a= jitter(CD4_CITE,amount=0.2)) %>% ggplot(aes(CD4_CITE_a,CD45_a)) + geom_hex(bins=100) + scale_fill_continuous(type="viridis", limit = c(0,40),oob=squish) + nolegend()
+
+#gate 2
+exprs(gate2) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0,CD4_CITE <2) %>% mutate(CD79A_a = ifelse(CD79A==0,runif(28888,min=-1.3,max=-0.3),CD79A), GNLY_a = ifelse(GNLY<= 0,runif(28888,min=-1.3,max=-0.3),GNLY)) %>% mutate(CD79A_a=jitter(CD79A_a,amount=0.2),GNLY_a=jitter(GNLY_a,amount=0.2)) %>% ggplot(aes(CD79A_a,GNLY_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,120),oob=squish) + nolegend()
+# 
+
+FetchData(batch4B, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY")) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0) %>% mutate(CD79A_a = ifelse(CD79A==0,runif(28888,min=-2,max=-1),CD79A), GNLY_a = ifelse(GNLY==0,runif(28888,min=-2,max=-1),GNLY)) %>% ggplot(aes(CD79A_a,GNLY_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,150),oob=squish) + nolegend()
+#gate 3 HLA vs CD11B
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE")) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0 ,CD79A ==0, GNLY==0) %>% mutate(HLA_DRA_a = ifelse(`HLA-DRA`==0,runif(28888,min=-2,max=-1),`HLA-DRA`), cite_CD11b_CITE_a = ifelse(`cite_CD11b-CITE`<= 0.2,runif(28888,min=-2,max=-1),`cite_CD11b-CITE`)) %>% ggplot(aes(cite_CD11b_CITE_a,HLA_DRA_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,100),oob=squish) + nolegend()
+
+exprs(gate3) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0,CD4_CITE <2,CD79A ==0, GNLY==0) %>% mutate(HLA_DRA_a = ifelse(HLA_DRA==0,runif(28888,min=-1.3,max=-0.3),HLA_DRA), CD11b_CITE_a = ifelse(CD11b_CITE<= 0,runif(28888,min=-1.3,max=-0.3),CD11b_CITE)) %>% ggplot(aes(CD11b_CITE_a,HLA_DRA_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,100),oob=squish) + nolegend()
+
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE")) %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0 ,CD79A ==0, GNLY==0) %>% dfilter(`HLA-DRA`==0,`cite_CD11b-CITE` > 0.2)
+
+#gate 4 CD16 vs CD11B
+# TOGGLING
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B")) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, `HLA-DRA` ==0, `cite_CD11b-CITE` > 0.5 ) %>% mutate(FCGR3B_a = ifelse(FCGR3B==0,runif(28888,min=-2,max=-1),FCGR3B), cite_CD11b_CITE_a = ifelse(`cite_CD11b-CITE`<=0.20,runif(28888,min=-2,max=-1),`cite_CD11b-CITE`)) %>% ggplot(aes(cite_CD11b_CITE_a,FCGR3B_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,80),oob=squish) + nolegend() +xlim(-2,6)
+
+exprs(gate4) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, HLA_DRA ==0, CD11b_CITE > 1.5 ) %>% mutate(FCGR3B_a = ifelse(FCGR3B==0,runif(28888,min=-1,max=0),FCGR3B), CD11b_CITE_a = ifelse(CD11b_CITE <=0.20,runif(28888,min=-1.3,max=-0.3),CD11b_CITE)) %>% mutate(CD16_a = jitter(FCGR3B_a,amount=0.2)) %>% ggplot(aes(CD11b_CITE_a,CD16_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,80),oob=squish) + nolegend() + xlim(-0.5,4.5)
+
+#count cells
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B")) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, `HLA-DRA` ==0, `cite_CD11b-CITE` > 0.5 ) %>% dfilter(FCGR3B > 0)
+
+# Gate 5 CD14 vs CD15
+# CUTOFF at 1.5 for both markers
+#don't use this
+FetchData(batch3c, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B","CD14-CITE","CD15-CITE")) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, `HLA-DRA` ==0, `cite_CD11b-CITE` > 0.2, FCGR3B == 0 ) %>% mutate(cite_CD14_CITE_a = ifelse(`cite_CD14-CITE` <1.5,runif(28888,min=-2,max=-1),`cite_CD14-CITE`), cite_CD15_CITE_a = ifelse(`cite_CD15-CITE`<1.50,runif(28888,min=-2,max=-1),`cite_CD15-CITE`)) %>% ggplot(aes(cite_CD14_CITE_a,cite_CD15_CITE_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,30),oob=squish) + nolegend() 
+
+# create a object with normalized data for all markers, then merge in the count data for CD14 and CD15 CITE markers, because their signal spread is different and better represented by counts. Gate on 0 counts
+mdsc <- FetchData(batch4, vars= c("PTPRC","CD3G","CD8A","CD79A","GNLY","HLA-DRA","CD11b-CITE","FCGR3B")) %>% tibble::rownames_to_column("Cell") %>% dfilter(PTPRC > 0, CD3G ==0, CD8A ==0 ,CD79A ==0, GNLY==0, `HLA-DRA` ==0, `cite_CD11b-CITE` > 0.2, FCGR3B == 0)
+
+# gMDSC and mMDSC separation by 1, + 0.1 to Zero counts, 2. Log2 transform, 3. fan out original values that were 0  4. add jitter
+mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell")  %>% mutate(`cite_CD14-CITE`=ifelse(`cite_CD14-CITE`==0, `cite_CD14-CITE`-0.1, `cite_CD14-CITE`),`cite_CD15-CITE`=ifelse(`cite_CD15-CITE`==0, `cite_CD15-CITE`-0.1, `cite_CD15-CITE`)) %>% mutate(CD14_log = log(`cite_CD14-CITE`,2), CD15_log=log(`cite_CD15-CITE`,2)) %>% mutate(CD14_log_a = ifelse(CD14_log <=0,runif(31307,min=-2,max=-1),CD14_log), CD15_log_a = ifelse(CD15_log<=0,runif(31307,min=-2,max=-1),CD15_log)) %>% mutate(CD14_log_a= jitter(CD14_log_a,amount=0.25)) %>% ggplot(aes(CD14_log_a,CD15_log_a)) + geom_hex(bins=60) + scale_fill_continuous(type="viridis", limit = c(0,30),oob=squish) + nolegend() + expand_limits(x=c(0.001,10), y=c(0.001, 15))
+
+
+exprs(gate5) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, HLA_DRA ==0, CD11b_CITE > 1.5, FCGR3B == 0 ) %>% ggplot(aes(CD14_CITE,CD15_CITE)) + geom_hex(bins=80) + scale_fill_continuous(type="viridis", limit = c(0,25),oob=squish) + nolegend() 
+
+exprs(gate5) %>% data.frame %>% mutate(Cell=facs_cells) %>% dselect(Cell, everything()) %>% dfilter(PTPRC > 0, CD3G ==0 , CD8A ==0,CD79A ==0, GNLY==0, HLA_DRA ==0, CD11b_CITE > 1.5, FCGR3B == 0 ) %>% mutate(CD14_CITE_a = ifelse(CD14_CITE ==0 ,runif(28888,min=-1.5,max=-1),CD14_CITE), CD15_CITE_a = ifelse(CD15_CITE ==0 ,runif(28888,min=-1,max=-0.5),CD15_CITE)) %>% mutate(CD14_CITE_a= jitter(CD14_CITE_a,amount=0.2),CD15_CITE_a= jitter(CD15_CITE_a,amount=0.2)) %>% ggplot(aes(CD14_CITE_a,CD15_CITE_a)) + geom_hex(bins=80) + scale_fill_continuous(type="viridis", limit = c(0,25),oob=squish) + nolegend() 
+
+#gMDSC CD15+, CD14=0
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0)
+
+facs_gMDSCs <- mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0) %>% pull(Cell) #368
+
+facs_gMDSCs_CD33 <- mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE","CD33-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0, `cite_CD33-CITE` > 0) %>% pull(Cell) #375
+
+facs_gMDSCs_CD33_CD34 <- mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE","CD33-CITE","CD34-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0, `cite_CD33-CITE` > 0, `cite_CD34-CITE` > 0) %>% pull(Cell) #375
+
+#Gate 6A gMDSC CD33 CD34
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE","CD33-CITE","CD34-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"), by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` > 0) %>% mutate(`cite_CD33-CITE`=ifelse(`cite_CD33-CITE`==0, `cite_CD33-CITE`+0.1, `cite_CD33-CITE`),`cite_CD34-CITE`=ifelse(`cite_CD34-CITE`==0, `cite_CD34-CITE`+0.1, `cite_CD34-CITE`)) %>% mutate(CD33_log = log(`cite_CD33-CITE`,2), CD34_log=log(`cite_CD34-CITE`,2)) %>% mutate(CD33_log_a = ifelse(CD33_log <=0.1,runif(28888,min=-2,max=-1),CD33_log), CD34_log_a = ifelse(CD34_log<=0.1,runif(28888,min=-2,max=-1),CD34_log)) %>% mutate(CD33_log_a= jitter(CD33_log_a,amount=0.25),CD34_log_a= jitter(CD34_log_a,amount=0.25)) %>% ggplot(aes(CD33_log_a,CD34_log_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,10),oob=squish) + nolegend() #+ expand_limits(x=c(0.001,10), y=c(0.001, 15))
+
+#iiMDSC CD14-, CD15-
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`==0, `cite_CD15-CITE` == 0) #9
+
+#iMDSC CD14+, CD15+
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0)
+
+#iMDSC CD14+, CD15+, split into CD14 higher and CD15 higher
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` > 7.5/5)
+
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` > 7.5/5)
+
+# plot the CD15+ CD14+ group where CD15+ is relatively higher
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE","CD33-CITE","CD34-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` > 7.5/5) %>% mutate(`cite_CD33-CITE`=ifelse(`cite_CD33-CITE`==0, `cite_CD33-CITE`+0.1, `cite_CD33-CITE`),`cite_CD34-CITE`=ifelse(`cite_CD34-CITE`==0, `cite_CD34-CITE`+0.1, `cite_CD34-CITE`)) %>% mutate(CD33_log = log(`cite_CD33-CITE`,2), CD34_log=log(`cite_CD34-CITE`,2)) %>% mutate(CD33_log_a = ifelse(CD33_log <=0.1,runif(28888,min=-2,max=-1),CD33_log), CD34_log_a = ifelse(CD34_log<=0.1,runif(28888,min=-2,max=-1),CD34_log)) %>% mutate(CD33_log_a= jitter(CD33_log_a,amount=0.25),CD34_log_a= jitter(CD34_log_a,amount=0.25)) %>% ggplot(aes(CD33_log_a,CD34_log_a)) + geom_hex(bins=70) + scale_fill_continuous(type="viridis", limit = c(0,10),oob=squish) + nolegend()
+
+#CD14+ CD15+ relative
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` <= 7.5/5)
+
+facs_gMDSC_CD14 <- mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` > 7.5/5) %>% pull(Cell)
+
+save(facs_gMDSC_CD14,file="gMDSC_CD14pos.rdata")
+
+facs_mMDSC_CD15 <- mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` > 0) %>% dfilter(`cite_CD15-CITE`/`cite_CD14-CITE` <= 7.5/5) %>% pull(Cell)
+
+#iMDSC CD14+, CD15-
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` == 0)
+facs_mMDSC <- mdsc %>% left_join(FetchData(batch4, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`> 0, `cite_CD15-CITE` == 0) %>% pull(Cell)
+
+#iMDSC CD14-, CD15+
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell") %>% dfilter(`cite_CD14-CITE`== 0, `cite_CD15-CITE` > 0)
+
+#mMDSC
+mdsc %>% left_join(FetchData(batch3c, vars= c("CD14-CITE","CD15-CITE"), slot="counts") %>% tibble::rownames_to_column("Cell"),by="Cell")  %>% mutate(`cite_CD14-CITE`=ifelse(`cite_CD14-CITE`==0, `cite_CD14-CITE`+0.1, `cite_CD14-CITE`),`cite_CD15-CITE`=ifelse(`cite_CD15-CITE`==0, `cite_CD15-CITE`+0.1, `cite_CD15-CITE`)) %>% mutate(CD14_log = log(`cite_CD14-CITE`,2), CD15_log=log(`cite_CD15-CITE`,2)) %>% mutate(CD14_log_a = ifelse(CD14_log <=0.1,runif(28888,min=-2,max=-1),CD14_log), CD15_log_a = ifelse(CD15_log<=0.1,runif(28888,min=-2,max=-1),CD15_log)) 
+```

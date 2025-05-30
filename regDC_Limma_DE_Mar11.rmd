@@ -1,0 +1,241 @@
+---
+title: "Limma regDC DE"
+author: "Mengshu"
+date: "February 21, 2019"
+output: html_document
+---
+Differential timecourse analysis of microarray data using Limma
+```{r}
+BiocManager::install("Biobase")
+BiocManager::install("GEOquery")
+library(GEOquery)
+library(Biobase)
+library(limma)
+library(dplyr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+library(magrittr)
+```
+
+Download datasets
+```{r}
+
+gse <- getGEO("GSE5151", destdir=".",GSEMatrix=TRUE)
+gse <- getGEO("GSE9241", destdir=".",GSEMatrix=TRUE)
+gse <- getGEO("GSE18921", destdir=".",GSEMatrix=TRUE) # competitive Hybe
+genes <- read.table("GSE18921_genes.txt", sep="\t", header=TRUE, na.strings="NA")
+
+show(gse)
+eset <- gse[[1]]
+e <- exprs(eset)
+dim(e)
+boxplot(log(e))
+#see the experiments
+show(pData(phenoData(eset)))
+```
+Skip these steps to set up design and Linear model
+Set up design and the groups to compare
+```{r}
+design <- cbind(GSM116323=c(1,0,0,0),
+                GSM116324=c(0,1,0,0),
+                GSM116325=c(0,0,1,0),
+                GSM116326=c(0,0,0,1)
+              )
+lev <- c("GSM116323", "GSM116324", "GSM116325", "GSM116326")
+f <- factor(lev, levels=lev)
+design2 <- model.matrix(~0+ f)
+              )
+design
+design2
+#what to compare
+c <- makeContrasts(GSM116324-GSM116323,GSM116325-GSM116323,GSM116326-GSM116323, levels=design)
+c
+```
+Fit Linear Model: Can't do this without replicates, so skip the lmFit step
+```{r}
+ fit <- lmFit(eset,design) 
+ fit2<- contrasts.fit(fit,c) 
+ lm.Fit(c,)
+ fit2<- eBayes(fit2)
+ toptable(fit2)
+```
+
+Forget trying to analyze this, just export and cluster the data. 
+Limma does not take kindly to no replicates
+```{r}
+e <- data.frame(e)
+e %<>% mutate(rowname=c(1:19968))
+gene<- data.frame(genes[,c(1,8)])
+gene %<>% mutate(rowname=as.numeric(ID))
+exp <- left_join(gene,e, by="rowname")
+exp %<>% select(-ID,-rowname) %>% arrange(GSM468774)
+exp %<>% arrange(-GSM468774)
+#e %<>% mutate(gene=rowname) %>% dselect(rowname, gene, everything())
+#gene_code <- e$rowname
+write.table(exp, file="DC_Torres.txt", sep="\t", quote=FALSE, row.names=FALSE)
+```
+
+Look up the gene names
+Array is HG_U95Av2
+Problem is the tool returns
+length(HUGO[,1]) 22283
+length(OUT)    22300
+length(unique(OUT$SYMBOL)) 
+```{r}
+source("http://bioconductor.org/biocLite.R")
+biocLite("hgu95av2.db")
+BiocManager::install("hgu95av2.db")
+library("AnnotationDbi")
+library("hgu95av2.db")    ##for Human
+library("hgu133a2.db") 
+columns(hgu95av2.db)
+showMethods("keys")
+PROBES<- e[,1]
+#select(hgu95av2.db,keys= PROBES,columns=c("SYMBOL","GENENAME","ENSEMBL","ENSEMBLPROT"))
+OUT <- AnnotationDbi::select(hgu95av2.db, keys=PROBES, columns=c("SYMBOL"),multiVals="first", keytype = "PROBEID")
+??AnnotationDbi::select
+OUT[1:100,]
+HUGO[1:100,]
+HUGO <- OUT[!duplicated(OUT[,1]),]
+length(HUGO[,1])
+e <- e %>% mutate(gene_name=HUGO[,2])
+e <- e %>% dplyr::select(gene_name,rowname,everything())
+#e %>% dfilter(gene_name=="MET")
+
+#Back lookup the array name
+mapIds(hgu95av2.db,keys="CD4", column="PROBEID", keytype='SYMBOL')
+select(hgu95av2.db,keys= c("1608_at","1609_g_at","1812_s_at","35684_at"), columns=c("SYMBOL","GENENAME","ENSEMBL","ENSEMBLPROT"))
+```
+Normalize values
+
+```{r}
+#fold_change_log <- e %>% mutate("4hour"=log2(GSM116324/GSM116323), "16hour" =log2(GSM116325/GSM116323), "36hour"=log2(GSM116326/GSM116323)) %>% dselect(-GSM116323,-GSM116324,-GSM116325,-GSM116326)
+colnames(e)
+fold_change <- e %>% mutate("1hour" =(GSM234710/GSM234706), "3hour"=(GSM234712/GSM234706),"6hour"=(GSM234713/GSM234706),"12hour"=(GSM234716/GSM234706),"18hour"=(GSM234717/GSM234706),"36hour"=(GSM234718/GSM234706),"36h_Ctrl"=(GSM234708/GSM234706),"B1hour"=(GSM234719/GSM234706),"B6hour"=(GSM234720/GSM234706),"B12hour"=(GSM234722/GSM234706),"B12hour"=(GSM234723/GSM234706),"B18hour"=(GSM234757/GSM234706),"B36hour"=(GSM234758/GSM234706),"AB6hour"=(GSM234760/GSM234706),"AB12hour"=(GSM234761/GSM234706),"AB36hour"=(GSM234762/GSM234706)) %>% dplyr::select(-GSM234706,-GSM234708,-GSM234710,-GSM234712,-GSM234713,-GSM234716,-GSM234717,-GSM234718,-GSM234719,-GSM234720,-GSM234722,-GSM234723,-GSM234757, -GSM234758,-GSM234760 ,-GSM234761,-GSM234762)
+write.table(fold_change, file="regDC_Jiang_FC_All.txt", sep="\t", quote=FALSE, row.names=FALSE)
+
+```
+
+Transpose table, retain the probe names because some of them are redundantly assigned to genes, and Seurat does not allow redundant cellids
+```{r}
+#fold_change[1:5,1:5]
+colnames(fold_change)
+genes <- fold_change[,1]
+probes <- fold_change[,2]
+seurat_in <- fold_change %>% dselect(-rowname,-gene_name)
+seurat_in <- t(seurat_in)
+#seurat_in[1:5,1:5]
+colnames(seurat_in) <- probes
+```
+
+UMAP analysis on the data:
+Pretend that the genes are "cells", and the timepoints are "genes", and plot UMAP based on the expression pattern across timepoints
+
+
+Create Seurat object
+For UMAP, I don't need to scale the data, but UMAP runs of the @scale.data slot, so I put raw.data into that slot
+```{r}
+jiang <- CreateSeuratObject(raw.data=seurat_in)
+jiang <- FindClusters(object=jiang, genes.use = c(rownames(seurat_in)), resolution=1)
+jiang@scale.data <- jiang@raw.data 
+jiang <- RunUMAP(jiang, 
+  genes.use = c(rownames(seurat_in)), max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 10L,
+  min_dist = 0.2, metric = "manhattan", seed.use = 42)
+
+DimPlot(object = jiang, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 4) 
+ggsave("Azizi_PBMCs_UMAP.jpg", width= 12, height=8, dpi=600, plot= last_plot(), units = "in")
+```
+
+Seurat is doing something wonky with the raw.data again
+```{r fig.height=30, fig.width=30}
+jiang@imputed <- data.frame(seurat_in)
+FeaturePlot(object=jiang, features.plot = c(rownames(seurat_in)),max.cutoff = 3, cols.use=c("grey","blue"), no.legend=FALSE,reduction.use="umap") 
+VlnPlot(jiang, features.plot = c(rownames(seurat_in)), use.raw=TRUE)
+```
+Export Clusters
+
+```{r}
+write.table(jiang@ident, file="Seurat_Clusters_Jiang.txt", sep="\t", quote=FALSE)
+```
+
+
+UMAP directly
+
+UMAP takes objects in rows, features in columns. 
+```{r}
+install.packages("umap")
+library(umap)
+??umap
+dc.data <- fold_change[,3:17]
+dc.label <- fold_change[,2]
+dc.gene <- fold_change[,1]
+jiang_umap <- umap(dc.data)
+jiang_umap
+#this contains the coordinates
+head(jiang_umap$layout)
+ggplot(data.frame(jiang_umap$layout), aes()) +
+  geom_point()
+```
+
+Insert a model expression gene, and correlate the rest with it
+The genes have to be the columns
+```{r}
+library(Hmisc)
+install.packages("corrplot")
+library(corrplot)
+head(fold_change)
+tail(fold_change)
+
+ModelGene <- c(2,2.2,2,3,4,5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5)
+cd276_corr <- rcorr(DC_counts,type="pearson")
+Model_Gene_corr <- rcorr(fold_change[],type=c("pearson"))
+
+new_col <- as.matrix(c(2,2.2,2,3,4,5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5))
+colnames(new_col) <- "ModelGene"
+seurat_in[,1:5]
+input_1 <- as.matrix(seurat_in)
+ModelGene_corr <- rcorr(input_1,new_col,type=c("pearson"))
+ModelGene_corr_Spear <- rcorr(input_1,new_col,type=c("spearman"))
+
+write.table(sort(ModelGene_corr$r[,"ModelGene"],decreasing=TRUE) , file="Jiang_Pearson_correlations_ModelGene.txt", sep="\t", quote=FALSE)
+write.table(sort(ModelGene_corr_Spear$r[,"ModelGene"],decreasing=TRUE), file="Jiang_Spearman_correlations_ModelGene.txt", sep="\t", quote=FALSE)
+sort(ModelGene_corr$r[,"ModelGene"],decreasing=TRUE)
+names(sort(ModelGene_corr$r[,"ModelGene"],decreasing=TRUE))
+```
+
+Reorder fold_change tables
+```{r}
+pearson_order <- names(sort(ModelGene_corr$r[,"ModelGene"],decreasing=TRUE))[2:length(ModelGene_corr$r)]
+spearman_order <- names(sort(ModelGene_corr_Spear$r[,"ModelGene"],decreasing=TRUE))[2:length(ModelGene_corr_Spear$r)]
+
+fold_change[1:5,1:5]
+fold_change <- rbind()
+pearson_matrix <- fold_change %>% arrange(factor(rowname, levels=pearson_order))
+spearman_matrix <- fold_change %>% arrange(factor(rowname, levels=spearman_order))
+write.table(pearson_matrix , file="Jiang_ModelGene_Pearson_matrix.txt", sep="\t", quote=FALSE, row.names=FALSE)
+write.table(spearman_matrix, file="Jiang_ModelGene_Spearman_matrix.txt", sep="\t", quote=FALSE, row.names=FALSE)
+```
+
+Replace names
+```{r}
+biocLite("hgu95av2.db")
+BiocManager::install("hgu95av2.db")
+library("AnnotationDbi")
+library("hgu95av2.db")    ##for Human
+
+hi <-select(hgu95av2.db,keys= "34959_at", columns=c("SYMBOL","GENENAME"),multiVals="first")
+OUT <- select(hgu95av2.db,keys= PROBES, columns=c("SYMBOL","GENENAME"),multiVals="first")
+OUT[1:100,]
+HUGO[1:100,]
+HUGO <- OUT[!duplicated(OUT[,1]),]
+
+corr_pear <- read.csv("Jiang_Pearson_correlations_ModelGene.txt", sep="\t")
+corr_spear <- read.csv("Jiang_Spearman_correlations_ModelGene.txt", sep="\t")
+length(rownames(corr_pear))
+corr_pear <- tibble::rownames_to_column(data.frame(corr_pear))
+PROBES <- corr_pear[,1]
+length(PROBES)
+PROBES <- PROBES[2:12626]
+substring(2,lenght(PROBES))
+sub(PROBES,"X","")
+```

@@ -1,0 +1,130 @@
+---
+title: "Tcell_GCN2_sig.rmd"
+author: "MX"
+date: "4/13/2020"
+output: html_document
+---
+
+Load packages
+
+```{r}
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tibble)
+library(limma)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("D:/FLX/Files_from_Gene/R_functions.r")
+```
+
+Dataset probeset translation
+MoGene-2_0-st
+```{r}
+
+BiocManager::install("pd.hg.u133.plus.2")
+BiocManager::install("MoGene-2_0-st")
+source("http://www.bioconductor.org/biocLite.R")
+require("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+mart <- useDataset("mmusculus_gene_ensembl", mart)
+listMarts() # select the type of dataset: want genes
+listDatasets(mart) # select species
+listAttributes(mart) #list the different platforms and their gene codes
+get_BMlist
+annotLookup <- getBM(
+  mart = mart,
+  attributes = c(
+    "affy_mogene_2_1_st_v1",
+    "external_gene_name")
+  )
+colnames(annotLookup) <- c("ID_REF","Gene")
+annotLookup %>% dfilter(ID_REF ==	17210984)
+save(annotLookup,file="/Volumes/Picard/FLX/Reference_tables/affy_mogene_2_1_st_v1_to_HUGO.rdata")
+load("/Volumes/Picard/FLX/Reference_tables/affy_mogene_2_1_st_v1_to_HUGO.rdata")
+```
+
+Load data, normalize, consolidate genes, and take z score. I took the mean of microarray spots for each gene
+```{r}
+tcell_data <- annotLookup %>% dplyr::right_join(read.table("/Volumes/Picard/FLX/GCN2/Chemo_combo/GSE68804-GPL16570_data_matrix.txt", header=TRUE, sep="\t") , by="ID_REF") %>% dfilter(!is.na(Gene)) %>% dselect(-ID_REF) %>% dplyr::group_by(Gene) %>% dplyr::summarise_if(is.numeric,mean) %>% dplyr::ungroup() %>% dfilter(!grepl("Rik",Gene))
+
+tcell_norm <- normalizeBetweenArrays(tcell_data[,2:24])
+boxplot(tcell_data[,2:24])
+boxplot(tcell_norm)
+rownames(tcell_norm) <- tcell_data$Gene
+
+meta <- read.table("/Volumes/Picard/FLX/GCN2/Chemo_combo/GSE68804_meta.txt", header=TRUE) %>% dselect(-X.Sample_title) %>% dplyr::mutate(Sample=c("GSM")) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% dplyr::mutate(Treatment= c(rep("OVA_only",3),rep("OVA_M2",3),rep("OVA_-Arg",3),rep("OVA_-Leu",3),rep("OVA_-Lys",3),rep("-Arg",2),rep("-Leu",3),rep("-Lys",3)))
+
+tcell_z <- tcell_norm %>% t %>% data.frame %>% tibble::rownames_to_column("GSM") %>% dplyr::mutate_if(is.numeric, mx_zscore2) %>% tibble::column_to_rownames("GSM") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+```
+Signatures
+
+Take data and normalize, then calculate signature scores and save back into Seurat object
+```{r}
+ISR <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+
+GCN2 <-c("Cep85l","Txnrd1","Angptl4","Antxr2","Tcim", "Ptgs1", "Bdkrb2", "Prune2","Rbpj","Wdr45","Znrf2","Cnnm4","Grem1","Tnfaip2","Gpr137b-ps", "Car8", "Wipi2","Tmem171","Ndst3","Foxl1")
+GCN2_5marker <- c("Rbpj","Wdr45","Angptl4","Tmem171","Tcim")
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+
+PERK <- c("Mrgprf","Lzts1","Wnt1" ,"Ptpn5","Gem","Slc2a6", "Snx32","Gm11331", "Prob1" , "Ccl7","Dbhos" ,"Mir99ahg","Trpm6", "N4bp2os","Glis1" ,"Mmp19","Lrrc73","Cd74","Pkdcc",   "2700069I18Rik","B230217C12Rik","Osr2")
+
+load(file="D:/FLX/Reference_tables/Arg_sig_u.rdata")
+mTor <- read.table(file="/Volumes/Picard/FLX/Reference_tables/mTor_BioCarta.txt", header=FALSE) %>% pull(V1)
+mTor_m <- mouseAnnot %>% dfilter(HumanName %in% mTor) %>% pull(GENE.SYMBOL)
+#translate to mouse
+Arg_sig_u_m <- mouseAnnot %>% dfilter(HumanName %in% Arg_sig_u) %>% pull(GENE.SYMBOL)
+save(Arg_sig_u_m,file="D:/FLX/Reference_tables/Arg_sig_u_m.rdata")
+load("/Volumes/Enterprise/FLX/Reference_tables/Arg_sig_u_m.rdata")
+load("D:/FLX/Reference_tables/Arg_sig_u_m.rdata")
+HRI_sig <- read.table("D:/FLX/Reference_tables/HRI_markers.txt",sep="\t", header=TRUE) %>% pull(x)
+HRI_sig <- read.table("/Volumes/Picard/FLX/Reference_tables/HRI_markers.txt",sep="\t", header=TRUE) %>% pull(x)
+
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4")
+
+hypoxia <- read.table(file="/Volumes/Enterprise/FLX/Reference_tables/")
+```
+
+Signature scores
+```{r}
+isr_t <- tcell_z %>% dfilter(Gene %in% ISR) %>% summarise_if(is.numeric,mean_mx)
+GCN2_t <- tcell_z %>% dfilter(Gene %in% GCN2) %>% summarise_if(is.numeric,mean_mx)
+GCN2_5t <- tcell_z %>% dfilter(Gene %in% GCN2_5marker) %>% summarise_if(is.numeric,mean_mx)
+GCN2_gene <- tcell_z %>% dfilter(Gene %in% "Eif2ak4") %>% summarise_if(is.numeric,mean_mx)
+#gMDSC_t <- tcell_z %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,mean_mx)
+#mMDSC_t <- tcell_z %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,mean_mx)
+PERK_t <- tcell_z %>% dfilter(Gene %in% PERK) %>% summarise_if(is.numeric,mean_mx)
+mTor_t <- tcell_z %>% dfilter(Gene %in% mTor_m) %>% summarise_if(is.numeric,mean_mx)
+Arg_t <- tcell_z %>% dfilter(Gene %in% Arg_sig_u_m) %>% summarise_if(is.numeric,mean_mx)
+HRI_t <- tcell_z %>% dfilter(Gene %in% HRI_sig) %>% summarise_if(is.numeric,mean_mx)
+AAS_t <- tcell_z %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,mean_mx)
+Hypoxia_t <- tcell_z %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,mean_mx)
+
+Signatures <- bind_rows(isr_t,GCN2_t,GCN2_5t, GCN2_gene,PERK_t,mTor_t,Arg_t,HRI_t,AAS_t,Hypoxia_t)
+rownames(Signatures) <- c("ISR","GCN2","GCN2_5marker","GCN2_gene","PERK","mTor","Arg_AAS","HRI","AAS","Hypoxia")
+```
+
+Graph signatures
+```{r}
+sig_input <- Signatures %>% tibble:: rownames_to_column("Signature") %>% gather(GSM,z_score,-Signature) %>% left_join(meta, by="GSM") %>% dselect(-Sample) %>% mutate(Treatment=factor(Treatment,levels=c("OVA_only","OVA_M2","OVA_-Arg","OVA_-Leu","OVA_-Lys","-Arg","-Leu","-Lys"))) %>% mutate(Signature=factor(Signature,levels=c("AAS","ISR","Hypoxia","Arg_AAS","GCN2","GCN2_5marker","GCN2_gene","HRI","PERK","mTor")))
+```
+
+```{r fig.height=7, fig.width=13}
+sig_input %>% ggplot(aes(x=Treatment, y=z_score, color=Treatment)) + geom_boxplot(aes(alpha=0.9)) + geom_point() + geom_hline(yintercept=0, colour="grey50") + facet_wrap(~Signature, ncol=3) + scale_x_discrete(guide = guide_axis(n.dodge = 2))
+```
+GCN2_gene
+
+```{r}
+sig_input %>% dfilter(Signature =="GCN2_gene") %>% ggplot(aes(x=Treatment, y=z_score, color=Treatment)) + geom_boxplot(aes(alpha=0.9)) + geom_point() + geom_hline(yintercept=0, colour="grey50") + scale_x_discrete(guide = guide_axis(n.dodge = 2))
+
+tcell_norm %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene =="Eif2ak4") %>% gather(GSM,RNA_signal,-Gene) %>% left_join(meta, by="GSM") %>% dselect(-Sample) %>% mutate(Treatment=factor(Treatment,levels=c("OVA_only","OVA_M2","OVA_-Arg","OVA_-Leu","OVA_-Lys","-Arg","-Leu","-Lys"))) %>% ggplot(aes(x=Treatment, y=RNA_signal, color=Treatment)) + geom_boxplot(aes(alpha=0.9)) + geom_point() + geom_hline(yintercept=0, colour="grey50") + scale_x_discrete(guide = guide_axis(n.dodge = 2)) +ylim(0,10)
+```
+
+```{r}
+my_lm <- lm(column1 ~ column2, data= data.frame)
+lm <- lm(PERK_pathway ~ Arg_AAS, data= model_m )
+summary(lm) 
+```
+

@@ -1,0 +1,152 @@
+---
+title: "Seurat with Fit-SNE perplexity annealing"
+author: "Mengshu"
+date: "11/2/2018"
+output: html_document
+---
+Main steps of snRNA analysis:
+0. Library normalization (if combining datasets)
+1. Feature selection for variable genes (try Gene's method)
+2. Non-linear transformation
+3. PCA analysis and selection
+4. Clustering using _______ method
+5. t-SNE clustering for visualization
+
+Here we combine 4. and 5. and use t-SNE for both clustering and visualization
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(magrittr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+source("bin/fast_tsne.R") # wrapper code to adjust "perplexity" during t-SNE clustering
+```
+
+## This is a trial run using a Seurat pipeline, implementing the t-SNE clustering step with FIt-SNE from Berens, which uses the "perplexity" variable to optimize global and close
+
+Load data, filter:
+```{r}
+pbmc_8k <- Read10X_h5("pbmc8k_raw_gene_bc_matrices_h5.h5", ensg.names= FALSE)
+pbmc_FitSNE <- CreateSeuratObject(pbmc_8k, project="Seurat_pbmc", min.cells=3, min.genes=200, is.expr = 0)
+#gathers the values for all MT rows
+mito.genes <- grep(pattern="^MT-", x= rownames(x=pbmc_FitSNE@data), value=TRUE)
+ #calculate percent of genes that are MITO for each cell. Summing total expression for each cell, sumMITO/sumALL
+percent.mito <- Matrix::colSums(pbmc_FitSNE@raw.data[mito.genes,])/Matrix::colSums(pbmc_FitSNE@raw.data)
+#add this information into pbmc under metadata
+pbmc_FitSNE <- AddMetaData(object=pbmc_FitSNE, metadata = percent.mito, col.name= "percent.mito")
+
+pbmc_FitSNE <- FilterCells(object=pbmc_FitSNE, subset.names=c("nGene", "percent.mito"), low.thresholds =c(500,-Inf), high.thresholds=c(Inf,0.1))
+#LogNormalize: normalize each cell by total expression, multiply by scale factor 10000, and log2 transform
+pbmc_FitSNE <- NormalizeData(object=pbmc_FitSNE, normalization.method="LogNormalize", scale.factor=10000)
+```
+
+Find variable Genes: Use Seurat default
+
+```{r}
+pbmc_FitSNE <- FindVariableGenes(pbmc_FitSNE, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0125, x.high.cutoff = 3.5, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+
+length(x=pbmc_FitSNE@var.genes) #1554
+```
+Remove uninteresting features by regression
+```{r}
+pbmc_FitSNE <- ScaleData(object=pbmc_FitSNE, vars.to.regress=c("nUMI","percent.mito"), display.progress = TRUE, assay.type = "RNA", check.for.norm = TRUE)
+```
+
+Run PCA: Run with 29 PC groups
+
+```{r}
+pbmc_FitSNE <- RunPCA(object = pbmc_FitSNE, pc.genes = pbmc_FitSNE@var.genes, do.print = TRUE, pcs.print = 1:10, 
+    genes.print = 5, pcs.compute = 29)
+
+# this saves in pbmc_FitSNE@dr$pca
+#however, there's no viewable data in View(pbmc_FitSNE@dr$pca)
+```
+Find Clusters with 29 PC groups, but reduce resolution from 1.5 to 1.0 
+Resolution 1.0 only gives 16 groups, Resolution 2.0 gives 25 groups and looks reasonable. 
+
+```{r}
+# save 29 PC, resolution 1.5 cluster labels
+pbmc_FitSNE <- StashIdent(object = pbmc_FitSNE, save.name = "ClusterNames_29PCresolution1.5")
+
+pbmc_FitSNE <- FindClusters(pbmc_FitSNE,reduction.type = "pca",
+  dims.use = 1:29, k.param = 30, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = FALSE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 2.0, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+```
+
+
+Save results
+```{r}
+saveRDS(pbmc_FitSNE, file="10X_8K_PBMC_Seurat_FItSNE.rds")
+pbmc_FitSNE <- readRDS("10X_8K_PBMC_Seurat_FItSNE.rds")
+
+```
+
+
+Here, instead of clustering using Seurat's FindCLusters tool, use FIt-SNE to do the "perplexity annealing" protocol
+## Can't use FIt-SNE: the Seurat matrix format is not compatible with the fftRtsne function, and the function's required input format is beyond my understanding
+##Can try running the entire analysis using FIt-SNE, but the example input format is not something that I'm familiar with, and it's only in python 
+## Running on the raw data using various perplexities, without using feature selected genes of PCs, gives comically bad results
+```{r}
+#problem running this Seurat object because it's not a standard matrix, because it is a combination of many matrices. 
+#pbmc_FitSNE@data is its own matrix with 6 slots, Barcodes vs. genes, with normalized UMI values
+#explicitly convert that table into a matrix with as.matrix()
+#pbmc_matrix <- as.matrix(pbmc_FitSNE@data) #This data has not been scaled and log2 transformed and should not be used for T-SNE clustering input. It's known to give bad results. 
+pbmc_matrix <- as.matrix(c(pbmc_FitSNE@data,pbmc_FitSNE@scale.data,pbmc_FitSNE@var.genes,pbmc_FitSNE@dr$pca))
+##### I'm pretty sure the extra data is not being transferred over correctly##########
+FItSNE5 <- fftRtsne(pbmc_matrix,dims=2, perplexity=5, theta=0.5, initialization=PCAinit)
+FItSNE50 <- fftRtsne(pbmc_matrix,dims=2, perplexity=50, theta=0.5)
+FItSNE500 <- fftRtsne(pbmc_matrix,dims=2, perplexity=500, theta=0.5) #running. Takes minutes. 
+plot(FItSNE500)
+plot()
+```
+
+The Strategy to get better T-SNE clustering:
+1. Cluster with perplexity=500, or some high number, to get the global clusters positioned correctly
+  Using the result from above as seed to cluster with perplexity = 50, to resolve closer relationships: use the add.iter function to use the existing T-SNE clusters to rerun
+2. Cluster using the first 2 PCAs as the seeding structure, which also should preserve global structures, 
+3. FIt-SNE is already built-in to Seurat!!! RunTSNE sith tsne.method=FIt-SNE, but the instructions don't say how FIt-SNE is implemented. I think FIt-SNE here does not refer to the "perplexity" stratery that I'm trying to implement, but the underlying T-SNE algorithm
+A) First iteration of "perplexity annealing" with t-SNE, I ran Perplexity 1000 -> 50 + 5000 iterations. Clusters are not very well separated start 10:16
+B) Second iteration, run Perplexity 500 -> 50 + 5000 iterations. The result is almost identical
+
+```{r fig.height=10, fig.width=12}
+pbmc_FitSNE <- RunTSNE(object= pbmc_FitSNE, reduction.use = "pca", cells.use = NULL, dims.use = 1:29,
+  genes.use = NULL, seed.use = 1, add.iter = 0,
+  dim.embed = 2, distance.matrix = NULL, reduction.name = "tsne",
+  reduction.key = "tSNE_", perplexity= 500)
+TSNEPlot(object = pbmc_FitSNE, do.label= TRUE) 
+ggsave("T-SNE_Perplexity=500.jpg", width= 12, height=10, dpi=600, plot= last_plot(), units = "in")
+```
+
+Get a rough idea of cluster identities
+
+```{r fig.height=10, fig.width=25}
+FeaturePlot(object=pbmc_FitSNE, features.plot = c("CD3D","CD8A","CD79A","GNLY","LYZ","CD14","KLF4","PPBP", "CD4","KLRB1","CD69","CCR7","GZMB","PRF1","MT-CYB"), cols.use=c("grey","blue"), nCol=5, no.legend=FALSE) +
+ggsave("T-SNE_Perplexity=500_markers.jpg", width= 24, height=12, dpi=600, plot= last_plot(), units = "in")
+```
+# Rerun on the previous tight cluster with Perplexity = 50, with 5000 iterations, which is pretty large. (10X CellRanger uses 1000 by default) Started at 11:13 a.m. Iteration 1000 at 2:30 Iteration 2000 at end of work day
+From the error at iterations, 2000 iterations is enough, 1000 is sufficient
+```{r}
+pbmc_FitSNE <- RunTSNE(object= pbmc_FitSNE, reduction.use = "pca", cells.use = NULL, dims.use = 1:29,
+  genes.use = NULL, seed.use = 1, add.iter = 1000,
+  dim.embed = 2, distance.matrix = NULL, reduction.name = "tsne",
+  reduction.key = "tSNE_", perplexity= 100)
+
+TSNEPlot(object = pbmc_FitSNE, do.label= TRUE) +
+  ggsave("T-SNE_Perplexity=500+100.jpg", width= 10, height=6, dpi=600, plot= last_plot(), units = "in")
+```
+
+```{r fig.height=10, fig.width=20}
+FeaturePlot(object=pbmc_FitSNE, features.plot = c("CD3D","CD8A","CD79A","GNLY","LYZ","CD14","KLF4","PPBP", "CD4","KLRB1","CD69","CCR7","GZMB","PRF1","MT-CYB"), cols.use=c("grey","blue"), nCol=5, no.legend=FALSE) +
+ggsave("T-SNE_Perplexity=500+100_markers.jpg", width= 24, height=12, dpi=600, plot= last_plot(), units = "in")
+```
+

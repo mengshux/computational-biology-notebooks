@@ -1,0 +1,831 @@
+---
+title: "GCN2_BulkSeq"
+author: "MX"
+date: "3/10/2020"
+output: html_document
+---
+
+Studies in this code:
+20-RENCA-101
+Splenocyte GCN2 AAS confirmation
+
+The samples were sequenced together and loaded together here, sub-select to get the RENCA vs. Splenocyte data
+
+```{r}
+library(limma)
+library(tidyverse)
+#update.packages("ggplot2")
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(DESeq2)
+library(edgeR)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("d:/FLX/Files_from_Gene/R_functions.r")
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+library(pheatmap)
+```
+
+Save and Load data
+```{r}
+save(tpm_gene,file="/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/tpm_gene.rdata") # normalized and summed by gene
+save(tpm_gene,file="D:/FLX/GCN2/Feb2020_RNAseq/tpm_gene.rdata") # normalized and summed by gene
+load("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/tpm_gene.rdata")
+load("D:/FLX/GCN2/Feb2020_RNAseq/tpm_gene.rdata")
+save(tpm_z, file="/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/tpm_gene_z.rdata") # normalized and genes zscored
+load("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/tpm_gene_z.rdata")
+load("D:/FLX/GCN2/Feb2020_RNAseq/tpm_gene_z.rdata")
+save(tpm_spleen_z, file="/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/tpm_gene_spleen_z.rdata") 
+load("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/tpm_gene_spleen_z.rdata")
+load("D:/FLX/GCN2/Feb2020_RNAseq/tpm_gene_spleen_z.rdata")
+
+save(sig_scores, file="/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/sig_scores.rdata") # signature scores calculated for all samples
+load("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/sig_scores.rdata")
+load("D:/FLX/GCN2/Feb2020_RNAseq/sig_scores.rdata")
+save(sig_spleen_scores, file="/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/sig_spleen_scores.rdata") # signature scores calculated for all samples
+load("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/sig_spleen_scores.rdata")
+```
+
+
+
+
+Read in the data
+```{r}
+file_names <- list.files("D:/FLX/GCN2/Feb2020_RNAseq/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"\\.")[[1]][1]})
+files <- base::list.files("D:/FLX/GCN2/Feb2020_RNAseq/", pattern=".tsv", full.names=TRUE)
+
+file_names <- list.files("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"\\.")[[1]][1]})
+files <- base::list.files("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/", pattern=".tsv", full.names=TRUE)
+#strsplit("G_AAS_1.kallisto_quant.abundance.tsv","\\.")[[1]][1]
+data_files <- lapply(files, function(i){read.table(i,header=TRUE)})
+tpms <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+rownames(tpms) <- data_files[[1]]$target_id
+colnames(tpms) <- file_names
+```
+
+Normalize data for plotting
+Sum by genes
+and take gene-wise z_score
+```{r}
+boxplot(tpms %>% as.matrix)
+tpm_norm <- normalizeBetweenArrays(tpms %>% as.matrix)
+boxplot(tpm_norm)
+
+gencode_symbol <- read.table("/Volumes/Picard/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+gencode_symbol <- read.table("D:/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+
+tpm_gene <- tpm_norm %>% data.frame %>% tibble::rownames_to_column("Gencode") %>% left_join(gencode_symbol, by="Gencode") %>% dselect(Symbol,everything()) %>% dselect(-Gencode) %>% group_by(Symbol) %>% mutate_if(is.numeric,sum_mx) %>% unique %>% ungroup
+
+save(tpm_gene,file="tpm_gene.rdata") 
+load("tpm_gene.rdata")
+
+tpm_z <- tpm_gene %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+tpm_spleen_z <- tpm_gene %>% tibble::column_to_rownames("Symbol") %>% dselect(starts_with("WT"),starts_with("G_")) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+tpm_spleen_z <- tpm_gene %>% tibble::column_to_rownames("Symbol") %>% dselect(starts_with("WT"),starts_with("G_")) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+```
+
+#######################
+#######################
+
+Deconvolution of cell types in samples
+
+#######################
+#######################
+
+```{r}
+install.packages("immuneconv")
+library(immunedeconv)
+```
+
+Translate mouse genes to human gene names
+```{r}
+Feb_matrix <- tpm_gene %>% inner_join(mouseAnnot, by=c("Symbol"="GENE.SYMBOL")) %>% dselect(-Symbol) %>% dfilter(!is.na(HumanName)) %>% distinct(HumanName, .keep_all = TRUE) %>% tibble::column_to_rownames("HumanName") %>% as.matrix
+ncol(Feb_matrix) #41
+```
+
+
+
+```{r}
+algorithms <- c(
+	"quantiseq",
+	"timer",
+	"mcp_counter",
+	"xcell",
+	"epic"
+)
+
+my_fun <- function(algo) {
+  if(algo =="timer") {immunedeconv::deconvolute(Feb_matrix, "timer", indications=c(rep("READ",41)))} else {
+  immunedeconv::deconvolute(Feb_matrix, algo)}
+  }
+Feb_deconv <- lapply(algorithms, my_fun) 
+
+names(Feb_deconv) <- algorithms
+
+for (algo in algorithms) results_deconv[[algo]]$cell_type <- paste0(algo,".", results_deconv[[algo]]$cell_type)
+
+all_deconv <- bind_rows(results_deconv)
+```
+
+Best Tools
+```{r}
+best <- deconv_t_z %>% select(SampleID=sample, CD8=`quantiseq.T cell CD8+`, Treg=Gene.Treg2, CD4=`Gene.CD4+`, 
+							  NK=`mcp_counter.NK cell`, B=`mcp_counter.B cell`,
+							  mMDSC=Mengshu.mMDSC, gMDSC=Mengshu.gMDSC, TGF_B=Gene.TGFB,
+							  M1=`xcell.Macrophage M1`, M2=`xcell.Macrophage M2`, Neutrophil=mcp_counter.Neutrophil, 
+							  mDC=`mcp_counter.Myeloid dendritic cell`, 
+							  CAF=`mcp_counter.Cancer associated fibroblast`, Endothelial=`mcp_counter.Endothelial cell`,
+							  Merck18=Gene.Merck18, Hot=Gene.Hot, AAS_Common=Mengshu.AAS, AAS_Met=Mengshu.Methionine, AAS_His=Mengshu.Histidine,
+							  AAS_Leu=Mengshu.Leucine, AAS_Arg=Mengshu.Arginine, AAS_Trp=Mengshu.Tryptophan
+							  )
+
+best <- c("quantiseq.T cell CD8+","mcp_counter.NK cell","mcp_counter.B cell","xcell.Macrophage M1","xcell.Macrophage M2","mcp_counter.Neutrophil","mcp_counter.Myeloid dendritic cell","mcp_counter.Cancer associated fibroblast","mcp_counter.Endothelial cell")
+```
+
+```{r fig.height=10, fig.width=15}
+all_deconv %>% dfilter(cell_type %in% best) %>% gather(Sample,cell_estimate,-cell_type) %>% separate(Sample,into=c("Group","Rep"), sep="\\.",remove=FALSE) %>% left_join(sample_key,by=c("Group")) %>% dfilter(Sample %nin% c("G4.2","G2.3")) %>% ggplot(aes(x=Treatment, y=cell_estimate, fill=Group)) + geom_boxplot(aes(group=Treatment)) + geom_point() + facet_wrap(~cell_type, scales="free_y", ncol=3) + NoLegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + scale_fill_manual(values=c("grey50","dodgerblue3","deepskyblue2","deepskyblue","orange","orangered1","darkorange2","darkorange1"))
+```
+
+
+Batch comparison for samples
+
+https://support.bioconductor.org/p/77960/
+
+```{r}
+dds <- eqDataSetFromMatrix(countData = x, colData = colData, ign = ~ subjects + treat)
+dds <- eq(dds)
+rld < rlog(dds)
+data <- plotPCA(rld, intgroups=c(), returnData=TRUE)
+ggplot(data)...
+```
+
+Load signatures
+
+```{r}
+GCN2 <-c("Cep85l","Txnrd1","Angptl4","Antxr2","Tcim", "Ptgs1", "Bdkrb2", "Prune2","Rbpj","Wdr45","Znrf2","Cnnm4","Grem1","Tnfaip2","Gpr137b-ps", "Car8", "Wipi2","Tmem171","Ndst3","Foxl1")
+GCN2_5marker <- c("Rbpj","Wdr45","Angptl4","Tmem171","Tcim")
+
+PERK <- c("Mrgprf","Lzts1","Wnt1" ,"Ptpn5","Gem","Slc2a6", "Snx32","Gm11331", "Prob1" , "Ccl7","Dbhos" ,"Mir99ahg","Trpm6", "N4bp2os","Glis1" ,"Mmp19","Lrrc73","Cd74","Pkdcc",   "2700069I18Rik","B230217C12Rik","Osr2")
+
+HRI <- c("Aft5","Glipr2","Grb10","Lrrc1","Slc7a11")
+
+Arg_sig_u_m 
+load("/Volumes/Picard/FLX/Reference_tables/Arg_sig_u_m.rdata")
+load("D:/FLX/Reference_tables/Arg_sig_u_m.rdata")
+
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4")
+Pan_isr <- c("Ddit3","Trib3","Ppp1r15a","Asns","Atf4","Adm2")
+
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Defa1", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "Ltf", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Cd24", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+
+load("/Volumes/Picard/FLX/Reference_tables/gMDSC_scRNA_m.rdata")
+```
+New signatures from human scRNA seq Talmadge data
+
+AZU1, CEACAM6, CEACAM8 are not in mouse
+Removed S100A8 and S100A9 from gMDSC_Talmadge signature because they're expressed in neutrophils also
+```{r}
+neutrophil_Talmadge_h <- c("NEAT1","MNDA","SOD2","NAMPT","IFITM2","SRGN","RGS2","CSF3R","CMTM2","SLC25A37","CXCR2","MME","LITAF","ALOX5AP") # ,"S100A8","S100A9"
+save(gMDSC_Talmadge_h, file="/Volumes/Picard/FLX/Reference_tables/gMDSC_Talmadge_h.rdata")
+gMDSC_Talmadge_m <- mouseAnnot %>% dfilter(HumanName %in% gMDSC_Talmadge_h) %>% pull(GENE.SYMBOL)
+save(gMDSC_Talmadge_m, file="/Volumes/Picard/FLX/Reference_tables/gMDSC_Talmadge_m.rdata")
+load("/Volumes/Picard/FLX/Reference_tables/neutrophil_Talmadge_m.rdata")
+gMDSC_Talmadge_h <- c("DEFA3","LTF","CAMP","BPI","CD24","LCN2","DEFA4","CEACAM8","MS4A3","MMP8","CRISP3","ABCA13","CEACAM6","RNASE3","TCN1","INHBA","RETN","ANXA3","PGLYRP1","AZU1","SERPINB10","RNASE2","MPO")
+length(neutrophil_Talmadge_h)
+save(neutrophil_Talmadge_h, file="/Volumes/Picard/FLX/Reference_tables/neutrophil_Talmadge_h.rdata")
+neutrophil_Talmadge_m <- mouseAnnot %>% dfilter(HumanName %in% neutrophil_Talmadge_h) %>% pull(GENE.SYMBOL)
+save(neutrophil_Talmadge_m, file="/Volumes/Picard/FLX/Reference_tables/neutrophil_Talmadge_m.rdata")
+load("/Volumes/Picard/FLX/Reference_tables/neutrophil_Talmadge_m.rdata")
+mouseAnnot %>% dfilter(grepl("DEFA",HumanName))
+```
+
+Calculate scores
+```{r}
+GCN2_score <- tpm_z %>% dfilter(Gene %in% GCN2) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="GCN2") %>% tibble::column_to_rownames("rownames")
+GCN2_5marker_score <- tpm_z %>% dfilter(Gene %in% GCN2_5marker) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="GCN2_5marker") %>% tibble::column_to_rownames("rownames")
+PERK_score <- tpm_z %>% dfilter(Gene %in% PERK) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="PERK") %>% tibble::column_to_rownames("rownames")
+HRI_score <- tpm_z %>% dfilter(Gene %in% HRI) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="HRI") %>% tibble::column_to_rownames("rownames")
+Arg_AAS_score <- tpm_z %>% dfilter(Gene %in% Arg_sig_u_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Arg_AAS") %>% tibble::column_to_rownames("rownames")
+AAS_score <- tpm_z %>% dfilter(Gene %in% aas_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="AAS") %>% tibble::column_to_rownames("rownames")
+Pan_ISR_score <- tpm_z %>% dfilter(Gene %in% isr) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Pan_ISR") %>% tibble::column_to_rownames("rownames")
+Angptl4_score <- tpm_z %>% dfilter(Gene =="Angptl4") %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Angptl4") %>% tibble::column_to_rownames("rownames")
+Atf4_score <- tpm_z %>% dfilter(Gene =="Atf4") %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Atf4_gene") %>% tibble::column_to_rownames("rownames")
+#gMDSC_score <- tpm_z %>% dfilter(Gene %in% gMDSC_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="gMDSC") %>% tibble::column_to_rownames("rownames")
+mMDSC_score <- tpm_z %>% dfilter(Gene %in% mMDSC_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="mMDSC") %>% tibble::column_to_rownames("rownames")
+
+gMDSC_scRNA <- tpm_z %>% dfilter(Gene %in% gMDSC_scRNA_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="gMDSC_Talmadge") %>% tibble::column_to_rownames("rownames")
+
+neutrophil_scRNA <- tpm_z %>% dfilter(Gene %in% neutrophil_Talmadge_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="neutrophil_Talmadge") %>% tibble::column_to_rownames("rownames")
+
+TAN_scRNA <- tpm_z %>% dfilter(Gene %in% TAN_sig_Talmadge_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="TAN_Talmadge") %>% tibble::column_to_rownames("rownames")
+
+sig_scores <- rbind.data.frame(GCN2_score,GCN2_5marker_score,PERK_score,HRI_score,Arg_AAS_score,AAS_score,Pan_ISR_score,Angptl4_score,Atf4_score,gMDSC_score,mMDSC_score,make.row.names=TRUE)
+
+sig_scores_scRNA <- rbind.data.frame(gMDSC_scRNA,neutrophil_scRNA,make.row.names=TRUE)
+
+
+GCN2_score <- tpm_spleen_z %>% dfilter(Gene %in% GCN2) %>% mutate_if(is.numeric,sum_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="GCN2") %>% tibble::column_to_rownames("rownames")
+GCN2_5marker_score <- tpm_spleen_z %>% dfilter(Gene %in% GCN2_5marker) %>% mutate_if(is.numeric,sum_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="GCN2_5marker") %>% tibble::column_to_rownames("rownames")
+PERK_score <- tpm_spleen_z %>% dfilter(Gene %in% PERK) %>% mutate_if(is.numeric,sum_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="PERK") %>% tibble::column_to_rownames("rownames")
+HRI_score <- tpm_spleen_z %>% dfilter(Gene %in% HRI) %>% mutate_if(is.numeric,sum_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="HRI") %>% tibble::column_to_rownames("rownames")
+Arg_AAS_score <- tpm_spleen_z %>% dfilter(Gene %in% Arg_sig_u_m) %>% mutate_if(is.numeric,sum_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Arg_AAS") %>% tibble::column_to_rownames("rownames")
+AAS_score <- tpm_spleen_z %>% dfilter(Gene %in% aas_sig_m) %>% mutate_if(is.numeric,sum_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="AAS") %>% tibble::column_to_rownames("rownames")
+Pan_ISR_score <- tpm_spleen_z %>% dfilter(Gene %in% Pan_isr) %>% mutate_if(is.numeric,sum_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Pan_ISR") %>% tibble::column_to_rownames("rownames")
+Angptl4_score <- tpm_spleen_z %>% dfilter(Gene =="Angptl4") %>% mutate_if(is.numeric,sum_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Angptl4") %>% tibble::column_to_rownames("rownames")
+
+
+sig_spleen_scores <- rbind.data.frame(GCN2_score,GCN2_5marker_score,PERK_score,HRI_score,Arg_AAS_score,AAS_score,Pan_ISR_score,Angptl4_score, make.row.names=TRUE)
+```
+
+Plot Splenocyte data
+
+In GCN2_AAS, replicate 1 is activated through PERK, showing high PERK signature, and AAS/Arg_AAS
+Also, in replicate 2 and 3, the AAS response is muted, presumably due to GCN2 k/o. However, our GCN2 signature still goes up, which means it is being activated by secondary pathways that are not GCN2-dependent in this context
+```{r fig.height=5, fig.width=13}
+sig_scores %>% dselect(starts_with("WT"),starts_with("G_")) %>% tibble::rownames_to_column("Signature") %>% dfilter(Signature != "gMDSC", Signature != "mMDSC")  %>% dselect(-G_AAS_1) %>% gather(Sample,Score,-Signature) %>% separate(Sample,into=c("Genotype","Treatment","Replicate"), sep="_") %>% mutate(Signature=factor(Signature,levels=c("AAS","Arg_AAS","Pan_ISR","GCN2_5marker","GCN2","Angptl4","PERK","HRI","Atf4_gene"))) %>% mutate(Genotype=factor(Genotype,levels=c("WT","G")),Treatment=factor(Treatment,levels=c("Ctrl","AAS")))  %>% ggplot(aes(x=interaction(Genotype,Treatment), y=Score, colour=Replicate)) + geom_point(size=2) + facet_wrap(~Signature, scales="free_y", ncol=5)
+
+
+```
+
+```{r fig.height=8, fig.width=15}
+tpm_spleen_z %>% dfilter(Gene %in% GCN2 | Gene =="Gapdh") %>% dselect(Gene,starts_with("WT"),starts_with("G_")) %>% gather(Sample,mRNA_zscore,-Gene) %>% separate(Sample,into=c("Genotype","Treatment","Replicate"), sep="_") %>%  mutate(Genotype=factor(Genotype,levels=c("WT","G")),Treatment=factor(Treatment,levels=c("Ctrl","AAS"))) %>% ggplot(aes(x=interaction(Genotype,Treatment), y=mRNA_zscore, colour=Replicate)) + geom_point() + facet_wrap(~Gene, scales="free_y")
+```
+
+```{r}
+tpm_gene %>% dfilter(Symbol=="Eif2ak4"|Symbol=="Eif2ak3"|Symbol=="Eif2ak2"|Symbol=="Adgre1"|Symbol=="Siglec1") %>% dselect(Symbol,starts_with("WT"),starts_with("G_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c("Genotype","Treatment","Replicate"), sep="_") %>% mutate(Genotype=factor(Genotype,levels=c("WT","G")),Treatment=factor(Treatment,levels=c("Ctrl","AAS"))) %>% ggplot(aes(x=interaction(Genotype,Treatment), y=mRNA_TPM, colour=Replicate)) + geom_point() + facet_wrap(~Symbol, scales="free_y") + expand_limits(y=0) # + scale_x_discrete(guide = guide_axis(n.dodge = 2))
+```
+
+######################################
+#################################
+
+19-RENCA-010   15 mpk BID Pro
+The 282 treatment doesn't perturb AAS or ISR signatures
+
+######################################
+#################################
+
+Check Markers for Mike Z.
+FGF19 in humans in FGF15 in mice # https://pubmed.ncbi.nlm.nih.gov/28189755/
+```{r fig.height=4, fig.width=7}
+library(ggbeeswarm)
+# 19-RENCA-10
+tpm_gene %>% dfilter(Symbol %in% c("Fgf15","Fgf21")) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Treatment)) + geom_boxplot(fill=NA, width=0.3) + geom_beeswarm(method="swarm", cex=5, size=2.5) + facet_wrap(~Symbol, scales="free_y")
+
+#20-RENCA-001 30mpk BID Therapeutic
+tpm_gene %>% dfilter(Symbol %in% c("Fgf15","Fgf21")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Treatment)) + geom_boxplot(fill=NA, width=0.3) + geom_beeswarm(method="swarm", cex=5, size=2.5) + facet_wrap(~Symbol, scales="free_y")
+
+#20-CT26-001   30 mpk BID Therapeutic
+tpm_gene %>% dfilter(Symbol %in% c("Fgf15","Fgf21")) %>% dselect(Symbol,starts_with("RAPT_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Treatment)) + geom_boxplot(fill=NA, width=0.3) + geom_beeswarm(method="swarm", cex=5, size=2.5) + facet_wrap(~Symbol, scales="free_y")
+
+#T tests
+ctrl <- tpm_gene %>% dfilter(Symbol %in% c("Fgf21")) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% pull(mRNA_TPM) %>% .[1:5]
+
+gcn2i <- tpm_gene %>% dfilter(Symbol %in% c("Fgf21")) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% pull(mRNA_TPM) %>% .[6:9]
+
+ctrl <- tpm_gene %>% dfilter(Symbol %in% c("Fgf21")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% dfilter(Treatment %in% c("Vehicle","BID_282")) %>% arrange(Treatment) %>% pull(mRNA_TPM) %>% .[5:10]
+gcn2i <- tpm_gene %>% dfilter(Symbol %in% c("Fgf21")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% dfilter(Treatment %in% c("Vehicle","BID_282")) %>% arrange(Treatment) %>% pull(mRNA_TPM) %>% .[1:4]
+
+ctrl <- tpm_gene %>% dfilter(Symbol %in% c("Fgf21")) %>% dselect(Symbol,starts_with("RAPT_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) %>% pull(mRNA_TPM) %>% .[1:3]
+gcn2i <- tpm_gene %>% dfilter(Symbol %in% c("Fgf21")) %>% dselect(Symbol,starts_with("RAPT_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) %>% pull(mRNA_TPM) %>% .[7:9]
+
+t.test(ctrl,gcn2i)
+```
+
+
+Plot markers
+
+```{r fig.height=10, fig.width=25}
+markers <- c("Il1b","Ifng","Il10","Sars","Cth","Nos2","Vegf","Marco","Ido1","Arg1")
+tpm_gene %>% dfilter(Symbol %in% markers) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point() + facet_wrap(~Symbol, scales="free_y")
+markers_2 <- c("Defa3","Defa4","Csf3r","Txnip","Ltf")
+
+tpm_gene %>% dfilter(Symbol %in% neutrophil_Talmadge_m) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=9) + ylim(0,NA)
+
+tpm_gene %>% dfilter(Symbol %in% gMDSC_Talmadge_m) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=8)
+
+#Differentially expressed markers: are they all from that one large tumor sample?
+diffex <- c("Cxcl1","Adam8","Cxcl2","Cxcl3","Adam8","Ptgs2","S100a9","S199a8") 
+tpm_gene %>% dfilter(Symbol %in% diffex) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=8)
+
+tpm_gene %>% dfilter(grepl("Defa",Symbol))
+```
+
+```{r fig.height=4, fig.width=4}
+tpm_gene %>% dfilter(Symbol %in% "Mmp8") %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) 
+```
+T cell markers
+Tim3 = Havcr2
+```{r fig.height=5, fig.width=13}
+
+tpm_gene %>% dfilter(Symbol %in% c("Lag3","Havcr2","Pdcd1","Foxp3")) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_boxplot(aes(group=Treatment, alpha=0.9)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=4)
+
+tpm_gene %>% dfilter(Symbol %in% c("Klrg1","Prf1","Cd69","Gzma","Gzmk")) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, ncol=5) + ylim(0,6)
+
+tpm_gene %>% dfilter(Symbol %in% c("Cd8a","Cd4","Nkg7")) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample))  + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=4)
+
+"Klrg1","Prf1",,"Gzma","Gzmk"
+pair <- tpm_gene %>% dfilter(Symbol %in% c("Cd4")) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol)  %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= as.factor(if_else(Code ==3,"Vehicle","BID_282_15mpk"))) %>% dselect(mRNA_TPM,Treatment) %>% group_by(Treatment)
+
+t.test(pair %>% pull(mRNA_TPM) %>% .[1:5],pair %>% pull(mRNA_TPM) %>% .[6:9], alternative="two.sided")
+
+```
+
+Plot GCN2 Signatures scores
+
+```{r fig.height=5, fig.width=10}
+sig_scores %>% tibble::rownames_to_column("Signature") %>% dfilter(Signature %in% c("AAS","Arg_AAS","Pan_ISR","Atf4_gene","GCN2_5marker","GCN2","PERK","HRI")) %>% dselect(Signature,starts_with("RNA_")) %>% gather(Sample,Sig_score,-Signature) %>% mutate(Signature=factor(Signature,levels= c("AAS","Arg_AAS","Pan_ISR","Atf4_gene","GCN2_5marker","GCN2","PERK","HRI"))) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=Sig_score, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Signature, scales="free_y", ncol=4)
+```
+
+
+Plot gMDSC vs. neutrophil marker sets from scRNA data Talmadge
+
+19-RENCA-010
+```{r}
+Tumor_sizes <- cbind("Samples" = (tpm_z %>% dselect(starts_with("RNA_")) %>% colnames),"Tumor_size"=c(393,292,205.5,378.6,207.24,119.23,107.99,112.68,332.65)) %>% data.frame %>% mutate(Tumor_size= as.numeric(Tumor_size))
+
+sig_scores_scRNA %>% tibble::rownames_to_column("Signature") %>% dselect(Signature,starts_with("RNA_")) %>% gather(Sample,Sig_score,-Signature) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=Sig_score, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Signature, scales="free_y")
+
+```
+
+#####################
+Heatmaps
+#####################
+
+```{r fig.height=1.5, fig.width=4}
+Tumor_sizes %>% ggplot(aes(Samples,Tumor_size)) + geom_bar(stat="identity")
+```
+
+```{r}
+library(pheatmap)
+
+tpm_z %>% dselect(Gene,starts_with("RNA_")) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+
+rv <- rowVars(Renca10_m)# save row variance to rv
+top3000 <- order(rv, decreasing=TRUE)[seq_len(min(3000, length(rv)))] # take the top 500 most variable genes, or the length of rv, whichever is less
+top3000_varGenes <- row.names(Renca10_m[top3000,])
+
+Renca10_m_top <- Renca10_m[top3000_varGenes,]
+
+pheatmap(Renca10_m_top,cluster_cols=F)
+```
+
+```{r fig.height=250, fig.width=6}
+pheatmap(Renca10_m_top,cluster_cols=F)
+```
+
+DEG analysis
+
+vst log transform data
+limma::RemoveBatchEffect()
+
+```{r}
+library(DESeq2)
+BiocManager::install("tximport")
+library(tximport)
+#BiocManager::install("tximeta")
+#library(tximport)
+
+colnames(tpm_gene)[2:42]
+gencode_symbol <- read.table(file="D:/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt", sep="\t", header=TRUE)
+my_files <- list.files("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/", pattern="RNA_", full.names=TRUE)
+all(file.exists(my_files)) # TRUE
+
+renca <- tximport(my_files, type="kallisto", tx2gene=gencode_symbol)
+#colnames(renca$counts) <- colnames(tpm_gene)[2:42]
+names <- list.files("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/", pattern="RNA_") %>% lapply(function(i) {strsplit(i,"\\.")[[1]][1]}) %>% unlist
+coldata <- data.frame(Samples=names) %>% mutate(Condition=c(rep("Vehicle",5),rep("Treat_282",4)),Size=c(977,208,488,215,324,245,348,306,265))
+#renca$counts <- round(renca$counts,digits=0)
+renca_p <- DESeqDataSetFromTximport(renca,
+                                   colData = coldata,
+                                   design= ~ Condition)
+save(renca_p,file="renca_p.rdata")
+
+```
+PCA plot
+
+```{r}
+rld <- rlog(renca_p)
+plotPCA(rld)
+data <- plotPCA(rld, intgroup=c("Condition","Samples"), returnData=TRUE)
+ggplot(data, aes(PC1,PC2, colour=group, label=Samples, alpha=0.1)) + geom_label(vjust = "inward", hjust = "inward") 
+```
+
+
+
+DE
+
+```{r}
+renca_p$Condition <- relevel(renca_p$Condition, ref = "Vehicle")
+renca_p <- DESeq(renca_p)
+res <- results(renca_p)
+res05 <- results(renca_p, alpha=0.5)
+
+res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.05,log2FoldChange >= 0.5) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) #%>% write.table(file="RENCA_19_10_UP.txt",sep="\t", quote=FALSE,row.names = FALSE)
+res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange <= -0.5) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="RENCA_19_10_DN.txt",sep="\t", quote=FALSE,row.names = FALSE)
+sig_UP <- res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange >= 0.5) %>% arrange(-log2FoldChange) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% pull(Gene)
+sig_DN <- res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange <= -0.5) %>% arrange(-log2FoldChange) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% pull(Gene)
+sig_UP %>% data.frame
+```
+
+MA plot
+```{r}
+plotMA(res, ylim=c(-7,7))
+plotMA(res05, ylim=c(-7,7))
+plotMA
+```
+Volcano Plot
+
+https://www.biostars.org/p/282295/
+
+```{r fig.height=10, fig.width=8}
+#install.packages("devtools")
+#devtools::install_github("hadley/devtools")
+#devtools::install_github('kevinblighe/EnhancedVolcano')
+library(EnhancedVolcano)
+
+pdf("Volcanoplot_RENCA10.pdf",width = 8, height = 10)
+EnhancedVolcano(results(renca_p),
+                 lab = rownames(results(renca_p)),
+                 x = 'log2FoldChange',
+                 y = 'pvalue',
+                 ylim = c(0, 8),
+                 xlim = c(-6, 6),
+                 #ylim = c(-0.1, 6),
+                 ylab = bquote(~-Log[10]~~italic(P)),
+                 title = 'RENCA Vehicle vs 282 Prophylactic 15 mkp BID',
+                 pCutoff = 0.003,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+```
+
+MA plot
+Use DESeq2::plotMA or it's calling the wrong function from Limma instead!
+
+lfcStrink function removes noise associated with log2 fold changes from low abundance genes
+```{r}
+resLFC <- lfcShrink(ddsTxi, coef="condition_RPT193_vs_Vehicle", type="apeglm")
+DESeq2::plotMA(res)
+DESeq2::plotMA(resLFC, ylim=c(-3,2))
+DESeq2::plotMA(resLFC, ylim=c(-1,1))
+plotMA # this shows which package the function is being called from 
+DESeq2::plotMA(resLFC, ylim=c(-3,2))
+idx <- identify(res$baseMean, res$log2FoldChange)
+rownames(res)[idx]
+```
+Graph markers
+```{r fig.height=8, fig.width=15}
+renca1 <- tpm_gene %>% dselect(Symbol, starts_with("RNA_")) 
+renca1 %>% dfilter(Symbol %in% "Foxp3") %>% gather(Sample,TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment,y=TPM, group=Treatment, colour=Treatment)) + facet_wrap(~Symbol, scales="free_y",ncol=6) + geom_boxplot(aes(alpha=0.5)) + geom_point() 
+```
+```{r fig.height=8, fig.width=15}
+renca1 %>% dfilter(Symbol %in% sig_DN) %>% gather(Sample,TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment,y=TPM, group=Treatment, colour=Treatment)) + facet_wrap(~Symbol, scales="free_y",ncol=6) + geom_boxplot(aes(alpha=0.5)) + geom_point() 
+```
+
+
+20-RENCA-001 30 mpk BID
+
+PLot signatures:
+VEGF activates Arg_AAS, Pan_ISR, (and GCN2 score)
+282 treatment isn't doing anything
+```{r fig.height=6, fig.width=12}
+#Using vehicles from 190RENCA-010
+sig_scores %>% dselect(starts_with("R_"),starts_with("RNA_3")) %>% tibble::rownames_to_column("Signature") %>% dfilter(Signature %in% c("AAS","Arg_AAS","Pan_ISR","Atf4_gene","GCN2_5marker","GCN2","PERK","HRI")) %>% gather(Sample,Score,-Signature) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% dfilter(Code != 7 , Code != 8) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Signature=factor(Signature,levels=c("AAS","Arg_AAS","Pan_ISR","Atf4_gene","GCN2_5marker","GCN2","PERK","HRI"))) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=Score, colour=Treatment)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Signature, scales="free_y", ncol=4)
+
+sig_scores %>% dselect(starts_with("R_")) %>% tibble::rownames_to_column("Signature") %>% gather(Sample,Score,-Signature) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Signature=factor(Signature,levels=c("AAS","Arg_AAS","Pan_ISR","GCN2_5marker","GCN2","Angptl4","PERK","HRI","Atf4_gene"))) %>% mutate(Treatment= if_else(Code == 5,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=Score, colour=Sample)) + geom_point() + facet_wrap(~Signature, scales="free_y", ncol=4)
+
+```
+
+Neutrophil vs. gMDSC signatures
+
+```{r fig.height=5, fig.width=3.5}
+Tumor_sizes <- cbind("Samples" = (tpm_gene %>% dselect(starts_with("RNA_")) %>% colnames),"Tumor_size"=c(393,292,205.5,378.6,207.24,119.23,107.99,112.68,332.65)) %>% data.frame %>% mutate(Tumor_size= as.numeric(Tumor_size))
+
+renca_t_size <- cbind("Samples" = tpm_gene %>% dselect(starts_with("R_"),starts_with("RNA_3")) %>% colnames, "Tumor_size" = c(298,453,335,183,370,293,152,229,159,721,270,393,292,205.5,378.6,207.24)) %>% data.frame %>% mutate(Tumor_size= as.numeric(Tumor_size))
+
+gMDSC_scRNA <- tpm_z %>% dfilter(Gene %in% gMDSC_Talmadge_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="gMDSC_scRNA") %>% tibble::column_to_rownames("rownames")
+neutrophil_scRNA <- tpm_z %>% dfilter(Gene %in% neutrophil_Talmadge_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="neutrophil_scRNA") %>% tibble::column_to_rownames("rownames")
+
+
+sig_scores <- rbind.data.frame(gMDSC_scRNA,neutrophil_scRNA,make.row.names=TRUE)
+
+sig_scores_scRNA %>% tibble::rownames_to_column("Signature") %>% dselect(Signature,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,Sig_score,-Signature) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo"))))  %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=Sig_score, colour=Sample)) + geom_boxplot(aes(group=Treatment)) + geom_point() + facet_wrap(~Signature, scales="free_y", ncol=1) + nolegend()
+#%>% left_join(renca_t_size,by=c("Sample"="Samples"))
+neutrophil_scRNA %>% tibble::rownames_to_column("Signature") %>% dselect(Signature,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,Sig_score,-Signature) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=Sig_score, colour=Sample)) + geom_point(aes(size=Tumor_size)) 
+
+```
+PLot Talmadge Neutrophil and gMDSC markers
+
+```{r fig.height=8, fig.width=25}
+tpm_gene %>% dfilter(Symbol %in% neutrophil_Talmadge_m) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=9) + ylim(0,NA)
+
+tpm_gene %>% dfilter(Symbol %in% gMDSC_Talmadge_m) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=9) + ylim(0,NA)
+
+tpm_z %>% mutate(Symbol=Gene) %>% dfilter(Symbol %in% gMDSC_Talmadge_m) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_zscore,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_zscore, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=9)
+```
+
+T cell markers
+Tim3 = Havcr2
+```{r fig.height=5, fig.width=3.5}
+
+tpm_gene %>% dfilter(Symbol %in% c("Lag3","Havcr2","Pdcd1","Foxp3")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=4) + ylim(0,NA)
+
+tpm_gene %>% dfilter(Symbol %in% c("Klrg1","Prf1","Cd69","Gzma","Gzmk")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=5) + ylim(0,NA)
+
+tpm_gene %>% dfilter(Symbol %in% c("Cd8a","Cd4","Nkg7")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=7) + ylim(0,NA)
+
+tpm_gene %>% dfilter(Symbol %in% c("Cxcr2","Nos2","Csf1r","Ido1")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_boxplot(aes(group=Treatment)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=1) + ylim(0,NA) + nolegend()
+
+"Klrg1","Prf1","Cd69","Gzma","Gzmk"
+pair <- tpm_gene %>% dfilter(Symbol %in% c("Cd4")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% dfilter(Treatment %in% c("Vehicle","BID_282")) %>% arrange(Treatment)
+
+t.test(pair %>% pull(mRNA_TPM) %>% .[1:6],pair %>% pull(mRNA_TPM) %>% .[7:10], alternative="two.sided")
+
+```
+Neutrophil markers
+
+```{r}
+tpm_gene %>% dfilter(Symbol %in% c("Cd8a","Cd4","Nkg7")) %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=7) + ylim(0,NA)
+```
+
+
+Plot DE markers
+
+```{r fig.height=10, fig.width=25}
+markers <- c("Il1b","Ifng","Il10","Sars","Cth","Nos2","Vegf","Marco","Ido1","Arg1")
+tpm_gene %>% dfilter(Symbol %in% markers) %>% dselect(Signature,starts_with("R_"),starts_with("RNA_3")) %>% gather(Sample,Sig_score,-Signature) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% left_join(renca_t_size,by=c("Sample"="Samples")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=Sig_score, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Signature, scales="free_y")
+
+markers_2 <- c("Defa3","Defa4","Csf3r","Txnip","Ltf")
+
+tpm_gene %>% dfilter(Symbol %in% neutrophil_Talmadge_m) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=9) + ylim(0,NA)
+
+tpm_gene %>% dfilter(Symbol %in% gMDSC_Talmadge_m) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=8)
+
+#Differentially expressed markers: are they all from that one large tumor sample?
+diffex <- c("Cxcl1","Adam8","Cxcl2","Cxcl3","Adam8","Ptgs2","S100a9","S199a8") 
+tpm_gene %>% dfilter(Symbol %in% diffex) %>% dselect(Symbol,starts_with("RNA_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(Tumor_sizes,by=c("Sample"="Samples")) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==3,"Vehicle","BID_282_15mpk")) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_15mpk"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Tumor_size)) + facet_wrap(~Symbol, scales="free_y", ncol=8)
+
+tpm_gene %>% dfilter(grepl("Defa",Symbol))
+```
+
+Plot F4_80
+```{r fig.height=3, fig.width=5}
+
+tpm_z %>% dselect(Gene,starts_with("RNA_3"),starts_with("R_5"),starts_with("R_9"),starts_with("R_10"),starts_with("R_14"),starts_with("R_19")) %>% dfilter(Gene %in% c("Adgre1","Cd74","Cd83")) %>% gather(Sample,mRNA_Z,-Gene) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_Z, colour=Sample)) + geom_boxplot(aes(group=Treatment)) + geom_point(aes()) + facet_wrap(~Gene, scales="free_y", ncol=8)
+
+tpm_gene %>% dselect(Symbol,starts_with("RNA_3"),starts_with("R_5"),starts_with("R_9"),starts_with("R_10"),starts_with("R_14"),starts_with("R_19")) %>% dfilter(Symbol %in% c("Adgre1","Cd74","Cd83")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_boxplot(aes(group=Treatment)) + geom_point(aes()) + facet_wrap(~Symbol, scales="free_y", ncol=8)
+
+tpm_gene %>% dselect(Symbol,starts_with("RNA_3"),starts_with("R_5"),starts_with("R_9"),starts_with("R_10"),starts_with("R_14"),starts_with("R_19")) %>% dfilter(Symbol %in% c("Adgre1","Cxcr2","Ncam1")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_boxplot(aes(group=Treatment)) + geom_point(aes()) + facet_wrap(~Symbol, scales="free_y", ncol=2) + nolegend()
+
+tpm_gene %>% dselect(Symbol,starts_with("RNA_3"),starts_with("R_5"),starts_with("R_9"),starts_with("R_10"),starts_with("R_14"),starts_with("R_19")) %>% dfilter(Symbol %in% c("Ncr1","Gzmb")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_boxplot(aes(group=Treatment)) + geom_point(aes()) + facet_wrap(~Symbol, scales="free_y", ncol=2) + nolegend()
+```
+
+#################
+
+Heatmaps
+
+##################
+```{r}
+Renca01_m <- tpm_z %>% dselect(Gene,starts_with("R_5"),starts_with("R_9"),starts_with("R_10"),starts_with("R_14"),starts_with("R_19")) %>% dfilter(!grepl("Gm|Rik|Mir|AC",Gene)) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+
+rv <- rowVars(Renca01_m)# save row variance to rv
+top3000 <- order(rv, decreasing=TRUE)[seq_len(min(3000, length(rv)))] # take the top 500 most variable genes, or the length of rv, whichever is less
+top3000_varGenes <- row.names(Renca01_m[top3000,])
+
+Renca01_m_top <- Renca01_m[top3000_varGenes,]
+mmp <- tpm_z %>% dselect(Gene,starts_with("RNA_3"),starts_with("R_5"),starts_with("R_9"),starts_with("R_10"),starts_with("R_14"),starts_with("R_19")) %>% dfilter(grepl("Mmp",Gene)) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+
+pheatmap(mmp,cluster_cols=F)
+
+pheatmap(Renca01_m_top[Mmp10,],cluster_cols=F, kmeas_k=5)
+```
+
+Plot cytokine heatmap
+```{r fig.height=6, fig.width=9}
+Inflam_cytokines <- c("Ifna","Ifng","Il1a","Il1b","Il2","Il4","Il6","Il12","Il17a","Il17f","Il18","Il19","Il22","Il26","IL32","Tnf","Ccl2","Ccl5","Cx3cr1","Cxcr3","Cxcr9")
+Immune_suppressors <- c("Il10","Il25","Il35","Il37","Mif","Tgfb","Ilra")
+Effector_markers <- c("Cd4","Cd8a","Pdcd1","Cd69","Gzma","Gzmk","Klrg1","Prf1")
+Exhaustion_markers <- c("Havcr2","Lag3","Nr4a1","Tox","Foxp3")
+Immune_suppressors_myeloid <- c("Arg1","Csf1r","Cxcr2","Il10","Nos2","Tdo","Ido")
+
+All_markers <- c(Inflam_cytokines,Immune_suppressors,Effector_markers,Exhaustion_markers,Immune_suppressors_myeloid)
+
+Cytokine <- tpm_z %>% dselect(Gene,starts_with("RNA_3"),starts_with("R_5"),starts_with("R_9"),starts_with("R_10"),starts_with("R_14"),starts_with("R_19")) %>% dfilter(Gene %in% All_markers) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+
+
+
+
+pheatmap(Cytokine,cluster_cols=F)
+pheatmap(F4_80,cluster_cols=F, cluster_rows = F)
+```
+
+
+```{r fig.height=350, fig.width=6}
+pheatmap(Renca01_m_top,cluster_cols=F)
+```
+Plot markers
+
+```{r}
+Inflam <- 
+```
+
+
+DE analysis with DESeq2
+
+Set up DESeq2 object
+
+```{r}
+library(DESeq2)
+library(tximport)
+
+colnames(tpm_gene)[2:42]
+gencode_symbol <- read.table(file="D:/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt", sep="\t", header=TRUE)
+my_files <- base::list.files("D:/FLX/GCN2/Feb2020_RNAseq/", pattern="RNA_3|^R_", full.names=TRUE)
+all(file.exists(my_files)) # TRUE
+
+renca2 <- tximport(my_files, type="kallisto", tx2gene=gencode_symbol)
+#colnames(renca$counts) <- colnames(tpm_gene)[2:42]
+names <- tpm_gene %>% dselect(Symbol,starts_with("R_"),starts_with("RNA_3")) %>% tibble::column_to_rownames("Symbol")
+coldata <- data.frame(Samples=colnames(names)) %>% separate(Samples,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE)  %>% mutate(Treatment= if_else(Code == 5| Code==3,"Vehicle",if_else(Code== 10|Code == 9, "BID_282", if_else(Code==14,"VEGF","Combo")))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF","Combo")))
+#renca$counts <- round(renca$counts,digits=0)
+renca_t <- DESeqDataSetFromTximport(renca2,
+                                   colData = coldata,
+                                   design= ~ Treatment)
+```
+DE
+
+```{r}
+renca_t$Treatment <- relevel(renca_t$Treatment, ref = "Vehicle")
+renca_t <- DESeq(renca_t)
+
+results(renca_t, name="Treatment_BID_282_vs_Vehicle") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5 | log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(-log2FoldChange) %>% write.table("RENCA_Thera_282_padj_0.1.txt", quote=FALSE, row.names = FALSE,sep="\t")
+
+res_t_UP <- results(renca_t, name="Treatment_BID_282_vs_Vehicle") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% arrange(padj)
+
+res_t_DN <- results(renca_t, name="Treatment_BID_282_vs_Vehicle") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% arrange(padj)#180
+
+res_t_VEGF <- results(renca_t, name="Treatment_VEGF_vs_Vehicle") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% arrange(padj)
+
+res_t_VEGF %>% write.table(file="RENCA_Thera_VEGF_UP.txt", sep="\t",row.names = FALSE, quote=FALSE)
+```
+
+Volcano Plot
+
+```{r fig.height=10, fig.width=8}
+
+library(EnhancedVolcano)
+
+pdf("Volcanoplot_20RENCA01.pdf",width = 8, height = 10)
+EnhancedVolcano(results(renca_t),
+                 lab = rownames(results(renca_t)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 8),
+                 xlim = c(-6, 6),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'RENCA Vehicle vs 282 Therapeutic 30 mkp BID',
+                 pCutoff = 0.1,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+```
+
+
+20-CT26-001 30 mpk BID Thera
+
+
+282 treatment has an effect on the Pan_ISR signal
+VEGF is not doing anything to activate the pathway
+```{r fig.height=7, fig.width=12}
+sig_scores %>% dselect(starts_with("RAPT_")) %>% tibble::rownames_to_column("Signature") %>% gather(Sample,Score,-Signature) %>% left_join(ct_sizes,by="Sample")  %>% separate(Sample,into=c(NA,"Code","Rep",NA), sep="_|\\.",remove=FALSE) %>% mutate(Signature=factor(Signature,levels=c("AAS","Arg_AAS","Pan_ISR","GCN2_5marker","GCN2","Angptl4","PERK","HRI","Atf4_gene","gMDSC","mMDSC"))) %>% mutate(Treatment= if_else(Code == 1,"Vehicle",if_else(Code== 7, "BID_282","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF"))) %>% ggplot(aes(x=Treatment, y=Score,colour=Sample)) + geom_point(aes(size=Size)) + facet_wrap(~Signature, scales="free_y",ncol=4)
+
+Neutrophil_score
+
+
+pair <- sig_scores  %>% dselect(starts_with("RAPT_")) %>% tibble::rownames_to_column("Signature") %>% gather(Sample,Score,-Signature)  %>% separate(Sample,into=c(NA,"Code","Rep",NA), sep="_|\\.",remove=FALSE) %>% mutate(Signature=factor(Signature,levels=c("AAS","Arg_AAS","Pan_ISR","GCN2_5marker","GCN2","Angptl4","PERK","HRI","Atf4_gene","gMDSC","mMDSC"))) %>% mutate(Treatment= if_else(Code == 1,"Vehicle",if_else(Code== 7, "BID_282","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF"))) %>% dfilter(Signature %in% c("Arg_AAS")) %>% group_by(Treatment)
+
+
+t.test(pair %>% pull(Score) %>% .[1:3],pair %>% pull(Score) %>% .[6:9], alternative="two.sided")
+```
+
+
+T cell markers
+Tim3 = Havcr2
+```{r fig.height=5, fig.width=3}
+my_Samples <- tpm_gene %>% dselect(Symbol,starts_with("RAPT_")) %>% colnames
+ct_sizes <- cbind(Sample = my_Samples[2:10], Size= c(109,297,93,133,137,173,129,99,131)) %>% data.frame %>% mutate(Size=as.numeric(Size))
+
+tpm_gene %>% dfilter(Symbol %in% c("Lag3","Havcr2","Pdcd1","Foxp3")) %>% dselect(Symbol,starts_with("RAPT_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(ct_sizes,by="Sample") %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Size)) + facet_wrap(~Symbol, scales="free_y", ncol=4) + ylim(0,NA)
+
+tpm_gene %>% dfilter(Symbol %in% c("Klrg1","Prf1","Cd69","Gzma","Gzmk")) %>% dselect(Symbol,starts_with("RAPT_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(ct_sizes,by="Sample") %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Size)) + facet_wrap(~Symbol, scales="free_y", ncol=5) + ylim(0,NA) + nolegend()
+
+tpm_gene %>% dfilter(Symbol %in% c("Cd8a","Cd4","Nkg7")) %>% dselect(Symbol,starts_with("RAPT_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(ct_sizes,by="Sample") %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Size)) + facet_wrap(~Symbol, scales="free_y", ncol=3) + ylim(0,NA) + nolegend()
+
+tpm_gene %>% dfilter(Symbol %in% c("Csf1r","Cxcr2","Nos2","Ido1")) %>% dselect(Symbol,starts_with("RAPT_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% left_join(ct_sizes,by="Sample") %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM, colour=Sample)) + geom_boxplot(aes(group=Treatment)) + geom_point(aes(size=Size)) + facet_wrap(~Symbol, scales="free_y", ncol=1) + ylim(0,NA) + nolegend()
+
+pair <- tpm_gene %>% dfilter(Symbol %in% c("Cd8a")) %>% dselect(Symbol,starts_with("RAPT_")) %>% gather(Sample,mRNA_TPM,-Symbol) %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% dselect(mRNA_TPM,Treatment) %>% group_by(Treatment)
+
+t.test(pair %>% pull(mRNA_TPM) %>% .[1:3],pair %>% pull(mRNA_TPM) %>% .[6:9], alternative="two.sided")
+
+```
+
+Plot Neutrophil sig
+
+```{r fig.height=5, fig.width=3}
+sig_scores_scRNA %>% tibble::rownames_to_column("Signature") %>% dselect(Signature,starts_with("RAPT_")) %>% gather(Sample,Score,-Signature) %>% left_join(ct_sizes,by="Sample") %>% separate(Sample,into=c(NA,"Code",NA), sep="_|\\.",remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) %>% ggplot(aes(x=Treatment, y=Score, colour=Sample)) + geom_boxplot(aes(group=Treatment)) + geom_point(aes(size=Size)) + facet_wrap(~Signature, ncol=1) + nolegend()
+```
+
+CT26 DE analysis
+
+Set up DESeq2 object
+
+```{r}
+BiocManager::install("DESeq2")
+BiocManager::install("tximport")
+library(DESeq2)
+library(tximport)
+
+colnames(tpm_gene)[2:42]
+gencode_symbol <- read.table(file="D:/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt", sep="\t", header=TRUE)
+gencode_symbol <- read.table(file="/Volumes/Picard/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt", sep="\t", header=TRUE)
+#my_files <- base::list.files("D:/FLX/GCN2/Feb2020_RNAseq/", pattern="RAPT_", full.names=TRUE)
+my_files <- base::list.files("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/", pattern="RAPT_", full.names=TRUE)
+all(file.exists(my_files)) # TRUE
+
+ct26 <- tximport(my_files, type="kallisto", tx2gene=gencode_symbol)
+ct26
+#colnames(renca$counts) <- colnames(tpm_gene)[2:42]
+names <- tpm_gene %>% dselect(Symbol,starts_with("RAPT_")) %>% tibble::column_to_rownames("Symbol")
+coldata <- data.frame(Samples=colnames(names)) %>% separate(Samples,into=c(NA,"Code",NA), sep="_|\\.", remove=FALSE) %>% mutate(Treatment= if_else(Code ==1,"Vehicle",if_else(Code==7,"BID_282_30mpk","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282_30mpk","VEGF"))) 
+#renca$counts <- round(renca$counts,digits=0)
+ct26 <- DESeqDataSetFromTximport(ct26,
+                                   colData = coldata,
+                                   design= ~ Treatment)
+```
+DE
+
+```{r}
+ct26$Treatment <- relevel(ct26$Treatment, ref = "Vehicle")
+ct26 <- DESeq(ct26)
+
+results(ct26, name="Treatment_BID_282_30mpk_vs_Vehicle") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue < 0.05) %>% dfilter(log2FoldChange >= 0.5 | log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(-log2FoldChange) %>% write.table("CT26_Thera_282_pvalue_0.05.txt", quote=FALSE, row.names = FALSE,sep="\t")
+results
+res_t_UP <- results(renca_t, name="Treatment_BID_282_vs_Vehicle") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% arrange(padj)
+
+res_t_DN <- results(renca_t, name="Treatment_BID_282_vs_Vehicle") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% arrange(padj)#180
+
+res_t_VEGF <- results(renca_t, name="Treatment_VEGF_vs_Vehicle") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% arrange(padj)
+
+res_t_VEGF %>% write.table(file="RENCA_Thera_VEGF_UP.txt", sep="\t",row.names = FALSE, quote=FALSE)
+```
+
+Volcano Plot
+
+```{r fig.height=10, fig.width=8}
+BiocManager::install("EnhancedVolcano")
+library(EnhancedVolcano)
+
+pdf("Volcanoplot_CT26_001.pdf",width = 8, height = 10)
+EnhancedVolcano(results(ct26, name="Treatment_BID_282_30mpk_vs_Vehicle"),
+                 lab = rownames(results(ct26)),
+                 x = 'log2FoldChange',
+                 y = 'pvalue',
+                 ylim = c(0, 8),
+                 xlim = c(-6, 6),
+                 ylab = bquote(~-Log[10]~~italic(P)),
+                 title = 'CT26 282 Therapeutic 30 mkp BID vs Vehicle',
+                 pCutoff = 0.05,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'darkorange1'),
+                 colAlpha = 1)
+dev.off()
+#turquoise3
+```
+
+
+
+Groom data from xCell analysis
+```{r}
+load("/Volumes/Picard/FLX/Reference_tables/mouse_human_gene.rdata")
+mouseAnnot
+tpm_xcell_input <- tpm_gene %>% left_join(mouseAnnot, by=c("Symbol"="GENE.SYMBOL")) %>% dselect(-Symbol) %>% dselect(HumanName,everything()) %>% dfilter(!is.na(HumanName))
+write.table(tpm_xcell_input,file="tpm_xcell_input.txt",sep="\t",quote=FALSE, row.names=FALSE)
+
+```
+
+Load results from Xcell
+
+```{r}
+xcell <- read.table(file="D:/FLX/GCN2/Feb2020_RNAseq/xCell_tpm_xcell_input_xCell_1822031120.txt", sep="\t", header=TRUE)
+
+cells_interest <- xcell[,1][c(7,10:11,13,31:33,56)]
+
+xcell %>% dfilter(Celltypes %in% cells_interest) %>% dselect(starts_with("RAPT_") | ) %>% tibble::rownames_to_column("Signature") %>% gather(Sample,Score,-Signature) %>% separate(Sample,into=c(NA,"Code","Rep",NA), sep="_|\\.",remove=FALSE) %>% mutate(Signature=factor(Signature,levels=c("AAS","Arg_AAS","Pan_ISR","GCN2_5marker","GCN2","Angptl4","PERK","HRI","Atf4_gene"))) %>% mutate(Treatment= if_else(Code == 1,"Vehicle",if_else(Code== 7, "BID_282","VEGF"))) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle","BID_282","VEGF"))) %>% ggplot(aes(x=Treatment, y=Score,colour=Sample)) + geom_point() + facet_wrap(~Signature, scales="free_y")
+```
+
+

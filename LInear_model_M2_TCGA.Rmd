@@ -1,0 +1,90 @@
+---
+title: "Linear_Model_M2_TCGA"
+author: "Mengshu"
+date: "5/1/2019"
+output: html_document
+---
+
+Gene's idea: Linear model TCGA M2 data for each gene:
+geneX ~ Tumor.Type + Tumor.Purity + M2.Content vs. geneX ~ Tumor.Type + Tumor.Purity
+
+Then you would select the genes for which the M2.Content component was significant.
+
+This basically says, for which genes is M2 content predictive of gene expression after accounting for tumor type and purity?
+
+Load Packages
+```{r}
+library(tidyverse)
+library(data.table)
+library(magrittr)
+library(dplyr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+library(lme4)
+library(lmerTest)
+library(merTools)
+install.packages("doMC")
+library(doMC)
+```
+
+Load the data matrix
+```{r}
+M2 <- readRDS(file="metadata_limma_input.rds")
+TCGA <- readRDS(file="tcgadata_limma_input.rds")
+TCGA_t <- data.table(t(TCGA))
+genes <- colnames(TCGA_t)
+genes3 <- as.list(genes)
+M2_TCGA <- data.table(M2,TCGA_t)
+M2[1:5,1:19]
+TCGA_t[1:5,1:5]
+M2_TCGA[1:10,1:25]
+M2_TCGA$disease <- as.factor(M2_TCGA$disease) 
+M2_TCGA$purity_quant <- as.factor(M2_TCGA$purity_quant) 
+
+```
+
+Genes tested: 
+ARF5 Pvalue: 2.11x10-7, Estimate: -1.74
+CD8A Pvalue: 2.00x10-16, Estimate: -7
+CSF1 Pvalue: 2.00x10-16, Estimate: 12
+
+Genes correlated with M2_fraction when its Estimate is a positive number, with a significant P-value
+
+This crazy syntax is required for lm() to work with lapply, because it doesn't take the variable as pure text correctly:
+lm(emal(paste0(variable,'~ factor1 + factor2 + factor3'), data))
+linearmodel <- function(gene_input) (lm_results <- lm(eval(paste0(gene_input, '~ disease + Purity + M2_ave')), M2_TCGA))
+```{r}
+linearmodel <- function(gene_input) { (lm_results <- lm(eval(paste0(gene_input, '~ disease + Purity + M2_ave')), M2_TCGA))
+                                      mdl_summary <- summary(lm_results)
+                                      parse_lm <- mdl_summary %>% coefficients %>% as.data.frame() %>% tail(1)
+                                     return(data.frame(gene_input,parse_lm)) 
+                                      }
+#Leave filtering until later
+%>% dfilter(Estimate > 2,`Pr(>|t|)` <= 0.05)
+
+one_gene <- ("CSF1")
+linearmodel(one_gene)
+lapply(one_gene,linearmodel)
+
+M2_lm <- lapply(genes3,linearmodel)
+#multicore run
+M2_lm <- mclapply(genes3,linearmodel, mc.cores=10)
+M2_lm_stats <-rbind_all(M2_lm)
+
+M2_lm_sig <- M2_lm_stats %>% dfilter(Pr...t.. < 0.05, gene_input %nlike% "RP", Estimate > 5) %>% arrange(-Estimate)
+write.table(M2_lm_sig, file="M2_TCGA_linearModel_sig.txt", sep="\t", row.names=FALSE, quote=FALSE)
+saveRDS(M2_lm_stats, file="M2_lm_stats.rds")
+
+#write_out <- function(stuff) write.table(stuff,"M2_lm_results")
+#test with one gene
+
+test_lm <- lm(CD8A ~ disease + Purity + M2_ave,  data=M2_TCGA) 
+test_lm <- lm(CSF1 ~ disease + Purity + M2_ave,  data=M2_TCGA) 
+sum_test <- summary(test_lm)
+summary(test_lm) %>% coefficients %>% as.data.frame() %>% tail(1) %>% dfilter(abs(Estimate) > 2,`Pr(>|t|)` <= 0.05)  
+sum_test$coefficients
+
+#Gene's code that could be useful for capturing data.tables from lapply
+lm(...) %>% map(tidy) %>% unnest()
+
+```
+

@@ -1,0 +1,213 @@
+---
+title: "CONICSmat_scRNA_CNA.Rmd"
+author: "MX"
+date: "9/18/2020"
+output: html_document
+---
+
+The Talmadge scRNA dataset includes 2 AML samples. We don't have much information about the samples (AML subtype, driver mutation, treatment history), and AML cell histologies can vary wildly. Since AML is a malignancy of myeloid cells, it can be hard to distinguish myeloid cells from AML cells. 
+There's also a phenomenon of lineage infidelity/ lineage switching in AML, where the progenitor tumor cells differentiate into T, NK like cells.  
+I will try to identify AML tumor cells by CNA
+
+load
+```{r}
+library("CONICSmat")
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(Seurat)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+```
+
+Installation
+```{r}
+install.packages("beanplot")
+install.packages("mixtools")
+install.packages("pheatmap")
+install.packages("zoo")
+install.packages("squash")
+BiocManager::install("scran")
+source("https://bioconductor.org/biocLite.R")
+biocLite("biomaRt")
+```
+
+Install CONICSmat
+```{r}
+install.packages("devtools")
+devtools::install_github("diazlab/CONICS/CONICSmat", dep = FALSE)
+```
+
+Fetch and clean up barcodes for cb_sniffer tool from the AML datasets
+```{r}
+aml <- subset(batch4, subset= orig.ident %in% c("aml1","aml3"))
+
+patients <- c(rep("aml1",6436))
+patients <- c(rep("aml3",2418))
+aml1_barcodes <- unlist(strsplit(colnames(aml)[1:6436],"_",fixed=TRUE))[seq(3,(3*6436)-1,3)]
+aml3_barcodes <- unlist(strsplit(colnames(aml)[6437:(6436+2418)],"_",fixed=TRUE))[seq(2,(3*2418)-1,2)]
+data.frame(barcodes=c(aml1_barcodes)) %>% write.table(file="aml1_barcodes.txt",row.names = FALSE,quote=FALSE)
+data.frame(barcodes=c(aml3_barcodes)) %>% write.table(file="aml3_barcodes.txt",row.names = FALSE,quote=FALSE)
+```
+
+Get AML data
+
+"Error in rowSums, "x" must be a array of at least two dimesions: this results in the subsetting, when the function automatically simplifies the matrix data into a vector, which fails in the lapply loop, put in drop=FALSE in the colSums
+```{r}
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+aml1 <- subset(batch4, subset= orig.ident %in% c("aml1"))
+aml3 <- subset(batch4, subset= orig.ident %in% c("aml3"))
+
+pbmc3 <- subset(batch4, subset= orig.ident %in% c("pbmc3"))
+pbmc2 <- subset(batch4, subset= orig.ident %in% c("pbmc2"))
+pdac1 <- subset(batch4, subset= orig.ident %in% c("pdac1"))
+cell_type <- data.frame(FetchData(aml3,vars="seurat_clusters")) %>% mutate(cluster= as.numeric(seurat_clusters)) %>% mutate(cell_type= case_when(
+                                                                                 cluster %in% c(2,3,5,8,21,13,10) ~ "Granulocytic",
+                                                                                 cluster == 20 ~ "PMN_MDSC",
+                                                                                 cluster %in% c(7,11,12,15,25,22) ~ "Monocytic",
+                                                                                 cluster %in% c(0,1,26,18,4,19,24,6,23,17) ~ "Lymphoid",
+                                                                                 TRUE ~ "Other")) %>% pull(cell_type)
+aml3[["Cell_Type"]] <- cell_type
+length(cell_type) #4699 #2418 for AML3
+aml3_norm <- NormalizeData(aml3,scale.factor = 1e6)
+log_data <- GetAssayData(aml3_norm) #this gets the log data
+log2_data <- log(expm1(log_data) + 1, 2) #expm1 unlogs the data, which then gets logged again 
+dim(log2_data)
+boxplot(log2_data[,1:100] %>% as.matrix)
+```
+
+Read in the chromosomes coordinates table
+https://raw.githubusercontent.com/diazlab/CONICS/master/chromosome_arm_positions_grch38.txt
+```{r}
+download.file("https://raw.githubusercontent.com/diazlab/CONICS/master/chromosome_arm_positions_grch38.txt",destfile="chromosome_arm_positions_grch38.txt")
+regions <-  read.table("chromosome_arm_positions_grch38.txt", sep="\t", row.names=1, header=TRUE)
+```
+
+Get positions of genes with getGenePositions(), which is a tool in CONICSmat
+Filter for genes that are expressed in at least 5 cells with filterMatrix(), which is a tool in CONICSmat
+```{r}
+gene_pos <- getGenePositions(rownames(log2_data))
+#gene_pos %>% dselect(chromosome_name) %>% table  # why is there a chromosome 0? are these non-chromosomal genes? Also there are no sex chromosomes, X and Y, which makes sense
+gene_exp <- filterMatrix(log2_data,gene_pos[,"hgnc_symbol"],minCells=5)
+```
+Calculate the normalization factor for each cell, based on how many transcripts it expresses:
+Looks like it's a simple normalization factor based on total reads per cell, since it's a linear relationship with the matrix colSums
+```{r}
+normFactor <- calcNormFactors(log2_data)
+```
+
+See if any chromosome arms have bimodal distribution of gene expression across cells
+The cell signal is normalized with the number from the last step, then the Z-score of all genes is calculated across all cells. Regions are analyzed for differences in gene zscore
+Only regions that have atleast 100 genes expressed are included. 
+```{r}
+#this function outputs a matrix with the Bayesian Information Criterion and Adjusted likelihood p-values of each region, and a PDF
+#l_aml=plotAll(aml_norm, normFactor, regions,gene_pos,"AML_CNAs")
+
+l_aml1=plotAll(log2_data, normFactor, regions,gene_pos,"AML1_CNAs")
+l_aml3=plotAll(log2_data, normFactor, regions,gene_pos,"AML3_CNAs")
+l_pbmc3=plotAll(log2_data, normFactor, regions,gene_pos,"PBMC3_CNAs")
+l_pbmc2=plotAll(log2_data, normFactor, regions,gene_pos,"PBMC2_CNAs")
+l_pdac1=plotAll(log2_data, normFactor, regions,gene_pos,"PDAC1_CNAs")
+```
+
+```{r fig.height=7, fig.width=15}
+
+patients <- c(rep("aml1",6436))
+patients <- c(rep("aml3",2418))
+6436+2418
+
+hi_aml1=plotHistogram(l_aml1,gene_exp,clusters=3,zscoreThreshold=4,cell_type)
+hi_aml3=plotHistogram(l_aml3,gene_exp,clusters=3,zscoreThreshold=4,cell_type) 
+hi_pbmc3=plotHistogram(l_pbmc3,gene_exp,clusters=3,zscoreThreshold=4,cell_type) 
+hi_pbmc2=plotHistogram(l_pbmc2,gene_exp,clusters=3,zscoreThreshold=4,cell_type) 
+hi_pdac1=plotHistogram(l_pdac1,gene_exp,clusters=3,zscoreThreshold=4,cell_type) 
+
+hi_aml3 %>% unique # this is a simple data.frame of cluster numbers. 1 is normal, 2 is not normal, 3 is not normal
+CNA_c2 <- data.frame(CNA_cluster= hi_aml3) %>% dfilter(CNA_cluster == 2) %>% rownames
+length(CNA_c2) # 76 cells
+CNA_c3 <- data.frame(CNA_cluster= hi_aml3) %>% dfilter(CNA_cluster == 3) %>% rownames
+length(CNA_c3) #183 cells
+```
+Plot the CNA cells back onto the UMAP
+```{r fig.height=4, fig.width=6}
+library(Seurat)
+DimPlot(aml3, reduction="umap",label=TRUE, group.by)
+DimPlot(aml3,cells.highlight=KRAS_cells, reduction="umap",label=TRUE)
+DimPlot(aml3,cells.highlight=NF1_cells, reduction="umap",label=TRUE)
+NF1_cells <- paste0("aml3_",NF1_barcodes)
+KRAS_cells <- paste0("aml3_",KRAS_barcodes)
+```
+
+I see evidence of overlapping bimodal curves on every chromosome except 8 and 19. Rerun this analysis with Healthy donor PBMC data to compare
+
+Get Healthy donor data
+
+4:09 p.m. to 4:17 p.m. 8 min
+5:35
+```{r}
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+pbmc <- subset(batch4, subset= orig.ident %in% c("pbmc1","pbmc2","pbmc3"))
+pbmc_matrix <- as.matrix(pbmc$RNA@counts)
+save(pbmc_matrix,file="pbmc_matrix.rdata")
+#pbmc_matrix[1:5,1:5]
+#pbmc_matrix %>% dim
+norm_mx <- function(x) {(log2((((x/colSums(x[,1,drop=FALSE]))*1e5)+1)))}
+pbmc_norm <- norm_mx(pbmc_matrix)
+pbmc_norm[1:5,1:5]
+#run in parallel
+library("parallel")
+detectCores() # cores - 1 so computer still runs
+cl <- parallel::makeCluster(11, setup_timeout = 0.5) 
+pbmc_norm <- parLapply(cl,pbmc_matrix,norm_mx) # wrap your apply function with the cluster number and parApply
+stopCluster(cl)
+pbmc_norm %>% str
+boxplot(pbmc_norm[,1:100]) #Data has been normalized
+#dim(aml_norm) # 8854 cells 23620 genes
+```
+
+```{r}
+normalize <- function(x) {(log2(((x/colSums(x[,1,drop=FALSE])*1e5)+1)))}
+normalize(hey)
+pbmc_norm <- sapply(hey,normalize)
+hey <- data.frame(nums = c(1,2,3,4,5),other=c(4,5,6,7,8))
+```
+
+Get positions of genes with getGenePositions(), which is a tool in CONICSmat
+Filter for genes that are expressed in at least 5 cells with filterMatrix(), which is a tool in CONICSmat
+```{r}
+gene_pos <- getGenePositions(rownames(pbmc_norm))
+
+gene_exp <- filterMatrix(pbmc_norm,gene_pos[,"hgnc_symbol"],minCells=5)
+gene_exp[1:5,1:5]
+```
+Calculate the normalization factor for each cell, based on how many transcripts it expresses:
+Looks like it's a simple normalization factor based on total reads per cell, since it's a linear relationship with the matrix colSums
+```{r}
+normFactor <- calcNormFactors(pbmc_norm)
+```
+See if any chromosome arms have bimodal distribution of gene expression across cells
+
+```{r}
+#this function outputs a matrix with the Bayesian Information Criterion and Adjusted likelihood p-values of each region, and a PDF
+l=plotAll(pbmc_norm, normFactor, regions,gene_pos,"Normal_CNAs")
+```
+
+```{r fig.height=7, fig.width=15}
+
+patients <- unlist(strsplit(colnames(gene_exp),"_",fixed=TRUE))[seq(2,(3*ncol(gene_exp))-1,3)]
+unique(patients)
+
+hi=plotHistogram(l,gene_exp,clusters=3,zscoreThreshold=4,patients)
+```
+
+Plot the CNA and KRAS, NF1 data back onto the Seurat maps
+```{r fig.height=4, fig.width=6}
+library(Seurat)
+DimPlot(aml3, reduction="umap",label=TRUE)
+DimPlot(aml3,cells.highlight=KRAS_cells, reduction="umap",label=TRUE)
+DimPlot(aml3,cells.highlight=NF1_cells, reduction="umap",label=TRUE)
+NF1_cells <- paste0("aml3_",NF1_barcodes)
+KRAS_cells <- paste0("aml3_",KRAS_barcodes)
+```
+

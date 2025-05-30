@@ -1,0 +1,103 @@
+---
+title: "TIL_estimate_TCGA"
+author: "MX"
+date: "4/19/2020"
+output: html_document
+---
+
+Load Packages
+```{r}
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tibble)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("D:/FLX/Files_from_Gene/R_functions.r")
+```
+
+###################################
+Xcell TCGA data
+Cibersort & QuantiSeq data
+
+###################################
+###################################
+```{r fig.height=8, fig.width=3}
+xcell_TCGA <- read.table("D:/FLX/Reference_tables/xCell_TCGA_RSEM.txt",sep="\t", header=TRUE) # 64 cell types, 9948 TCGA cases
+
+Quanti_Ciber_TCGA <- read.table("/Volumes/Picard/FLX/Reference_tables/TIL_estimates/QuantiSeq_CiberSort_CellTypeFractionsData.tsv",sep="\t", header=TRUE) # 64 cell types, 9948 TCGA cases
+
+xcell_TCGA <- read.table("/Volumes/Picard/FLX/Reference_tables/TIL_estimates/xCell_TCGA_RSEM.txt",sep="\t", header=TRUE) 
+
+xCell <- read.table("/Volumes/Picard/FLX/Reference_tables/TIL_estimates/xCell_TCGA_RSEM.txt", sep="\t", header=TRUE) %>% data.frame %>% dfilter(X %in% c("aDC","B-cells","CD4+ memory T-cells","CD4+ naive T-cells","CD8+ naive T-cells","CD8+ T-cells","CD8+ Tcm","CD8+ Tem","DC","Macrophages M1","Macrophages M2","Monocytes","Neutrophils","NK cells","Tregs")) %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("TCGA") %>% mutate(Sample = Hmisc::sedit(TCGA,'.','-')) %>% dselect(-TCGA) %>% dselect(Sample,everything()) #  %>% mutate(Sample=substr(TCGA,1,12))
+
+xCell %>% left_join(cancer_t_TCGA, by="Sample") %>% mutate(TumorAbr= fct_reorder(TumorAbr,Macrophages.M1, .fun = median)) %>% dfilter(!is.na(TumorAbr)) %>% ggplot(aes(x=TumorAbr,y=Macrophages.M1,colour = TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+xCell %>% left_join(cancer_t_TCGA, by="Sample") %>% mutate(TumorAbr= fct_reorder(TumorAbr,Macrophages.M2, .fun = median)) %>% dfilter(!is.na(TumorAbr)) %>% ggplot(aes(x=TumorAbr,y=Macrophages.M2,colour = TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+#xCell %>% left_join(cancer_t_TCGA, by="Sample") %>% mutate(TumorAbr= fct_reorder(TumorAbr,Macrophages.M1, .fun = median)) %>% dselect(TumorAbr) %>% dfilter(is.na(TumorAbr))
+
+xcell_TCGA_t_z <- xcell_TCGA %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2)
+
+ggplot( xcell_TCGA %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% dfilter(Sample == "TCGA.WC.A888.01") %>% gather(Cell_Type,Content,-Sample),aes(Cell_Type,Content)) + geom_bar(stat="identity") + coord_flip()
+```
+
+#######################
+Load TCGA (and other) data
+17921 samples
+Log2 of TPMs, not zero-centered
+GSE102349: Nasopharyngial
+GSE68799: Chinese Nasopharyngial
+ICGC: International Cancer Genome Consortium
+
+    GSE102349      GSE68799          ICGC        TARGET          TCGA TreeHouseUCSC 
+           34            45           602           614         10534           640 
+           
+        Cancer     Metastatic Normal/Control      Recurrent 
+         11162            396            751            160 
+#########################
+```{r fig.height=5, fig.width=5}
+load("/Volumes/Picard/FLX/TCGA/allMergedData.quantileNorm.rdata")
+load("D:/FLX/TCGA/allMergedData.quantileNorm.rdata")
+load("/Volumes/Picard/FLX/TCGA/allMergedData.SampleInfo.rdata")
+load("D:/FLX/TCGA/allMergedData.SampleInfo.rdata")
+allMergedData.SampleInfo$DzNormal %>% table
+allMergedData.SampleInfo$Dataset %>% table
+cancer_t <- allMergedData.SampleInfo %>% dselect(Sample,DzNormal,PrimaryDisease,Dataset,TumorAbr)
+cancer_t_TCGA <- cancer_t %>% dfilter(Dataset=="TCGA")
+boxplot(allMergedData.quantileNorm[,2:190])
+allMergedData.quantileNorm[1:10,1:10]
+
+allMergedData.quantileNorm %>% dfilter(Gene %in% c("RHOQ","MYRIP","EXOSC8","MUS81")) %>% gather(Sample,Expression, -Gene) %>% ggplot(aes(x=Gene,y=Expression)) + geom_point()
+#geom_beeswarm()
+#library(ggbeeswarm)
+```
+
+
+```{r}
+Cancers_gene_zscore <- allMergedData.quantileNorm %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+save(Cancers_gene_zscore,file="allMergedData.quantile.gene.NormZscore2.rdata")
+load("allMergedData.quantileNormZscore.rdata")
+
+gMDSC_sig_score2 <- Cancers_gene_zscore %>% dfilter(Gene %in% gMDSC_sig_n) %>% summarize_if(is.numeric,sum)
+mMDSC_sig_score2 <- Cancers_gene_zscore %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,sum)
+TWIK2_zscore <- Cancers_gene_zscore %>% dfilter(Gene =="KCNK6") %>% summarize_if(is.numeric,sum)
+GAPDH_zscore <- Cancers_gene_zscore %>% dfilter(Gene =="GAPDH") %>% summarize_if(is.numeric,sum)
+```
+
+Plot
+
+```{r fig.height=6, fig.width=6}
+gMDSC_sig_score2 %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(gMDSC_sig_score=.data$.) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(TumorAbr= fct_reorder(TumorAbr,gMDSC_sig_score, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=gMDSC_sig_score, colour=TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+mMDSC_sig_score2 %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(mMDSC_sig_score=.data$.) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(TumorAbr= fct_reorder(TumorAbr,mMDSC_sig_score, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=mMDSC_sig_score, colour=TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+TWIK2_zscore %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(TWIK2_zscore=.data$.) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(TumorAbr= fct_reorder(TumorAbr,TWIK2_zscore, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=TWIK2_zscore, colour=TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+TWIK2_zscore %>% rbind(mMDSC_sig_score2) %>% rbind(gMDSC_sig_score2) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(TWIK2_zscore=.data$X1,mMDSC_sig_score=.data$X2,gMDSC_sig_score=.data$X3) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(Sample = Hmisc::sedit(Sample,'.','-'))  %>% left_join(xCell, by="Sample") %>% dfilter(TumorAbr!="AML") %>% group_by(TumorAbr) %>% summarise_if(is.numeric,mean_mx) %>% ggplot(aes(x=TWIK2_zscore,y=Macrophages.M1, colour=TumorAbr, alpha=0.6)) + geom_smooth(method='lm', color="grey50") + geom_label(aes(label=TumorAbr, size=4)) + theme_bw() + nolegend() 
+
+GAPDH_zscore %>% rbind(mMDSC_sig_score2) %>% rbind(gMDSC_sig_score2) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(GAPDH_zscore=.data$X1,mMDSC_sig_score=.data$X2,gMDSC_sig_score=.data$X3) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(Sample = Hmisc::sedit(Sample,'.','-'))  %>% left_join(xCell, by="Sample") %>% dfilter(TumorAbr!="AML") %>% group_by(TumorAbr) %>% summarise_if(is.numeric,mean_mx) %>% ggplot(aes(x=GAPDH_zscore,y=gMDSC_sig_score, colour=TumorAbr, alpha=0.6)) + geom_smooth(method='lm', color="grey50") + geom_label(aes(label=TumorAbr, size=4)) + theme_bw() + nolegend() 
+
+```

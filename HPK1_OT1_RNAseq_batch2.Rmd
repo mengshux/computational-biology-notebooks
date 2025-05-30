@@ -1,0 +1,472 @@
+---
+title: "HPK1_OTI_batch2"
+author: "MX"
+date: "9/29/2020"
+output: html_document
+---
+
+```{r}
+library(limma)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(DESeq2)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+```
+
+Save and Load data
+```{r}
+save(tpm_gene2,file="/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/tpm_gene2.rdata") # normalized and summed by gene
+load("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/tpm_gene2.rdata")
+save(tpm_z2,file="/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/tpm_z2.rdata")
+load("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/tpm_z2.rdata")
+load("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/tpm_z.rdata")
+load("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/OTI1_2_DESeq2_object.rdata")
+```
+
+
+
+
+Read in the data
+```{r}
+file_names <- list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"_abundance")[[1]][1]})
+files <- base::list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/", pattern=".tsv", full.names=TRUE)
+#data_files[1]
+data_files <- lapply(files, function(i){read.table(i,header=TRUE)})
+tpms2 <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+rownames(tpms2) <- data_files[[1]]$target_id
+colnames(tpms2) <- file_names
+```
+
+Normalize data for plotting
+Sum by genes
+and take gene-wise z_score
+```{r}
+boxplot(tpms2 %>% as.matrix)
+tpm_norm2 <- normalizeBetweenArrays(tpms2 %>% as.matrix)
+boxplot(tpm_norm2)
+
+gencode_symbol <- read.table("/Volumes/Picard/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+
+tpm_gene2 <- tpm_norm2 %>% data.frame %>% tibble::rownames_to_column("Gencode") %>% left_join(gencode_symbol, by="Gencode") %>% dselect(Symbol,everything()) %>% dselect(-Gencode) %>% dfilter(!is.na(Symbol)) %>% group_by(Symbol) %>% mutate_if(is.numeric,sum_mx) %>% unique %>% ungroup
+
+tpm_m2 <- tpm_gene2 %>% tibble::column_to_rownames("Symbol") %>% as.matrix
+tpm_z2 <- t(apply(tpm_m2,1,mx_zscore)) #the middle term 1 means rows, and 2 means columns
+tpm_z2
+boxplot(tpm_gene2)
+boxplot(tpm_z2)
+save(tpm_gene2,file="tpm_gene_batch2.rdata") 
+#load("tpm_gene.rdata")
+
+save(tpm_z2,file="tpm_z_batch2.rdata")
+load(file="/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/tpm_z_batch2.rdata")
+```
+
+DESeq2 PCA plot
+Batch comparison for samples
+
+https://support.bioconductor.org/p/77960/
+
+```{r}
+library(DESeq2)
+library(tximport)
+files <- base::list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/", pattern=".tsv", full.names=TRUE)
+gencode_symbol <- read.table("/Volumes/Picard/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+names <- base::list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/RNA_seq_batch2/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"_abundance")[[1]][1]}) %>% unlist
+ot1 <- tximport(files, type="kallisto", tx2gene=gencode_symbol)
+colnames(ot1$counts) <- names #<- colnames(tpm_gene)[2:length(colnames(tpm_gene))]
+meta <- data.frame(Sample= names) %>% mutate(Name= case_when(
+  grepl("_1-",Sample) ~ "Vehicle_Day3",
+  grepl("_2-",Sample) ~ "F019324_100mpk_Day3",
+  grepl("_3-",Sample) ~ "Vehicle_Day7",
+  grepl("_4-",Sample) ~ "F019324_100mpk_Day7"
+)) %>% mutate(Day= case_when(
+  grepl("_1-",Sample) ~ "Day3",
+  grepl("_2-",Sample) ~ "Day3",
+  grepl("_3-",Sample) ~ "Day7",
+  grepl("_4-",Sample) ~ "Day7"
+)) %>% mutate(Treatment= case_when(
+  grepl("_1-",Sample) ~ "Vehicle",
+  grepl("_2-",Sample) ~ "Treated",
+  grepl("_3-",Sample) ~ "Vehicle",
+  grepl("_4-",Sample) ~ "Treated"
+)) 
+```
+
+
+```{r fig.height=4, fig.width=7}
+OT1_2 <- DESeqDataSetFromTximport(ot1,
+                                   colData = meta,
+                                   design= ~ Name)
+OT1_2@assays@data$counts
+OT1_2 <- DESeq(OT1_2)
+rld <- rlog(OT1_2) 
+plotPCA(rld,intgroup=c("Name")) + scale_color_manual(values= c("orange","red","grey60","grey30"))
+plotPCA(rld,intgroup=c("Treatment")) + scale_color_manual(values= c("orange","grey60"))
+plotPCA(rld,intgroup=c("Day"))
+data <- plotPCA(rld,intgroup=c("Sample"), returnData=TRUE)
+ggplot(data, aes(PC1,PC2, colour=group, label=Sample, alpha=0.1)) + geom_label(vjust = "inward", hjust = "inward",size=3) 
+```
+
+Explore genes in PCs
+https://www.biostars.org/p/339919/
+
+PC1: Ighv, Itgax, Cx3cr1
+PC2: Retng, Batf3, S100A9
+```{r}
+rv <- rowVars(assay(rld)) 
+selected <- order(rv, decreasing=TRUE)[seq_len(min(500, length(rv)))]
+pc <- prcomp(t(assay(rld)[selected,]))
+loadings <- as.data.frame(pc$rotation)
+aload = abs(loadings)
+sweep(aload, 2, colSums(aload), "/")
+aload %>% arrange(-PC1) %>% tibble::rownames_to_column("Gene") %>% dfilter(!grepl("Gm|Rik",Gene))
+```
+
+
+DE
+Levels: Vehicle_Day3 F019324_100mpk_Day3 Vehicle_Day7 F019324_100mpk_Day7 
+There is a lot of noise from B cells, but since B cell carry-over is noisy, I should rank DEGs on padj instead of log2FoldChange, so look for consistent changes instead of dramatic ones
+```{r}
+OT1_2$Name <- relevel(OT1_2$Name, ref = "Vehicle_Day7")
+OT1_2$Name <- relevel(OT1_2$Name, ref = "Vehicle_Day3")
+OT1_2$Day <- relevel(OT1_2$Day, ref = "Day3")
+
+OT1_2 <- DESeq(OT1_2)
+resultsNames(OT1_2)
+save(OT1_2,file="OTI1_2_DESeq2_object.rdata")
+
+res_324_UP <- results(OT1_2, name="Name_F019324_100mpk_Day7_vs_Vehicle_Day7") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+res_324_UP %>% write.table(file="Day7_324_vs_Veh_UP_padj.txt", sep="\t",row.names = FALSE,quote=F)
+
+res_324_DN <- results(OT1_2, name="Name_F019324_100mpk_Day7_vs_Vehicle_Day7") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+res_324_DN %>% write.table(file="Day7_324_vs_Veh_DN.txt", sep="\t",row.names = FALSE,quote=F)
+
+Vehicle_Day7_vs_Day3_UP <- results(OT1_2, name="Name_Vehicle_Day7_vs_Vehicle_Day3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.2,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+Vehicle_Day7_vs_Day3_UP %>% write.table(file="Vehicle_Day7_vs_Day3_UP.txt", sep="\t",row.names = FALSE,quote=F)
+
+Vehicle_Day7_vs_Day3_DN <- results(OT1_2, name="Name_Vehicle_Day7_vs_Vehicle_Day3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+Vehicle_Day7_vs_Day3_DN %>% write.table(file="Vehicle_Day7_vs_Day3_DN.txt", sep="\t",row.names = FALSE,quote=F)
+```
+
+Day 3 324 vs. Vehicle
+```{r}
+Day3_324_vs_Vehicle_UP <- results(OT1_2, name="Name_F019324_100mpk_Day3_vs_Vehicle_Day3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+Day3_324_vs_Vehicle_UP %>% write.table(file="Day3_324_vs_Vehicle_UP.txt", sep="\t",row.names = FALSE,quote=F)
+
+Day3_324_vs_Vehicle_DN <- results(OT1_2, name="Name_F019324_100mpk_Day3_vs_Vehicle_Day3") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+Day3_324_vs_Vehicle_DN %>% write.table(file="Day3_324_vs_Vehicle_DN.txt", sep="\t",row.names = FALSE,quote=F)
+```
+
+Genes activated by LMP1_OVA1 that are further activated by 324 treatment
+
+```{r}
+intersect(res_324_UP$Gene,Vehicle_Day7_vs_Day3_UP$Gene)
+intersect_m <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% intersect(res_324_UP$Gene,Vehicle_Day7_vs_Day3_UP$Gene)) %>% dselect(Gene,everything()) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(intersect_m,cluster_cols=F)
+```
+
+
+Volcano Plot
+
+```{r fig.height=8, fig.width=6}
+
+library(EnhancedVolcano)
+
+EnhancedVolcano(results(OT1_2,name="Name_F019324_100mpk_Day3_vs_Vehicle_Day3"), #"Name_F019324_100mpk_Day7_vs_Vehicle_Day7"
+                 lab = rownames(results(OT1_2)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 15),
+                 xlim = c(-7, 8),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'OTI Day 3 19324 vs Vehicle',
+                 pCutoff = 0.05,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+
+```
+
+Heatmap of DE genes between Day 3 Vehicle and Day 7 100 mpk
+
+```{r fig.height=6, fig.width=6}
+library(RColorBrewer)
+UP <- Vehicle_Day7_vs_Day3_UP %>% top_n(n=500) %>% pull(Gene)
+DN <- Vehicle_Day7_vs_Day3_DN %>% top_n(n=500) %>% pull(Gene)
+Vehicle_m <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c(UP,DN)) %>% dselect(Gene,everything()) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(Vehicle_m,cluster_cols=F)
+
+UP_324 <- res_324_UP %>% top_n(n=500)%>% pull(Gene) # 
+DN_324 <- res_324_DN %>% top_n(n=500) %>% pull(Gene)
+Vehicle_m <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c(UP_324,DN_324)) %>% dselect(Gene,everything()) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(Vehicle_m,cluster_cols=F)
+```
+
+https://davetang.org/muse/2018/05/15/making-a-heatmap-in-r-with-the-pheatmap-package/
+
+Heatmap of 1000 most variable genes across all samples (as measured by variace)
+Variance is Sum of (value - mean)^2/(n-1)
+Get a list of most variable genes
+```{r fig.height=110, fig.width=6}
+rv <- rowVars(assay(rld))# save row variance to rv
+top1000 <- order(rv, decreasing=TRUE)[seq_len(min(1000, length(rv)))] # take the top 500 most variable genes, or the length of rv, whichever is less
+top1000_varGenes <- row.names(assay(rld)[top1000,])
+top1000_genes <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% top1000_varGenes) %>% dselect(Gene,everything()) %>% dfilter(!grepl("Gm|Rik",Gene))
+top1000_genes_m <- top1000_genes %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(top1000_genes_m,cluster_cols=F)
+```
+
+Effector 
+c("Prf1","Gzma")
+Lineage
+Il7r is Cd127 is Central Memory
+Late Effector/Exhaustion
+Suppressor
+Entpd1/CD39
+TCR pathway
+Proliferation
+
+Heatmap of interesting markers
+```{r fig.height=2.6, fig.width=6}
+Cd3 markers
+c("Cd8a","Cd8b1","Cd3e","Cd3g","Cd3d","Cd247","Cd4","Tcf7")
+Cytokine
+c("Ifng","Tnf") # 1.3
+Effector 
+c("Prf1","Gzma","Gzmb","Gzmk","Gnly","Klrg1","Nkg7") # 2.1
+Lineage
+c("Ccr7","Sell","Cd69","Il7r","Tcf1") # 1.8
+Late Effector/Exhaustion
+c("Tigit", "Havcr2","Tox") # 1.6
+Exhaustion
+c("Tcf7","Lef1","Lag3","Ctla4","Pdcd1","Nr4a1","Eomes") # removed Cd247/Pdcd1 because not expressed in T cells
+Suppressor
+c("Entpd1","Foxp3","Tgfb","Il35","Il4")
+TCR pathway
+c("Cd28","Cd3a","Lck","Zap70","Slp76","Prdm1")
+Proliferation
+c("Mki67","Slamf7")
+MAPK pathway: Map2k1 is MEK1
+c("Gab2","Nras","Kras","Kit","Braf","Map2k1")
+Lineage transcription factors: Lef1 is Tcf1 is a positive regulator of exhaustion: Tcf1 and Tcf7 are the same thing
+c("Lef1")
+
+Interesting_markers_m <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Mki67","Slamf7")) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+Interesting_markers_m <- Interesting_markers_m[c("Mki67","Slamf7"),]
+pheatmap(Interesting_markers_m,cluster_cols=F, cluster_rows = F)
+
+Interesting_markers_m <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Tcf7","Lef1","Tbx21","Lag3","Ctla4","Pdcd1","Nr4a1","Eomes","Cd69")) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+Interesting_markers_m <- Interesting_markers_m[c("Tcf7","Lef1","Tbx21","Lag3","Ctla4","Pdcd1","Nr4a1","Eomes","Cd69"),]
+pheatmap(Interesting_markers_m,cluster_cols=F, cluster_rows = F)
+
+Interesting_markers_m <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Kit","Ptpn11","Gab2","Nras","Kras","Braf","Map4k1","Map3k1","Map2k1","Mapk3","Nf1","Spred1","Pik3ca","Akt1")   ) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+Interesting_markers_m <- Interesting_markers_m[c("Tcf7","Lef1","Kit","Ptpn11","Gab2","Nras","Kras","Braf","Map4k1","Map3k1","Map2k1","Mapk3","Nf1","Spred1","Pik3ca","Akt1"),] 
+pheatmap(Interesting_markers_m,cluster_cols=F, cluster_rows = F)
+
+# batch1 data
+Interesting_markers_m <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Tcf7","Lef1","Ptpn11","Gab2","Nras","Kras","Braf","Map4k1","Map3k1","Map2k1","Mapk3","Nf1","Spred1","Pik3ca","Akt1")   ) %>% dselect(Gene,sample_order_dot) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+Interesting_markers_m <- Interesting_markers_m[c("Tcf7","Lef1","Ptpn11","Gab2","Nras","Kras","Braf","Map4k1","Map3k1","Map2k1","Mapk3","Nf1","Spred1","Pik3ca","Akt1"),] 
+pheatmap(Interesting_markers_m,cluster_cols=F, cluster_rows = F)
+```
+
+
+CD161 = Klrb1 is a marker of MAIT T cells
+Tim3 = Havcr2
+CD39 = Entpd exhaustion marker
+PGE2= PTGER2
+CD127 naive marker
+```{r fig.height=7, fig.width=10}
+library(ggbeeswarm)
+tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Ccr7","Sell","Klrg1","Mki67","Ccr7","Il7r","Cd161","Cd27","Lck","Zap70","Tox","Lag3","Havcr2","Entpd1","Ifng","Tnf","Ptger2","Cd69","Cd127","Tigit","Tcf7","Gzmk","Nkg7")  ) %>% gather(Sample, RNA_z_score,-Gene) %>% mutate(Sample = str_replace(Sample,"\\.","-")) %>% left_join(meta, by="Sample") %>% ggplot(aes(Treatment,RNA_z_score, colour=Sample)) + geom_beeswarm() + facet_wrap(~Gene) + theme(axis.text.x = element_text(angle=90,size=12, vjust=0.5, hjust=1),strip.text=element_text(size=12))
+
+tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Prdm1","Lag3","Havcr2","Tigit")  ) %>% gather(Sample, RNA_z_score,-Gene) %>% mutate(Sample = str_replace(Sample,"\\.","-")) %>% left_join(meta, by="Sample") %>% ggplot(aes(Treatment,RNA_z_score, colour=Sample)) + geom_beeswarm() + facet_wrap(~Gene) + theme(axis.text.x = element_text(angle=90,size=12, vjust=0.5, hjust=1),strip.text=element_text(size=12))
+
+
+
+meta %<>% mutate(Treatment=factor(Treatment, levels=c("Vehicle_Day3","F019324_30mpk_Day3","F019324_100mpk_Day3","Vehicle_Day7","F019324_30mpk_Day7","F019324_100mpk_Day7")))
+
+```
+
+```{r}
+boxplot(tpm_z)
+tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Kit","Cd19")  ) %>% gather(Sample, RNA_z_score,-Gene) %>% mutate(Sample = str_replace(Sample,"\\.","-")) %>% left_join(meta, by="Sample") %>% ggplot(aes(Treatment,RNA_z_score, colour=Sample)) + geom_beeswarm() + facet_wrap(~Gene) + theme(axis.text.x = element_text(angle=90,size=12, vjust=0.5, hjust=1),strip.text=element_text(size=12))
+```
+
+Heatmap of Listeria response signature in T cells
+```{r fig.height=2.5, fig.width=6}
+
+T_cell_listeria_genes <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Cx3cr1","Klrg1","Tbx21","Ifng","Gzmb","Cd8b1")) 
+T_cell_listeria_genes_m <- T_cell_listeria_genes %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(T_cell_listeria_genes_m,cluster_cols=F)
+```
+Lavanya's markers
+```{r fig.height=2, fig.width=6}
+library(ggbeeswarm)
+Flow_markers <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Tnf","Ifng","Gzmb")) 
+Flow_markers_m <- Flow_markers %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(Flow_markers_m,cluster_cols=F, cluster_rows=F)
+
+Flow_markers %>% dselect(!ends_with("_E")) %>% gather(Sample, mRNA_zscore,-Gene) %>% mutate(Treatment=c(rep("Vehicle",15),rep("19324","15") ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","19324"))) %>% mutate(Gene=factor(Gene, levels=c("Tnf","Ifng","Gzmb"))) %>%
+  ggplot(aes(x=Treatment, y=mRNA_zscore, group=Treatment)) + facet_wrap(~Gene) + geom_quasirandom() + theme_bw()
+```
+
+Plot proliferation markers vs. Ifng and Tnf
+```{r}
+Flow_markers <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Tnf","Ifng","Gzmb")) 
+Flow_markers_m <- Flow_markers %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(Flow_markers_m,cluster_cols=F, cluster_rows=F)
+```
+
+Proliferation markers
+```{r fig.height=3.5, fig.width=6}
+Cell_cycle <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Cdk4","Top2a","Cenpe","Polr1c","Rpl4","Rpl30","Rpl3","Cox7b","Eif4a1","Cox17","Ndufb9","Atp5j")) 
+Cell_cycle_m <- Cell_cycle %>% tibble::column_to_rownames("Gene") %>% as.matrix
+Cell_cycle_m <- Cell_cycle_m[c("Cdk4","Top2a","Cenpe","Polr1c","Rpl4","Rpl30","Rpl3","Eif4a1","Cox7b","Cox17","Ndufb9","Atp5j"),]
+pheatmap(Cell_cycle_m,cluster_cols=F, cluster_rows=F)
+
+Cell_cycle <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Cdk4","Top2a","Cenpe","Polr1c","Rpl4","Rpl30","Rpl3","Cox7b","Eif4a1","Cox17","Ndufb9","Atp5j")) %>% dselect(Gene, sample_order_dot)
+Cell_cycle_m <- Cell_cycle %>% tibble::column_to_rownames("Gene") %>% as.matrix
+Cell_cycle_m <- Cell_cycle_m[c("Cdk4","Top2a","Cenpe","Polr1c","Rpl4","Rpl30","Rpl3","Eif4a1","Cox7b","Cox17","Ndufb9","Atp5j"),]
+pheatmap(Cell_cycle_m,cluster_cols=F, cluster_rows=F)
+```
+```{r}
+tpm_gene2 %>% dfilter(Symbol %in% c("Cdk4","Top2a","Cenpe","Polr1c","Rpl4","Rpl30","Rpl3","Cox7b","Eif4a1","Cox17","Ndufb9","Atp5j")) %>% dselect(!ends_with("_E")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% mutate(Treatment=c(rep("Vehicle",60),rep("19324",60) ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","19324"))) %>% mutate(Gene=factor(Symbol, levels=c("Cdk4","Top2a","Cenpe","Polr1c","Rpl4","Rpl30","Rpl3","Cox7b","Eif4a1","Cox17","Ndufb9","Atp5j"))) %>%
+  ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Gene, scales="free_y") + geom_boxplot(aes(fill=Treatment)) + geom_quasirandom() + theme_bw() + scale_fill_manual(values=c("#0A95A7","#E5541B"))
+```
+Cell cycle markers across Day 3 and Day 7
+
+```{r fig.height=2.5, fig.width=8}
+tpm_gene2 %>% dfilter(Symbol %in% c("Cdk4","Top2a","Cenpe")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% mutate(Treatment=c(rep("Vehicle_Day3",12),rep("19324_Day3",15),rep("Vehicle_Day7",15),rep("19324_Day7",15) ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle_Day3","19324_Day3","Vehicle_Day7","19324_Day7"))) %>%
+  ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Symbol, scales="free_y", ncol=3) + geom_boxplot(aes(fill=Treatment)) + geom_quasirandom() + theme_bw() + scale_fill_manual(values=c("#FE9F33","#0A95A7","#FE9F33","#0A95A7"))
+```
+
+
+Naive cell markers
+```{r fig.height=1.4, fig.width=6}
+naive <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Ccr7","Sell","Ptprc")) 
+naive_m <- naive %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(naive_m,cluster_cols=F, cluster_rows=F)
+```
+Apoptosis markers 
+Necrosis markers: "MLKL","HMGB1" Hmgb1 might not be a necrosis marker, inflammaotry cells can secrete Hmgb1 without dying so illicit damage repair 
+
+AICD markers: FasL transcription is regulated by a lot TFs: cMyc cJun, Irf1, Irf2, 
+
+```{r fig.height=2.1, fig.width=6}
+apop <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Casp3","Bid")) 
+apop_m <- apop %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(apop_m,cluster_cols=F, cluster_rows=F)
+
+necro <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Mlkl","Hmgb1","Bcl2l11","E2f1")) 
+necro_m <- necro %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(necro_m,cluster_cols=F, cluster_rows=F)
+
+aicd <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Fasl","Irf1","Irf2","Myc","Jun","Nfatc1")) 
+aicd_m <- aicd %>% tibble::column_to_rownames("Gene") %>% as.matrix
+aicd_m <- aicd_m[c("Fasl","Irf1","Irf2","Myc","Jun","Nfatc1"),]
+pheatmap(aicd_m,cluster_cols=F, cluster_rows=F)
+```
+AICD markers plot scatter
+```{r fig.height=1.5, fig.width=4}
+aicd %>% dselect(!ends_with("_E")) %>% gather(Sample, mRNA_zscore,-Gene) %>% mutate(Treatment=c(rep("Vehicle",15),rep("19324","15") ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","19324"))) %>% mutate(Gene=factor(Gene, levels=c("Fasl","Irf1","Irf2"))) %>%
+  ggplot(aes(x=Treatment, y=mRNA_zscore, group=Treatment)) + facet_wrap(~Gene) + geom_quasirandom() + theme_bw()
+
+tpm_gene2 %>% dfilter(Symbol %in% c("Fasl","Irf1","Irf2")) %>% dselect(!ends_with("_E")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% mutate(Treatment=c(rep("Vehicle",15),rep("19324",15) ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","19324"))) %>% mutate(Gene=factor(Symbol, levels=c("Fasl","Irf1","Irf2") )) %>%
+  ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Gene, scales="free_y") + geom_boxplot() + geom_quasirandom(aes(color=Treatment)) + theme_bw() + scale_color_manual(values=c("#0A95A7","#E5541B")) + nolegend()
+```
+
+ISR/UPR markers
+```{r}
+tpm_gene2 %>% dfilter(Symbol %in% c("Ddit3","Trib3","Asns","Atf4","Atf6","Eif2ak1","Eif2ak2","Eif2ak3","Eif2ak4")) %>% dselect(!ends_with("_E")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% mutate(Treatment=c(rep("Vehicle",45),rep("19324",45) ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","19324"))) %>% mutate(Gene=factor(Symbol, levels=c("Ddit3","Trib3","Asns","Atf4","Atf6","Eif2ak1","Eif2ak2","Eif2ak3","Eif2ak4"))) %>%
+  ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Gene, scales="free_y") + geom_boxplot(aes(fill=Treatment)) + geom_quasirandom() + theme_bw() + scale_fill_manual(values=c("#0A95A7","#E5541B"))
+```
+```
+
+
+Si et al. 2020 B6 model HPK1 k/o data
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE156204
+
+Heatmap
+```{r fig.height=6.5, fig.width=6}
+pheatmap(FPKM_z,cluster_cols=F, annotation_names_row=FALSE)
+pheatmap(FPKM_z[c("Gata3","Tbpl1","Nfat5","Pdcd1","Ctla4","Havcr2","Lag3","Cd274","Cdk2","Ccnb1","Casp3","Tbx21"),],cluster_cols=F)
+
+Si <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Gata3","Tbpl1","Nfat5","Sema6d","Stat5a","Jun","Foxp3","Prdm1","Tbx21","Pdcd1","Ctla4","Havcr2","Lag3","Klrd1","Cd274","Cd200","Cd244","Cd25","Cd137","Cd28","Cd69","Cd27","Gadd45b","Cdkn2a","Cdk2","Ccnb1","Mad1l1","Tfdp1","Cdc25b","Cdc25c","Anxa1","Fas","Bcl2l2","Casp3","Casp1","Casp4","Bid","Bcl2","Bax"))
+Si_m <- Si %>% tibble::column_to_rownames("Gene") %>% as.matrix
+rownames(Si_m)
+Si_m <- Si_m[c("Gata3","Tbpl1","Nfat5","Sema6d","Stat5a","Jun","Foxp3","Prdm1","Tbx21","Pdcd1","Ctla4","Havcr2","Lag3","Klrd1","Cd274","Cd200","Cd28","Cd69","Cd27","Gadd45b","Cdkn2a","Cdk2","Ccnb1","Mad1l1","Tfdp1","Cdc25b","Anxa1","Bcl2l2","Casp3","Casp1","Casp4","Bid","Bcl2","Bax"),]
+
+pheatmap(Si_m,cluster_cols=F, cluster_rows=F,color= colorRampPalette(rev(brewer.pal(n = 7, name =
+  "RdYlBu")))(length(mat_breaks) - 1),breaks= mat_breaks,)
+mat_breaks <- seq(min(-2), max(2.5), length.out = 10)
+
+#compare to batch 1 data: doesn't look similar at all
+Cell_cycle <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Gata3","Tbpl1","Nfat5","Sema6d","Stat5a","Jun","Foxp3","Prdm1","Tbx21","Pdcd1","Ctla4","Havcr2","Lag3","Klrd1","Cd274","Cd200","Cd244","Cd25","Cd137","Cd28","Cd69","Cd27","Gadd45b","Cdkn2a","Cdk2","Ccnb1","Mad1l1","Tfdp1","Cdc25b","Cdc25c","Anxa1","Fas","Bcl2l2","Casp3","Casp1","Casp4","Bid","Bcl2","Bax")) %>% dselect(Gene, sample_order_dot)
+Cell_cycle_m <- Cell_cycle %>% tibble::column_to_rownames("Gene") %>% as.matrix
+Cell_cycle_m <- Cell_cycle_m[c("Gata3","Tbpl1","Nfat5","Sema6d","Stat5a","Jun","Foxp3","Prdm1","Tbx21","Pdcd1","Ctla4","Havcr2","Lag3","Klrd1","Cd274","Cd200","Cd28","Cd69","Cd27","Gadd45b","Cdkn2a","Cdk2","Ccnb1","Mad1l1","Tfdp1","Cdc25b","Anxa1","Bcl2l2","Casp3","Casp1","Casp4","Bid","Bcl2","Bax"),]
+pheatmap(Cell_cycle_m,cluster_cols=F, cluster_rows=F)
+Normali
+```
+
+Si et al  markers plot scatter
+
+si_markers <- c("Cdc25c","Anxa1","Fas","Bcl2l2","Casp3","Casp1","Casp4","Bid")
+TF : "Gata3","Tbpl1","Nfat5","Sema6d","Stat5a","Jun","Foxp3","Prdm1","Tbx21"
+Exhaustion "Pdcd1","Ctla4","Havcr2","Lag3","Klrd1","Cd274","Cd200"
+TCR "Cd244","Cd25","Cd137","Cd28","Cd69","Cd27"
+Cell cycle "Gadd45b","Cdkn2a","Cdk2","Ccnb1","Mad1l1","Tfdp1","Cdc25b"
+Apoptosis "Cdc25c","Anxa1","Fas","Bcl2l2","Casp3","Casp1","Casp4"
+length(si_markers) # 39
+```{r fig.height=1.6, fig.width=6}
+si_markers <- c("Tcf7","Lef1","Tbx21") # "Kit"
+tpm_gene2 %>% dfilter(Symbol %in% si_markers) %>% dselect(!ends_with("_E")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% mutate(Treatment=c(rep("Vehicle",5*length(si_markers)),rep("19324",5*length(si_markers)) ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","19324"))) %>% mutate(Gene=factor(Symbol, levels=si_markers)) %>% ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Gene, scales="free_y", ncol=9) + theme_bw() + stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.5) + geom_quasirandom(aes(color=Treatment)) + scale_color_manual(values=c("#0A95A7","#E5541B")) + nolegend()
+
+ter <- tpm_gene2 %>% dfilter(Symbol=="Tbx21") %>% dselect(!ends_with("_E")) %>% dselect(-Symbol) %>% gather(Sample, mRNA_TPM) %>% mutate(Treatment=c(rep("Vehicle",5),rep("19324",5) ))
+t.test(unlist(x=ter$mRNA_TPM[1:5]), y=unlist(ter$mRNA_TPM[6:10]), paired=F, alternative="two.sided")
+```
+INF-G downstream markers
+```{r fig.height=2, fig.width=8}
+tpm_gene2 %>% dfilter(Symbol %in% c("Cxcl9","Cxcl10")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% mutate(Treatment=c(rep("Vehicle_Day3",8),rep("19324_Day3",10),rep("Vehicle_Day7",10),rep("19324_Day7",10)) ) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle_Day3","19324_Day3","Vehicle_Day7","19324_Day7"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Symbol, scales="free_y", ncol=9) + theme_bw() + stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.5) + geom_quasirandom(aes(color=Treatment)) + scale_color_manual(values=c("#0A95A7","#E5541B","#0A95A7","#E5541B")) + nolegend()
+```
+
+
+PGE2 pathway
+```{r fig.height=2, fig.width=8}
+tpm_gene2 %>% dfilter(Symbol %in% c("Ptger2","Ptger4")) %>% dselect(!ends_with("_E")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% mutate(Treatment=c(rep("Vehicle",5*2),rep("19324",5*2) ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","19324"))) %>% mutate(Gene=factor(Symbol, levels=si_markers)) %>% ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Symbol, scales="free_y", ncol=9) + theme_bw() + stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.5) + geom_quasirandom(aes(color=Treatment)) + scale_color_manual(values=c("#0A95A7","#E5541B")) + nolegend()
+
+tpm_gene2 %>% dfilter(Symbol %in% c("Ptger2","Ptger4")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% mutate(Treatment=c(rep("Vehicle_Day3",8),rep("19324_Day3",10),rep("Vehicle_Day7",10),rep("19324_Day7",10)) ) %>% mutate(Treatment=factor(Treatment,levels=c("Vehicle_Day3","19324_Day3","Vehicle_Day7","19324_Day7"))) %>% ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Symbol, scales="free_y", ncol=9) + theme_bw() + stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.5) + geom_quasirandom(aes(color=Treatment)) + scale_color_manual(values=c("#0A95A7","#E5541B","#0A95A7","#E5541B")) + nolegend()
+```
+
+
+Plot for batch 1 data
+```{r fig.height=2, fig.width=8}
+si_markers <- c("Map4k1","Map3k1","Map2k1","Mapk3") # "Kit"
+tpm_gene %>% dfilter(Symbol %in% si_markers) %>% dselect(!ends_with("d3")) %>% gather(Sample, mRNA_TPM,-Symbol) %>% arrange(Sample) %>% mutate(Treatment=c(rep("Vehicle",3*length(si_markers)),rep("19324_30",3*length(si_markers)),rep("19324_100",2*length(si_markers)) ) ) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","19324_30","19324_100"))) %>% mutate(Gene=factor(Symbol, levels=si_markers)) %>% ggplot(aes(x=Treatment, y=mRNA_TPM)) + facet_wrap(~Gene, scales="free_y", ncol=9) + theme_bw() + stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.5) + geom_quasirandom(aes(color=Treatment)) + scale_color_manual(values=c("#0A95A7","#E5541B","#E5541B")) + nolegend()
+
+ter <- tpm_gene %>% dfilter(Symbol=="Map2k1") %>% dselect(!ends_with("_d3")) %>% dselect(-Symbol) %>% gather(Sample, mRNA_TPM) %>% mutate(Treatment=c(rep("Vehicle",3),rep("19324_30",3),rep("19324_100",2) ) ) 
+t.test(unlist(x=ter$mRNA_TPM[1:6]), y=unlist(ter$mRNA_TPM[7:8]), paired=F, alternative="two.sided")
+```
+
+Gene in HPK1 supposed pathway
+Prdm1/Blimp Gata3, Tbx21
+```{r fig.height=2, fig.width=6}
+library(pheatmap)
+Alleged_genes <- tpm_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Prdm1","Gata3","Tbx21","Tox")) %>% dselect(Gene,sample_order_dot)
+Alleged_genes_m <- Alleged_genes %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(Alleged_genes_m,cluster_cols=F)
+```
+NFkB pathway
+```{r}
+nfkb_genes <- tpm_z2 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("Rela","Nfkbil1","Bcl3","Traf1","Nfkbia","Icam1","Nfkb2","Relb","Il15","Traf3","Traf4","Nfkb1")) 
+nfkb_genes_m <- nfkb_genes %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(nfkb_genes_m,cluster_cols=F)
+```
+
+
+
+

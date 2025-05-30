@@ -1,0 +1,349 @@
+---
+title: "Talmadge.Rmd"
+author: "MX"
+date: "11/12/2020"
+output: html_document
+---
+
+In this Rmd, I'm starting a fresh code page because the old one is getting too cluttered with the difference batches of data and things I've tried.
+This data will have batch 1 to batch 4 datasets (batch 5 all failed)
+
+```{r}
+library(Seurat)
+library(sctransform)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+library(tibble)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")
+#install.packages("hdf5r")
+#devtools::install_github("hhoeflin/hdf5r")
+```
+
+#######################
+Save and Load data
+#######################
+
+
+```{r}
+#batch3
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch3/batch3c.Robj")
+#batch4
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_SCT.Robj")
+rownames(batch4$CITE)
+save(batch4,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_SCT.Robj")
+save(batch4_2,file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_SCT_2.Robj")
+```
+
+Batch 4  
+```{r}
+cancer_aml3 <- Read10X_h5("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/CPB04MAY20_CITE_filtered_feature_bc_matrix.h5") 
+```
+
+#######################
+Get rid of the mouse genes
+#######################
+
+Seurat suggests keeping the top 100, but since we didn't spike in any mouse genes, there's no point, filter them all out
+This automatically gets rid of the GRCh38_ prefix in front of all of the gene names as well. 
+
+batch4
+```{r}
+cancer_aml3$'Gene Expression' <- CollapseSpeciesExpressionMatrix(cancer_aml3$'Gene Expression',prefix ="GRCh38_", controls = "mm10___", ncontrols = 0)
+```
+
+Insert CITE data
+
+batch4
+```{r}
+aml3 <- CreateSeuratObject(counts= cancer_aml3$'Gene Expression', project= "aml3", min.cells=1, min.features=100, assay="RNA")
+
+aml3[["CITE"]] <- CreateAssayObject(counts= cancer_aml3$'Antibody Capture'[,colnames(x=aml3)])
+
+aml3$CITE@data@Dimnames[[1]]
+new_CITE_names <- rownames(aml3$CITE) %>% str_replace("-human","-CITE")
+aml3$CITE@data@Dimnames[[1]] <- new_CITE_names
+```
+
+#######################
+Merge Batch 4 (AML3) into batch3c
+#######################
+```{r}
+batch4 <- merge(x=batch3c,y=aml3, add.cell.ids=c("","aml3"), merge.data=FALSE,project="MDSC_batch4")
+batch4$CITE
+```
+
+######################
+Normalize CITE seq data
+#######################
+ aml1  aml3 pbmc1 pbmc2 pbmc3 pdac1 pdac2 pdac3 
+ 6436  2418  2460  3464  4699  5110  4108  2611 
+```{r}
+batch4 <- NormalizeData(batch4,assay="CITE",normalization.method = "CLR")
+batch4 <- ScaleData(batch4, assay="CITE")
+tail(colnames(batch4))
+table(batch4$orig.ident)
+```
+
+######################
+Mitochondrial gene expression
+Check Apoptosis
+nCount_RNA is # of unique UMIs I think
+Cut off percent.mt at > 25
+Clusters 12, 8, 9 are very low in RNA content, but aren't neutrophils
+#######################
+```{r fig.height=8, fig.width=8}
+batch4[["percent.mt"]] <- PercentageFeatureSet(batch4, pattern = "^MT")
+batch4$percent.mt
+batch4[["percent.HLA.D"]] <- PercentageFeatureSet(batch4, pattern = "^HLA-D")
+batch4[["percent.HLA.DR"]] <- PercentageFeatureSet(batch4, pattern = "^HLA-DR")
+batch4[["RNA.Per.Feature"]] <- batch4[["nCount_RNA"]] / batch4[["nFeature_RNA"]]
+batch4[["percent.ribo"]] <- PercentageFeatureSet(batch4, pattern = c("^RPL","^RPS"))
+
+VlnPlot(batch4, features=c("nFeature_RNA","nCount_RNA", "nFeature_CITE","nCount_CITE"),ncol =2,pt.size = 0.1, slot="data", sort=TRUE, log=TRUE) # ,"percent.mt","percent.ribo"
+
+VlnPlot(batch4, features=c("nFeature_RNA","nCount_RNA","percent.mt","percent.ribo" ),ncol =2,pt.size = 0.1, slot="data", sort=T, log=TRUE) # ,"percent.mt","percent.ribo" 
+VlnPlot(batch3b, features=c("nCount_RNA"),pt.size = 0.1, slot="counts", y.max=20000)
+VlnPlot(batch3c, features=c("nCount_RNA","nFeature_RNA","percent.mt"),ncol =3,pt.size = 0.1)
+
+VlnPlot(batch4, features=c("BCL2","BAX","MLKL","HMGB1"),ncol=4,pt.size = 0.1, slot="data") # DR5
+VlnPlot(batch4, features=c("CD63","FCGR3B","LTF","S100A9","percent.ribo"),ncol =5,pt.size = 0.1, log=TRUE)
+## Cell cycle
+VlnPlot(batch4, features=c("MKI67","CCNA2","CCNB1","GAPDH"),ncol =4,pt.size = 0.1, slot="data")
+
+# Is there an anti-correlation between MT-content and nFeature_RNA?
+plot1 <- FeatureScatter(batch4, feature1 = "nCount_RNA", feature2 = "percent.mt",slot="data")
+plot2 <- FeatureScatter(batch4, feature1 = "BAK1", feature2 = "percent.mt",slot="data")
+plot3 <- FeatureScatter(batch4, feature1 = "BCL2", feature2 = "percent.mt",slot="data")
+plot4 <- FeatureScatter(batch4, feature1 = "BAX", feature2 = "percent.mt",slot="data")
+plot5 <- FeatureScatter(batch4, feature1 = "BAX", feature2 = "nCount_RNA",slot="data")
+plot6 <- FeatureScatter(batch4, feature1 = "percent.ribo", feature2 = "percent.mt",slot="data")
+CombinePlots(plots = list(plot1, plot2,plot3,plot4))
+
+# It looks like cluster 21 is high in mt genes
+
+FeatureScatter(batch4, feature1 = "nFeature_RNA", feature2 = "percent.mt",slot="data", cells = dying_cells)
+low_rna_cells <- FetchData(batch4,vars=c("ident")) %>% data.frame %>% tibble::rownames_to_column("Cell") %>% dfilter(ident %in% c(8,9,12)) %>% pull(Cell)
+dying_cells <- FetchData(batch4,vars=c("ident")) %>% data.frame %>% tibble::rownames_to_column("Cell") %>% dfilter(ident %in% c(21,19,20)) %>% pull(Cell)
+```
+There are dying and actively dividing cells in the gMDSC group
+```{r fig.height=4, fig.width=5}
+gMDSC <- FetchData(batch4,vars=c("ident")) %>% data.frame %>% tibble::rownames_to_column("Cell") %>% dfilter(ident %in% c(20)) %>% pull(Cell)
+FeatureScatter(batch4, feature1 = "GAPDH", feature2 = "percent.mt",slot="counts", cells = gMDSC)
+```
+
+
+######################
+Normalize data: @data slot calculation
+#######################
+By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. Normalized values are stored in pbmc[["RNA"]]@data
+```{r}
+batch4 <- NormalizeData(batch4,normalization.method = "LogNormalize",scale.factor=10000) # this goes into the @data slot
+```
+
+######################
+Feature Selection
+#######################
+Top variable genes: these are mostly Myeloid markers: PPBP and DEFA3 are both gMDSC markers
+ [1] "CAMP","PPBP","LTF"      "DEFA3"    "PF4"      "PTGDS"    "FCER1A","HLA-DQA1" "DEFA4"    "JCHAIN"  
+```{r fig.height=5, fig.width=12}
+batch4 <- FindVariableFeatures(batch4, selection.method = "vst", nfeatures = 2000)
+top30 <- head(VariableFeatures(batch4),30)
+
+plot1 <- VariableFeaturePlot(batch4)
+plot2 <- LabelPoints(plot = plot1, points = top30, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+```
+
+######################
+Data scaling to median = 0
+Z-score
+Stored in @scale.data
+#######################
+```{r}
+all.genes <- rownames(batch4)
+batch4 <- ScaleData(batch4,features = all.genes, assay = "RNA")
+```
+
+######################
+scTransform
+
+This step supersedes NormalizeData, ScaleData and FindVariableFeatures, in that it becomes the default data (it doesn't over write data)
+Regularized negative binomial regression to normalize UMI counts: saved in SCT, and this becomes marked default
+Optional step to regress out confounding conditions: sctransform
+https://satijalab.org/seurat/v3.0/sctransform_vignette.html
+I should regress out the mt percentage, because they vary between samples, and shouldn't be biologically relevant
+Also regress out RPL/RPS ribosomal protein %, which removed the RPL and RPS genes from the PCA feature selection
+#######################
+
+```{r}
+batch4 <- SCTransform(batch4,vars.to.regress=c("orig.ident","percent.mt","percent.ribo"),assay="RNA",verbose=FALSE) 
+batch4@assays$SCT
+batch4[["SCT"]]@scale.data[1:5,1:5] 
+
+batch4_orig <- SCTransform(batch4,vars.to.regress=c("orig.ident"),assay="RNA",verbose=FALSE) # try regression with orig.ident only
+```
+
+####################################
+PCA analysis
+I will choose variable RNA features
+####################################
+
+```{r}
+batch4 <- RunPCA(batch4, features =c(VariableFeatures(object=batch4)))
+
+batch4_mt <- RunPCA(batch4_mt, features =c(VariableFeatures(object=batch4_mt)))
+```
+
+#################################
+Visualize PCA
+################################
+
+```{r fig.height=5, fig.width=10}
+VizDimLoadings(batch4, dims=1:2, reduction ="pca")
+DimPlot(batch4, reduction="pca", dims= 1:2)
+```
+
+
+Cut off should be at 20 from this plot
+```{r fig.height=14, fig.width=9}
+DimHeatmap(batch4, dims=1:24, cells=500, balanced = TRUE)
+#Looks like cut-off at 20
+```
+
+####################################
+JackStraw permutation test for significance of PCs
+
+Batch4: choosing 25 PC as cutoff
+####################################
+```{r}
+ElbowPlot(batch4,ndims=30)
+```
+
+###################################
+###################################
+Graph-based clustering : embed cells in a graph structure, like a KNN graph
+##################################
+###################################
+```{r}
+batch4 <- FindNeighbors(batch4, dims=1:30)
+batch4 <- FindClusters(batch4, resolution=0.6,random.seed=42) # 0.8, finds 41 clusters, 0.6 35 clusters, 0.55 31 clusters
+batch4@active.ident %>% table
+batch4$orig.ident %>% table
+
+```
+
+UMAP and tSNE
+
+Make an experimenting Seurat object called Batch_Exp. I don't want to change the UMAP version to a new one 
+But then accidentally ran the analysis in batch1, so now batch_exp is the permanent one and batch1 is the test
+```{r fig.height=6, fig.width=9}
+batch4 <- RunUMAP(batch4, dims=1:30, min.dist = 0.75,random.seed=42)
+
+#min.dist = 0.75 increases inter-cell distance, but setting spread=2 returns the cells to equivalent to min.dist=0.5
+UMAPPlot(batch4_2, label=TRUE) 
+DimPlot(batch4_2, reduction="umap",label=FALSE, group.by="orig.ident", cols=c("red","firebrick2","green4","green3","blue","magenta3","orange1","violet"))
+```
+
+```{r}
+DimPlot(batch4_2, reduction="umap",label=F, group.by="orig.ident")
+```
+
+Plot per Donor
+```{r fig.height=8, fig.width=10}
+library(grid)
+library(gridExtra)
+  p1 <- DimPlot(batch4_2, cells.highlight = WhichCells(batch4,expression= orig.ident =="pdac1"),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+  p2 <- DimPlot(batch4_2, cells.highlight = WhichCells(batch4,expression= orig.ident =="pdac2"),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+  p3 <- DimPlot(batch4_2, cells.highlight = WhichCells(batch4,expression= orig.ident =="pdac3"),cols.highlight="purple",sizes.highlight=0.2) + NoLegend()
+  n1 <- DimPlot(batch4_2, cells.highlight = WhichCells(batch4,expression= orig.ident =="pbmc1"),cols.highlight="blue",sizes.highlight=0.2) + NoLegend()
+  n2 <- DimPlot(batch4_2, cells.highlight = WhichCells(batch4,expression= orig.ident =="pbmc2"),cols.highlight="blue",sizes.highlight=0.2) + NoLegend()
+  n3 <- DimPlot(batch4_2, cells.highlight = WhichCells(batch4,expression= orig.ident =="pbmc3"),cols.highlight="blue",sizes.highlight=0.2) + NoLegend()
+  a1 <- DimPlot(batch4_2, cells.highlight = WhichCells(batch4,expression= orig.ident =="aml1"),cols.highlight="red",sizes.highlight=0.05) + NoLegend()
+  a3 <- DimPlot(batch4_2, cells.highlight = WhichCells(batch4,expression= orig.ident =="aml3"),cols.highlight="red",sizes.highlight=0.05) + NoLegend()
+grid.arrange(p1,p2,p3,n1,n2,n3,a1,a3, ncol=3)
+```
+
+Plot lineage markers
+```{r fig.height=12, fig.width=25}
+#lymphocytes
+FetchData(batch4_2, vars=orig.ident=="aml1")
+FeaturePlot(batch4_2,slot = "data",features = c("PTPRC","CD3G","CD8A","CD4-CITE","GZMB","NCAM1","XCL1","GZMA","nFeature_RNA","percent.mt","XCL1","GAPDH"), ncol=4, cols=c("grey80","red")) 
+FeaturePlot(batch4_2,slot = "data",features = c("PTPRC","CD3G","CD8A","CD4-CITE","FOXP3"), ncol=4, cols=c("grey80","red")) 
+#myeloid
+FeaturePlot(batch4_2,slot = "data",features = c("HLA-DRA","CD11c-CITE","CD33-CITE","CD15-CITE","CD14","CXCR2","CD24","FCGR3A","FCGR3B","nFeature_RNA","percent.mt","percent.ribo","CD163","CLEC4C","CD1C","CD68","mMDSC_s"), ncol=5, cols=c("grey80","red")) 
+#CD4 cells that express neutrophil markers
+FeaturePlot(batch4_2,slot = "data",features = c("CXCR2","NEAT1","NAMPT","SOD2","IFITM2","FCGR3B",order=T), ncol=3, cols=c("grey80","red")) 
+#this instantly makes a Rshiny style page
+IFeaturePlot(batch4,slot = "scale.data",feature = c("CD24","CXCR2")) 
+```
+
+```{r fig.height=5, fig.width=6}
+library(scales)
+library(viridis)
+FeaturePlot(batch4,slot = "counts",features = c("percent.mt")) + scale_color_viridis(option="inferno", limits=c(0,60), oob=squish)
+FeaturePlot(batch4,slot = "counts",features = c("percent.ribo")) + scale_color_viridis(option="inferno", limits=c(0,30), oob=squish)
+FeaturePlot(batch4_2,slot = "counts",features = c("nFeature_RNA")) + scale_color_viridis(option="inferno", limits=c(0,3000), oob=squish)
+```
+Filter dataset for percent mito
+Filter away clusters 7, 8, 11, 20
+Clusters 25 and 34 are neutrophil-like but with weak markers, and very low RNA content, remove
+```{r}
+batch4_2 <- subset(batch4, idents = c(7,8,11,20),invert=TRUE )
+batch4_2 <- subset(batch4_2, subset= percent.mt <= 25 )
+batch4_2 <- subset(batch4_2, idents = c(25,34),invert=TRUE )
+batch4_2@active.ident %>% unique
+VlnPlot(batch4_2, features=c("percent.mt"), pt.size=0.1) + NoLegend()
+save(batch4_2, file="/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4_SCT_2.Robj")
+```
+
+Find markers
+
+```{r fig.height=11, fig.width=10}
+batch4.markers <- FindAllMarkers(batch4_2, only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.75)
+top.markers <- batch4.markers %>% group_by(cluster) %>% top_n(n=8, wt= avg_logFC) 
+DoHeatmap(batch4_2, features= top.markers$gene, size=3,group.bar=T,slot="scale.data") 
+```
+
+```{r fig.height=11, fig.width=8}
+small_clusters <- subset(batch4_2, idents=c(23,24,25,26,27,28,29,30,31,32,33,34))
+top.markers_small <- batch4.markers %>% group_by(cluster) %>% dfilter(cluster %in% c(23,24,25,26,27,28,29,30,31,32,33,34)) %>% top_n(n=8, wt= avg_logFC) 
+DoHeatmap(small_clusters, features= top.markers$gene, size=3,group.bar=T,slot="scale.data") 
+```
+
+Get cell type and donor data and tabulate & plot
+Seurat tidyr
+```{r}
+#install.packages("tidyseurat")
+library(tidyseurat)
+library(purrr)
+batch4_tidy <- tidy(batch4_2)
+batch4_tidy@meta.data
+```
+
+Assign cell types to the clusters
+```{r}
+
+batch4_tidy %>% dselect(orig.ident,seurat_clusters,nFeature_RNA,percent.mt ) %>% dfilter(seurat_clusters %nin% c(7,8,11,20,25,34)) %>%  mutate(Cell_type = case_when(
+ seurat_clusters %in% c(5,6,10,16,26,27,31) ~ "CD4_T",
+ seurat_clusters %in% c(4,17,30) ~ "CD8_T",
+ seurat_clusters %in% c(9,24,28) ~ "NK",
+ seurat_clusters %in% c(28) ~ "NK_XCL1",
+ seurat_clusters %in% c(19,21) ~ "B_cell",
+ seurat_clusters %in% c(33) ~ "pDC",
+ seurat_clusters %in% c(29) ~ "DC2",
+ seurat_clusters %in% c(32) ~ "RBC",
+ seurat_clusters %in% c(23) ~ "gMDSC",
+ seurat_clusters %in% c(12) ~ "Basophil",
+ seurat_clusters %in% c(0,2,3,14,18) ~ "Neutrophil",
+ seurat_clusters %in% c(1,15,22) ~ "Monocyte_classic",
+ seurat_clusters %in% c(13) ~ "Monocyte_nonclassic",
+)) 
+  
+  group_by(orig.ident) %>% mu
+```
+

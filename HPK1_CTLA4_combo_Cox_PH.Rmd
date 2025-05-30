@@ -1,0 +1,359 @@
+---
+title: "HPK1_survival_analysis_Gene"
+author: "Gene_MX"
+date: "5/24/2021"
+output: html_document
+---
+Useful tutorial:
+https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Landmark_method
+
+
+
+```{r}
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(magrittr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+# survival analysis package
+library(icenReg)
+#package for regression models for interval censored data
+install.packages("icenReg")
+library(readxl)
+
+# Other survival analysis package that allows right censor-only analysis
+library("survival")
+library("survminer")
+
+```
+
+##################################################
+all 21-CT26-*, where * = 1,2,3,5,6,7,8,9,10
+All these studies have CTLA4 control
+21-CT26-001 F022162
+21-CT26-002 F022019
+21-CT26-003 F022054
+21-CT26-004 is CCR4
+21-CT26-005 F022005
+21-CT26-006 F022692
+21-CT26-007 F022234
+21-CT26-008 F022054 NSG
+21-CT26-009 F022835 
+21-CT26-010 F022054 QD BID
+21-CT26-011 F022054 with CTLA4, PD1, PDL1
+21-CT26-012 F022019 low dose 
+
+```{r}
+# Group 02: Vehicle + anti-CTLA4
+CT26_001 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-001_(3_10_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 02: Vehicle + anti-CTLA4
+CT26_002 <-  readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-002_(3_11_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 02: Vehicle + anti-CTLA4
+CT26_003 <-  readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-003_(5_4_2021)MX.xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 2: Vehicle + ⍺CTLA-4
+CT26_005 <-  readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-005_(3_25_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 2: Vehicle + ⍺CTLA-4
+CT26_006 <-  readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-006_(4_26_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 2: Vehicle + ⍺CTLA-4
+CT26_007 <-  readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-007_(4_23_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 01: Vehicle (1% HPMC) BID
+CT26_008 <-  readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-008_(4_12_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 2: Vehicle + ⍺CTLA-4
+CT26_009 <-  readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-009_(5_24_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+#Group 06: Vehicle (1% HPMC) BID + anti-CTLA-4
+CT26_010 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-010_(5_10_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 2: Vehicle + ⍺CTLA-4
+CT26_012 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-012_(5_24_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) # %>% fill(size)
+# Group 1: Vehicle (1% HPMC) BID + Isotype antibody
+# Group 2: Vehicle (1% HPMC) + ⍺CTLA-4
+# Group 3: Vehicle (1% HPMC) + ⍺PD-1
+# Group 4: Vehicle (1% HPMC) + ⍺PD-L1
+CT26_011 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/21-CT26-011_(6_3_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% mutate(Type= rep(c("Vehicle","CTLA4","PD1","PDL1","Vehicle","CTLA4","PD1","PDL1"),each=10)) %>% gather("day","size", -Treatment, -Animal,-Type) %>% mutate(day= as.numeric(day))
+```
+
+Load all file together
+Hazard of reaching 1500mm3
+```{r fig.height=3, fig.width=6}
+
+files <- base::list.files("/Volumes/Picard/FLX/HPK1/In_vivo_data/", pattern=".xls", full.names=TRUE)
+
+parse_mouse <- function(i) {
+  readxl::read_xls(i,sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day)) %>% arrange(Animal,day) %>% fill(size)
+}
+data_files <- lapply(files, parse_mouse)
+merge_CT26 <- do.call("rbind",data_files)
+
+merge_CT26 %>% dselect(day,size) %>% dfilter(!is.na(day)) %>% group_by(day) %>% summarise(Threshold= length(day[size>=1500]), All= n(), Hazard= Threshold/All) %>% dfilter(All > 30) %>%
+  ggplot(aes(x=day,y=Hazard)) + geom_line(colour="#0A95A7") + geom_point(colour="#0A95A7") + theme_bw() + scale_x_continuous(breaks = seq(0,80,by=5)) + ggtitle("Hazard of reaching 1500mm3 in all CT26 mice")
+```
+
+Average Graphs
+```{r fig.height=4, fig.width=8}
+CT26_001 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=exp(mean(log(size), na.rm=T))) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1500), color="grey20") + ylim(0,2000) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54"))
+
+CT26_003 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=exp(mean(log(size), na.rm=T))) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1500), color="grey20") + ylim(0,2000) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+geo.mean()
+CT26_008 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=exp(mean(log(size), na.rm=T))) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2000) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+
+CT26_011 %>% dselect(-Animal) %>% group_by(Type, Treatment,day) %>% summarise(Geom_mean_size=exp(mean(log(size), na.rm=T))) %>% ggplot(aes(x=day, y=Geom_mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1000), color="grey20") + facet_wrap(~Type) + ylim(0,2000) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+
+CT26_011 %>% dselect(-Animal) %>% group_by(Type, Treatment,day) %>% summarise(Mean_size=mean(size,na.rm=T)) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2)  + geom_hline(aes(yintercept=1000), color="grey20") + facet_wrap(~Type) + ylim(0,NA) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920")) 
+```
+
+Faceted Graphs
+! For these, use data that does not have the last measured tumor volume filled in
+
+```{r fig.height=5, fig.width=11}
+CT26_001 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20")+ ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+CT26_002 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+CT26_003 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20")  + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+CT26_005 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+CT26_006 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+CT26_007 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+CT26_008 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+CT26_009 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+CT26_010 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920")) + theme_bw()  + nolegend() 
+CT26_012 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+
+CT26_011 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment, ncol=4) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+
+CT26_011 %>% dfilter(day > 25, Type == "Vehicle")
+```
+
+
+# make survival data functions
+
+This function makes interval censored data, which is not right for mouse data. Since all mice are started on the same day, there is no need to left censor, only right censor. I can't find a way to only set right censoring with this Icenreg tool. When using coxph with right censoring, the results make a lot more sense
+```{r}
+# create a data.frame that is ready to go into survival analysis
+# cutoff = size cutoff for suvival
+
+# this returns left and right interval censored data for icenReg
+make_survival_data <- function(x, cutoff=1000) {
+	x %>% group_by(Treatment, Animal) %>% arrange(day) %>% summarize(
+		which.cutoff = as.integer(min(which(size >= cutoff))), # the actual cutoff day
+		reaches.cutoff = is.finite(which.cutoff),   # boolean on whether it ever reaches cutoff size
+		left = if_else(reaches.cutoff, day[which.cutoff-1], max(day)), # left bound: -1 day when it reaches
+		right = if_else(reaches.cutoff, day[which.cutoff], Inf)   # right bound, the day it reaches, or infinity if never reaches
+	) %>% ungroup %>% select(-which.cutoff, -reaches.cutoff)
+}
+
+#returns right-censored data for Survival::coxph analysis
+
+make_right_censor_survival_data <- function(x, cutoff=1000) {
+	x %>% group_by(Treatment, Animal) %>% arrange(day) %>% summarize(
+		which.cutoff = as.integer(min(which(size >= cutoff))), # the actual cutoff day
+		reaches.cutoff = is.finite(which.cutoff),   # boolean on whether it ever reaches cutoff size
+		right = if_else(reaches.cutoff, day[which.cutoff], max(day)), # day threshold is reached: or the last day of the study
+		status = if_else(reaches.cutoff,1,0)
+	) %>% ungroup %>% select(-which.cutoff, -reaches.cutoff)
+}
+
+# make a data.frame that is ready to plot as a survival curve
+make_surv_curve_data <- function(x, cutoff=1000) {
+	x %>% group_by(Treatment) %>% mutate(n.day1=sum(day==min(day))) %>%
+		group_by(Treatment, day) %>% summarize(frac_alive = sum(size < cutoff)/n.day1[1])
+}
+
+```
+
+Make survival data input that is interval censored for icenReg analysis
+
+```{r}
+current_data <- CT26_001 %>% make_survival_data(cutoff=1000) #Group 02: Vehicle + anti-CTLA4
+current_data <- CT26_002 %>% make_survival_data(cutoff=1000) #Group 02: Vehicle + anti-CTLA4 1000 is non-sig even for 324
+current_data <- CT26_003 %>% make_survival_data(cutoff=1000) # Group 02: Vehicle + anti-CTLA4
+current_data <- CT26_005 %>% make_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_data <- CT26_006 %>% make_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_data <- CT26_007 %>% make_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_data <- CT26_008 %>% make_survival_data(cutoff=1000) # Group 01: Vehicle (1% HPMC) BID
+current_data <- CT26_009 %>% make_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_data <- CT26_010 %>% make_survival_data(cutoff=1000) # Group 06: Vehicle (1% HPMC) BID + anti-CTLA-4
+current_data <- CT26_012 %>% make_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_data <- CT26_011 %>% make_survival_data(cutoff=1000) # multiple grouops
+
+current_data <- current_data %>% mutate(Treatment=fct_relevel(factor(Treatment), "Group 02: Vehicle + anti-CTLA4")) # Group 2: Vehicle + ⍺CTLA-4 # Group 02: Vehicle + anti-CTLA4
+# Group 2: Vehicle (1% HPMC) + ⍺CTLA-4
+# Group 3: Vehicle (1% HPMC) + ⍺PD-1
+# Group 4: Vehicle (1% HPMC) + ⍺PD-L1
+```
+Make survival data input that is right censored for library(survival) coxph analysis
+
+```{r}
+current_right_data <- CT26_001 %>% make_right_censor_survival_data(cutoff=1000) # "Group 02: Vehicle + anti-CTLA4"
+current_right_data <- CT26_002 %>% make_right_censor_survival_data(cutoff=1000) #Group 02: Vehicle + anti-CTLA4 1000 is non-sig even for 324
+current_right_data <- CT26_003 %>% make_right_censor_survival_data(cutoff=1000) # Group 02: Vehicle + anti-CTLA4
+current_right_data <- CT26_005 %>% make_right_censor_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_right_data <- CT26_006 %>% make_right_censor_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_right_data <- CT26_007 %>% make_right_censor_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_right_data <- CT26_008 %>% make_right_censor_survival_data(cutoff=1000) # Group 01: Vehicle (1% HPMC) BID
+current_right_data <- CT26_009 %>% make_right_censor_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_right_data <- CT26_010 %>% make_right_censor_survival_data(cutoff=1000) # Group 06: Vehicle (1% HPMC) BID + anti-CTLA-4
+current_right_data <- CT26_012 %>% make_right_censor_survival_data(cutoff=1000) # Group 2: Vehicle + ⍺CTLA-4
+current_right_data <- CT26_011 %>% make_right_censor_survival_data(cutoff=1000) # multiple grouops
+current_right_data %<>% mutate(Treatment=fct_relevel(factor(Treatment),"Group 02: Vehicle + anti-CTLA4")) # set baseline condition
+```
+
+
+Test assumptions of Cox PH model
+
+In order to check these model assumptions, Residuals method are used. The common residuals for the Cox model include:
+
+Schoenfeld residuals to check the proportional hazards assumption:
+Martingale residual to assess nonlinearity
+Deviance residual (symmetric transformation of the Martinguale residuals), to examine influential observations
+
+```{r}
+library("survival")
+library("survminer")
+#groom current_Data for Surv input
+res.cox <- coxph(Surv(right,status) ~ Treatment, data=current_right_data)
+res.cox
+
+# test for proportional hazards assumption:
+test.ph <- cox.zph(res.cox)
+test.ph # When the covariates are NOT significant, then we can assume proportional hazards
+ggcoxzph(test.ph)
+
+```
+
+# test different fit models for survival
+```{r}
+#tmp <- MM1S.surv_data %>% filter(treatment %in% c("18797.50mpkBID","Vehicle"))
+#s <- Surv(tmp$left, tmp$right, type = "interval2")
+
+#non_para <- ic_np(cbind(left,right) ~ treatment, data=MM1S.surv_data)
+ph <- ic_sp(cbind(left,right) ~ Treatment, model='ph', bs_samples=1000, data=current_data) 
+po <- ic_sp(cbind(left,right) ~ Treatment, model='po', bs_samples=1000, data=current_data)
+par <- ic_par(cbind(left,right) ~ Treatment, model='ph', dist="weibull", data=current_data)
+#par.ph_weib <- ic_par(cbind(left,right) ~ treatment, model='ph', dist="weibull", data=MM1S.surv_data)
+
+#non_para %>% plot(.,  xlab="Time", ylab="Surv", main="non parametric")
+ph %>% plot(.,  xlab="Time", ylab="Surv", main="cox ph")
+#po  %>% plot(., xlab="Time", ylab="Surv", main="prop odds")
+#par  %>% plot(., xlab="Time", ylab="Surv", main="parametric cox ph")
+#par.ph_weib  %>% plot(., xlab="Time", ylab="Surv", main="parametric cox ph - Weibull")
+
+summary(ph)
+summary(po)
+summary(par)
+```
+
+
+GL261
+
+21-GL261-002 F022162
+21-GL261-005 F022019
+21-GL261-006 F022054
+21-GL261-007 F022005
+21-GL261-010 F022234
+21-GL261-012 F022692 excel needs fixing
+21-GL261-014 F022835 still ongoing on Day 41
+
+```{r}
+# Group 02: Vehicle + anti-CTLA4
+GL_002 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/GL261/21-GL261-002_(4_19_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day))
+
+GL_005 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/GL261/21-GL261-005_(4_28_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day))
+
+GL_006 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/GL261/21-GL261-006_(4_26_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day))
+
+GL_007 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/GL261/21-GL261-007_(4_28_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day))
+
+GL_010 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/GL261/21-GL261-010_(5_10_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day))
+
+GL_012 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/GL261/21-GL261-012_(5_21_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day))
+
+GL_014 <- readxl::read_xls("/Volumes/Picard/FLX/HPK1/In_vivo_data/GL261/21-GL261-014_(6_1_2021).xls", sheet="Ind VA", skip=8,trim_ws = TRUE) %>% rename(Treatment="...1") %>% dselect(-starts_with("Length"),-starts_with("Width"),-starts_with("..."), -Code,-Day) %>% dfilter(Treatment != "Unassigned") %>% mutate(Animal= c(1:length(Treatment))) %>% dselect(Treatment, Animal, everything()) %>% gather("day","size", -Treatment, -Animal) %>% mutate(day= as.numeric(day))
+```
+Average Graphs
+```{r fig.height=3, fig.width=7}
+#GL_002 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=exp(mean(log(size), na.rm=T))) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,1500) + xlim(0,36) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+
+GL_002 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=mean(size, na.rm=T)) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=800), color="grey20") + ylim(0,1000) + xlim(0,36) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+
+GL_005 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=mean(size, na.rm=T)) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,1000) + xlim(0,36) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+
+GL_006 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=mean(size, na.rm=T)) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,1000) + xlim(0,36) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+
+GL_007 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=mean(size, na.rm=T)) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,1000) + xlim(0,36) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+
+GL_012 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=mean(size, na.rm=T)) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,1000) + xlim(0,45) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+
+GL_010 %>% dselect(-Animal) %>% group_by(Treatment,day) %>% summarise(Mean_size=mean(size, na.rm=T)) %>% ggplot(aes(x=day, y=Mean_size, group=Treatment, color=Treatment)) + geom_line(size=1.5) + theme_bw() + geom_point(pch=19, size=2) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,1500) + xlim(0,45) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920"))
+```
+Graphs
+
+```{r fig.height=4, fig.width=7}
+GL_002 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=800), color="grey20")+ ylim(0,2000) + xlim(0,36) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+GL_005 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2000) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+GL_006 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=800), color="grey20")  + ylim(0,2000) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+GL_007 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=1000), color="grey20") + ylim(0,2000) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+GL_012 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=800), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+GL_010 %>% ggplot(aes(x=day, y=size, group= interaction(Treatment, Animal), color=Treatment)) + geom_line() + facet_wrap(~Treatment) + geom_hline(aes(yintercept=800), color="grey20") + ylim(0,2500) + scale_color_manual(values=c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54")) + theme_bw()  + nolegend() 
+
+```
+
+Make survival data input
+
+```{r}
+current_data <- GL_002 %>% make_survival_data(cutoff=800) #Group 01: Vehicle QD
+current_data <- GL_005 %>% make_survival_data(cutoff=800) #Group 01: Vehicle QD
+current_data <- GL_006 %>% make_survival_data(cutoff=800) # Group 01: Vehicle QD
+current_data <- GL_007 %>% make_survival_data(cutoff=1000) # Group 1: Vehicle (1% HPMC) BID
+current_data <- GL_012 %>% make_survival_data(cutoff=800) # Group 1: Vehicle (1% HPMC) BID
+current_data <- GL_010 %>% make_survival_data(cutoff=800) # Group 1: Vehicle (1% HPMC) BID
+
+
+current_data <- current_data %>% mutate(Treatment=fct_relevel(factor(Treatment), "Group 1: Vehicle (1% HPMC) BID")) # Group 2: Vehicle + ⍺CTLA-4 # Group 02: Vehicle + anti-CTLA4
+#Group 02: F022019 60 mpk BID
+```
+
+
+Test assumptions of Cox PH model
+
+https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Landmark_method
+
+In order to check these model assumptions, Residuals method are used. The common residuals for the Cox model include:
+Schoenfeld residuals to check the proportional hazards assumption: suspect this test will fail on the mouse data
+Martingale residual to assess nonlinearity
+Deviance residual (symmetric transformation of the Martinguale residuals), to examine influential observations
+
+```{r}
+library("survival")
+library("survminer")
+#groom current_Data for Surv input
+surv_data <- current_data %>% mutate(status = if_else(right == Inf, 0,1))
+surv_data <- surv_data %>% mutate(Treatment=fct_relevel(factor(Treatment), "Group 1: Vehicle (1% HPMC) BID")) 
+
+res.cox <- coxph(Surv(left,status, type="right") ~ Treatment, data=surv_data)
+res.cox
+
+# test for proprotional hazards assumption:
+test.ph <- cox.zph(res.cox)
+test.ph # When the covariates are NOT significant, then we can assume proportional hazards
+ggcoxzph(test.ph)
+
+```
+
+
+# test different fit models for survival
+
+I think in some cases the data is too "clean" for a Cox PH or Proportional Odds model, because they never "die", the tumors that are 0 are censored and don't get consideration
+In addition, since Cox PH assumes constant risk of "dying" over time, it doesn't help the model when I try to lie to the model and say all Inf mice survived until the last measured day, or some late date. 
+```{r}
+
+#current_data %<>% mutate(left= if_else(right==Inf, Inf, left)) # if a tumor never reaches threshold, remove the left censor and make it also Inf: this is not allowed
+
+np <- ic_np(cbind(left,right) ~ Treatment, maxIter=100, B=c(0,1), data=current_data)  
+ph <- ic_sp(cbind(left,right) ~ Treatment, model='ph', bs_samples=100, data=current_data) 
+po <- ic_sp(cbind(left,right) ~ Treatment, model='po', bs_samples=100, data=current_data)
+par <- ic_par(cbind(left,right) ~ Treatment, model='ph', dist="weibull", data=current_data)
+
+par %>% plot(.,  xlab="Time", ylab="Surv", main="cox ph")
+
+summary(np)
+summary(ph)
+summary(po)
+summary(par)
+```

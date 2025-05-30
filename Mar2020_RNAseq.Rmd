@@ -1,0 +1,267 @@
+---
+title: "Mar2020_RNAseq.Rmd"
+author: "Mengshu Xu"
+date: "4/3/2020"
+output: html_document
+---
+
+```{r}
+library(limma)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(DESeq2)
+library(edgeR)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("d:/FLX/Files_from_Gene/R_functions.r")
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+```
+
+Read in the data the YUMM1.7 data
+```{r}
+file_names <- list.files("D:/FLX/GCN2/Mar2020_RNAseq/kallisto/", pattern="Y1.7_") %>% lapply(function(i) {strsplit(i,"\\.kallisto")[[1]][1]})
+files <- list.files("D:/FLX/GCN2/Mar2020_RNAseq/kallisto/", pattern="Y1.7_", full.names=TRUE)
+
+file_names <- list.files("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"\\.")[[1]][1]})
+files <- base::list.files("/Volumes/Picard/FLX/GCN2/Feb2020_RNAseq/", pattern=".tsv", full.names=TRUE)
+#strsplit("G_AAS_1.kallisto_quant.abundance.tsv","\\.")[[1]][1]
+data_files <- lapply(files, function(i){read.table(i,header=TRUE)})
+tpms <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+rownames(tpms) <- data_files[[1]]$target_id
+colnames(tpms) <- file_names
+```
+
+```{r fig.height=2.5, fig.width=5}
+boxplot(tpms)
+gencode_symbol <- read.table("D:/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+
+tpms_gene <- tpms %>% data.frame %>% tibble::rownames_to_column("Gencode") %>% left_join(gencode_symbol, by="Gencode") %>% dselect(Symbol,everything()) %>% dselect(-Gencode) %>% group_by(Symbol) %>% mutate_if(is.numeric,sum_mx) %>% unique %>% ungroup %>% mutate(Gene=Symbol) %>% dselect(-Symbol)
+
+tpms_gene %>% dselect(-Y1.7_1.3) %>% dfilter(Gene %in% c("Cd19","Cxcl13","Cxcr5","Cd8a","Cd4","Nkg7","Cd14")) %>% gather(Sample,mRNA_TPM,-Gene) %>% left_join(coldata, by="Sample") %>% mutate(Condition=factor(Condition,levels=c("WT","gcn2"))) %>% ggplot(aes(x=Condition,y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Size)) + facet_wrap(~Gene, ncol=7, scales="free_y") + ylim(0,NA) + geom_hline(yintercept=0)
+
+tpms_gene %>% dselect(-Y1.7_1.3) %>% dfilter(Gene %in% c("Klrg1","Prf1","Cd69","Gzma","Gzmk")) %>% gather(Sample,mRNA_TPM,-Gene) %>% left_join(coldata, by="Sample") %>% mutate(Condition=factor(Condition,levels=c("WT","gcn2"))) %>% ggplot(aes(x=Condition,y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Size)) + facet_wrap(~Gene, ncol=9, scales="free_y") + ylim(0,NA) + geom_hline(yintercept=0) + nolegend()
+
+
+tpms_gene %>% dselect(-Y1.7_1.3) %>% dfilter(Gene %in% c("Lag3","Havcr2","Pdcd1","Foxp3")) %>% gather(Sample,mRNA_TPM,-Gene) %>% left_join(coldata, by="Sample") %>% mutate(Condition=factor(Condition,levels=c("WT","gcn2"))) %>% ggplot(aes(x=Condition,y=mRNA_TPM, colour=Sample)) + geom_point(aes(size=Size)) + facet_wrap(~Gene, ncol=9, scales="free_y") + ylim(0,NA) + geom_hline(yintercept=0) + nolegend()
+```
+
+DEG analysis
+```{r}
+library(DESeq2)
+#BiocManager::install("tximport")
+library(tximport)
+gencode_symbol <- read.table(file="D:/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt", sep="\t", header=TRUE)
+
+file_names <- list.files("D:/FLX/GCN2/Mar2020_RNAseq/kallisto/", pattern="Y1.7_") %>% lapply(function(i) {strsplit(i,"\\.kallisto")[[1]][1]})
+file_names <- unlist(file_names)
+names(file_names) <- "Samples"
+files <- list.files("D:/FLX/GCN2/Mar2020_RNAseq/kallisto/", pattern="Y1.7_", full.names=TRUE)
+
+yumm1_7 <- tximport(files, type="kallisto", tx2gene=gencode_symbol)
+yumm1_7$abundance <- yumm1_7$abundance[,-3]
+yumm1_7$counts <- yumm1_7$counts[,-3]
+yumm1_7$length <- yumm1_7$length[,-3]
+#colnames(renca$counts) <- colnames(tpm_gene)[2:42]
+
+coldata <-  cbind(Sample=file_names[-3], Condition=c(rep("WT",3),rep("gcn2",2)),Size=c(1423,1944,1245,392,1059)) %>% data.frame %>% mutate(Size=as.numeric(Size)) 
+
+yumm_gcn2 <- DESeqDataSetFromTximport(yumm1_7,
+                                   colData = coldata,
+                                   design= ~ Condition)
+colData(yumm_gcn2)
+
+```
+
+
+https://support.bioconductor.org/p/77960/
+
+This PCA plot shows 1.3 WT is an outlier: this makes sense because the sample degraded and I sent it for seq by mistake. Leave out of the analysis
+
+After removing the degraded sample, now the samples still don't cluster by genotype
+
+```{r}
+yumm_gcn2 <- DESeq(yumm_gcn2)
+rld <- rlog(yumm_gcn2)
+data <- plotPCA(rld, intgroup=c("Sample","Condition"), returnData=TRUE)
+ggplot(data, aes(PC1,PC2, colour=group, label=Sample, alpha=0.1)) + geom_label(vjust = "inward", hjust = "inward") 
+```
+
+DE
+```{r}
+yumm_gcn2$Condition <- relevel(yumm_gcn2$Condition, ref = "WT")
+yumm_gcn2 <- DESeq(yumm_gcn2)
+res <- results(yumm_gcn2)
+res05 <- results(renca_p, alpha=0.5)
+
+res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% arrange(padj) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="YUMM1.7_GCN2_UP.txt", quote=FALSE,row.names=FALSE,sep="\t")
+
+res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange <= -0.5) %>% arrange(log2FoldChange) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="YUMM1.7_GCN2_DN.txt", quote=FALSE,row.names=FALSE,sep="\t")
+```
+
+Signatures
+Zscore
+signatures
+
+```{r}
+yumm_z <- tpms_gene %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+```
+
+Load signatures
+
+```{r}
+GCN2 <-c("Cep85l","Txnrd1","Angptl4","Antxr2","Tcim", "Ptgs1", "Bdkrb2", "Prune2","Rbpj","Wdr45","Znrf2","Cnnm4","Grem1","Tnfaip2","Gpr137b-ps", "Car8", "Wipi2","Tmem171","Ndst3","Foxl1")
+GCN2_5marker <- c("Rbpj","Wdr45","Angptl4","Tmem171","Tcim")
+
+PERK <- c("Mrgprf","Lzts1","Wnt1" ,"Ptpn5","Gem","Slc2a6", "Snx32","Gm11331", "Prob1" , "Ccl7","Dbhos" ,"Mir99ahg","Trpm6", "N4bp2os","Glis1" ,"Mmp19","Lrrc73","Cd74","Pkdcc",   "2700069I18Rik","B230217C12Rik","Osr2")
+
+HRI <- c("Aft5","Glipr2","Grb10","Lrrc1","Slc7a11")
+
+Arg_sig_u_m 
+load("/Volumes/Picard/FLX/Reference_tables/Arg_sig_u_m.rdata")
+load("D:/FLX/Reference_tables/Arg_sig_u_m.rdata")
+
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4")
+Pan_isr <- c("Ddit3","Trib3","Ppp1r15a","Asns","Atf4","Adm2")
+
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Defa1", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "Ltf", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Cd24", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+
+```
+
+
+Calculate scores
+
+
+```{r}
+GCN2_score <- yumm_z %>% dfilter(Gene %in% GCN2) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="GCN2") %>% tibble::column_to_rownames("rownames")
+GCN2_5marker_score <- yumm_z %>% dfilter(Gene %in% GCN2_5marker) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="GCN2_5marker") %>% tibble::column_to_rownames("rownames")
+PERK_score <- yumm_z %>% dfilter(Gene %in% PERK) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="PERK") %>% tibble::column_to_rownames("rownames")
+HRI_score <- yumm_z %>% dfilter(Gene %in% HRI) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="HRI") %>% tibble::column_to_rownames("rownames")
+Arg_AAS_score <- yumm_z %>% dfilter(Gene %in% Arg_sig_u_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Arg_AAS") %>% tibble::column_to_rownames("rownames")
+AAS_score <- yumm_z %>% dfilter(Gene %in% aas_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="AAS") %>% tibble::column_to_rownames("rownames")
+Pan_ISR_score <- yumm_z %>% dfilter(Gene %in% Pan_isr) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Pan_ISR") %>% tibble::column_to_rownames("rownames")
+Angptl4_score <- yumm_z %>% dfilter(Gene =="Angptl4") %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Angptl4") %>% tibble::column_to_rownames("rownames")
+Atf4_score <- yumm_z %>% dfilter(Gene =="Atf4") %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Atf4_gene") %>% tibble::column_to_rownames("rownames")
+gMDSC_score <- yumm_z %>% dfilter(Gene %in% gMDSC_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="gMDSC") %>% tibble::column_to_rownames("rownames")
+mMDSC_score <- yumm_z %>% dfilter(Gene %in% mMDSC_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="mMDSC") %>% tibble::column_to_rownames("rownames")
+
+sig_scores <- rbind.data.frame(GCN2_score,GCN2_5marker_score,PERK_score,HRI_score,Arg_AAS_score,AAS_score,Pan_ISR_score,Atf4_score,gMDSC_score,mMDSC_score,make.row.names=TRUE)
+```
+
+```{r fig.height=5, fig.width=10}
+sig_scores %>% dselect(-Y1.7_1.3) %>% tibble::rownames_to_column("Signature") %>% dfilter(Signature != "gMDSC", Signature != "mMDSC") %>% gather(Sample,Score,-Signature) %>% left_join(coldata, by="Sample") %>% mutate(Signature=factor(Signature,levels=c("AAS","Arg_AAS","Pan_ISR","GCN2_5marker","GCN2","PERK","HRI","Atf4_gene"))) %>% mutate(Genotype=c(rep("WT",8*3),rep("gcn2",8*2))) %>% mutate(Genotype=factor(Genotype,levels=c("WT","gcn2")))  %>% ggplot(aes(x=Genotype, y=Score, colour=Sample)) + geom_point(aes(size=Size)) + geom_hline(yintercept=0, colour="grey50") + facet_wrap(~Signature, ncol=4) + ylim(-1.5,1.5)
+```
+
+Load in Seq data for mouse models:
+
+```{r}
+list.files("D:/FLX/GCN2/Mar2020_RNAseq/kallisto/", pattern=".tsv") #%>% lapply(function(i) {strsplit(i,"\\.kallisto")[[1]][1]})
+files <- list.files("D:/FLX/GCN2/Mar2020_RNAseq/kallisto/", pattern=".tsv", full.names=TRUE)
+
+file_names <- list.files("D:/FLX/GCN2/Mar2020_RNAseq/kallisto/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"\\.kallisto")[[1]][1]})
+file_names <- unlist(file_names)
+files <- base::list.files("D:/FLX/GCN2/Mar2020_RNAseq/kallisto/", pattern=".tsv", full.names=TRUE)
+#strsplit("G_AAS_1.kallisto_quant.abundance.tsv","\\.")[[1]][1]
+data_files <- lapply(files, function(i){read.table(i,header=TRUE)})
+rapt_seq <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+rownames(rapt_seq) <- data_files[[1]]$target_id
+colnames(rapt_seq) <- file_names
+
+boxplot(rapt_seq)
+gencode_symbol <- read.table("D:/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+
+#translate to HUGO names, and then sum by gene, change colname to Gene
+
+rapt_gene <- rapt_seq %>% data.frame %>% tibble::rownames_to_column("Gencode") %>% left_join(gencode_symbol, by="Gencode") %>% dselect(Symbol,everything()) %>% dselect(-Gencode) %>% group_by(Symbol) %>% mutate_if(is.numeric,sum_mx) %>% unique %>% ungroup %>% mutate(Gene=Symbol) %>% dselect(-Symbol) %>% dselect(Gene, everything())
+
+rapt_norm <- normalizeBetweenArrays(rapt_gene[2:17])
+rapt_norm %<>% data.frame %>% mutate(Gene=rapt_gene$Gene) %>% dselect(Gene,everything())
+boxplot(rapt_norm[2:17])
+```
+Rename the RAPT samples so they can be parsed later
+```{r}
+colnames(rapt_norm) <- c("Gene","RAPT_YUMM1.G1_R1","RAPT_YUMM1.G1_R2","RAPT_YUMM5.2_R1","RAPT_YUMM5.2_R2","RAPT_YUMM5.2_R3","RAPT_YUMM5.2_R4","RAPT_EG7_R1","RAPT_EG7_R2","RAPT_EG7_R3","RAPT_EL4_R1","RAPT_EL4_R2","RAPT_EL4_R3","RAPT_EL4_R4","RAPT_YUMM1.7_R1","RAPT_YUMM1.7_R2","RAPT_YUMM1.7_R3")
+```
+
+
+Load the existing data and join
+Batch correct
+Batch correct with covariate correction for tumor size: add in tumor sizes: 400 for all Mosely and unknown datasets, and the real numbers for ours
+then zscore in the gene direction
+
+dim(Syngeneic_JHU_KPC_YUMM_bnorm) # 15985 134
+
+sva::ComBat
+1:93 mosely: 93
+94:123 jhu: 30
+124:131 kpc: 8
+132:134 Ribas_YUMM: 3
+135:151 RAPT : 16
+
+
+
+```{r fig.height=4, fig.width=15}
+load("D:/FLX/Syngeneic_mouse_models/Syngeneic_JHU_KPC_YUMM_bnorm.rdata") # Syngeneic_JHU_KPC_YUMM_bnorm. This was comBat and limma::NormalizeBetweenArrays normalized
+boxplot(Syngeneic_JHU_KPC_YUMM_bnorm) # looks good
+
+Mar2020_syngeneic <- Syngeneic_JHU_KPC_YUMM_bnorm %>% data.frame %>% tibble::rownames_to_column("Gene") %>% left_join(rapt_norm, by="Gene")
+boxplot(Mar2020_syngeneic[2:151])
+
+Mar2020_syngeneic_matrix <- as.matrix(Mar2020_syngeneic[,2:151])
+Mar2020_batch <- limma::removeBatchEffect(Mar2020_syngeneic_matrix,batch=c(rep("A",93),rep("B",30),rep("C",8),rep("D",3),rep("E",16)),covariates=c(rep(200,93),rep(200,30),rep(200,8),rep(200,3),1585,2597,557,332,107,273,1750,2270,1651,1435,1758,1225,1315,1423,1944,1245))
+boxplot(Mar2020_batch)
+
+Mar2020_batch %<>% data.frame %>% mutate(Gene=Mar2020_syngeneic$Gene) %>% dselect(Gene, everything())
+save(Mar2020_batch,file="D:/FLX/Syngeneic_mouse_models/Mar2020_batch.rdata")
+load("/Volumes/Picard/FLX/Syngeneic_mouse_models/Mar2020_batch.rdata")
+Mar2020_batch
+```
+
+
+```{r fig.height=8, fig.width=5}
+Mar2020_batch_z <- Mar2020_batch %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene")
+
+#data without batch correction
+Mar2020_z <- Mar2020_syngeneic %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene")
+
+mosely_meta <- samples.info_tum %>% dselect(SampleID,`experimental group`)
+colnames(mosely_meta) <- c("SampleID","Group")
+
+Mar2020_batch_z_groom <- Mar2020_batch_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") %>% left_join(mosely_meta, by="SampleID") %>% dselect(SampleID,Group,everything()) %>% mutate(Group=if_else(is.na(Group),SampleID,Group)) %>% mutate(Group = if_else(grepl("K_rep",Group),"GEMM_KPC_UWash",Group)) %>% dfilter(!grepl("OG_rep",Group)) %>% dselect(-SampleID) %>% dfilter(!grepl("_CL",Group)) %>% dfilter(grepl("_T$|YUMM|GEMM|BTH_04_bulk_tumor_untreated|AB_1_TIL_untreated|^RAPT",Group)) %>% mutate(Group= if_else(Group=="BTH_04_bulk_tumor_untreated","GEMM_KPC_JHU",Group)) %>% mutate(Group= if_else(Group=="AB_1_TIL_untreated","GEMM_KPC_TIL_JHU",Group)) %>% separate(Group,into=c("Group",NA), sep="_T$|_R",extra="drop", remove=TRUE) %>% group_by(Group) %>% summarise_if(is.numeric,mean) %>% ungroup %>% tibble::column_to_rownames("Group") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+
+Common_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,mean_mx)
+AAS_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,mean_mx)
+Arg_AAS_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% Arg_sig_u_m) %>% summarise_if(is.numeric,mean_mx)
+gMDSC_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,mean_mx)
+mMDSC_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,mean_mx)
+GCN2_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% GCN2) %>% summarise_if(is.numeric,mean_mx)
+PERK_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% PERK_m) %>% summarise_if(is.numeric,mean_mx)
+HRI_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% HRI) %>% summarise_if(is.numeric,mean_mx)
+Hypoxia_s <- Mar2020_batch_z_groom %>% dfilter(Gene %in% hypoxia_m) %>% summarise_if(is.numeric,mean_mx)
+
+Common_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,sum_mx)
+AAS_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum)
+gMDSC_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+mMDSC_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum_mx)
+GCN2_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% GCN2) %>% summarise_if(is.numeric,sum_mx)
+PERK_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% PERK_m) %>% summarise_if(is.numeric,sum_mx)
+HRI_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% HRI) %>% summarise_if(is.numeric,sum_mx)
+Hypoxia_s <- Mouse_YUMM_zz_groom %>% dfilter(Gene %in% hypoxia_m) %>% summarise_if(is.numeric,function(x){sum(x)/2})
+
+ISR_s <- bind_rows(Common_s,AAS_s,Arg_AAS_s,GCN2_s,PERK_s,HRI_s,gMDSC_s,mMDSC_s,Hypoxia_s)
+rownames(ISR_s) <- c("ISR_Common","AAS","Arg_AAS","GCN2","PERK","HRI","gMDSC","mMDSC","Hypoxia")
+ISR_s_t <- ISR_s %>% t %>% data.frame 
+
+library(scales)
+
+ISR_s_t %>% tibble::rownames_to_column("Model") %>% gather(Signature,Score,-Model) %>% mutate(Signature= factor(Signature, levels= c("ISR_Common","AAS","Arg_AAS","GCN2","PERK","HRI","gMDSC","mMDSC","Hypoxia")))  %>% ggplot(aes(Signature,reorder(Model,Score),fill=Score)) + geom_tile() + scale_fill_gradient2(low="green4", high="purple", mid= "white", limits=c(-0.75,0.75), oob=squish) + theme(axis.text.x = element_text(angle = 90, hjust = 0)) + scale_x_discrete(position = "top") # ggsave("Mouse_model_zz_YUMM_hypoxia.jpg", width=5, height=8, dpi=150, plot= last_plot(), units = "in")
+
+ISR_s_t %>% tibble::rownames_to_column("Model") %>% write.table(file="Mouse_model_Apr2020.txt", sep="\t", row.names=FALSE, quote=FALSE)
+
+Mar2020_batch_z_groom %>% dfilter(Gene=="Atf4") %>% gather(Model,z_score,-Gene) %>% ggplot(aes(reorder(Model,z_score),z_score)) + geom_point() + coord_flip()
+```
+

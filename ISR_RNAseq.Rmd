@@ -1,0 +1,723 @@
+---
+title: "ISR_RNAseq"
+author: "Mengshu"
+date: "12/10/2019"
+output: html_document
+---
+
+```{r}
+library(limma)
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+#BiocManager::install("DESeq2")
+library(DESeq2)
+#BiocManager::install("edgeR")
+library(edgeR)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("d:/FLX/Files_from_Gene/R_functions.r")
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+```
+Data Files Loading Zone
+
+```{r}
+load("/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/ISR_norm.rdata")
+#load("d:/FLX/GCN2/ISR_data/RNA_seq/ISR_norm.rdata")
+#load("/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/AD_DESeq2.rdata")
+load("/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/GCN2_PERK_kallisto.rdata")
+#load("d:/FLX/GCN2/ISR_data/RNA_seq/GCN2_PERK_kallisto.rdata")
+#############HRI data#########
+load("/Volumes/Picard/FLX/GCN2/ISR_data/GSE119365_matrix.rdata")
+#load("d:/FLX/GCN2/ISR_data/GSE119365_matrix.rdata")
+load("/Volumes/Picard/FLX/GCN2/ISR_data/GSE119365_meta.rdata")
+#load("d:/FLX/GCN2/ISR_data/GSE119365_meta.rdata")
+
+load("/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/GPH_norm.rdata")
+#load("d:/FLX/GCN2/ISR_data/RNA_seq/GPH_norm.rdata")
+
+load("GCN2_PERK_DESeq2.rdata")
+ISR_counts %>% dfilter(Symbol=="Fat2")
+```
+
+
+
+Load the data
+Select the eTPM for this table
+Merge the data, rename the columns, and tranlate the ENCODE genes to symbols
+
+#```{r}
+files <- base::list.files("/Volumes/Voyager/GCN2_PERK_RNAseq/", pattern=".tsv")
+#data_files <- lapply(files, function(i){read.table(paste0("d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/kallisto/",i),header=TRUE)})
+data_files <- lapply(files, function(i){read.table(paste0("/Volumes/Voyager/GCN2_PERK_RNAseq/",i),header=TRUE)})
+ISR_counts <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+#colnames(AD_counts) <- c("Vehicle_ETOH_UTR","Vehicle_ETOH","Vehicle_FITC_UTR","Vehicle_FITC","DEX_ETOH_UTR","DEX_ETOH","DEX_FITC_UTR","DEX_FITC","RPT193_ETOH_UTR","RPT193_ETOH","RPT193_FITC_UTR","RPT193_FITC")
+colnames(ISR_counts) <- paste0(rep(c("G_AAS","G_DMSO","G_NT","G_Thap","P_AAS","P_DMSO","P_NT","P_Thap","WT_AAS","WT_DMSO","WT_NT","WT_Thap"), each=3),rep(c("-1","-2","-3"),12))
+
+Genes <- sub("mm10_knownGene_","",data_files[[1]]$target_id)
+ISR_counts %<>% mutate(Gene = Genes) %>% dselect(Gene, everything())
+ISR_counts <- left_join(ISR_counts, gencode_symbol, by="Gene") %>% dselect(Symbol,Gene, everything())
+
+save(ISR_counts,file="d:FLX/GCN2/ISR_data/RNA_seq/GCN2_PERK_kallisto.rdata")
+save(ISR_counts,file="/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/GCN2_PERK_kallisto.rdata")
+#``` 
+
+
+
+Merge GCN2, PERK and HRI datasets for non-DESeq2 analysis
+
+#```{r}
+ISR_counts
+HRI_matrix["Ccr4",] # the HRI data does have HUGO gene names
+HRI_colnames <- HRI_meta %>% mutate(Genotype=c(rep("WT",6),rep("HRI",6)), Treatment= rep(c("Fe","NoFe","Fe","NoFe"), each=3)) %>% mutate(Sample= paste(Genotype,Treatment,replicate,sep="_")) %>% dselect(Sample)
+colnames(HRI_matrix) <- HRI_colnames[,1]
+HRI_matrix %<>% tibble::rownames_to_column("Gene")
+ISR_gene_counts <- ISR_counts %>% group_by(Symbol) %>% mutate_if(is.numeric,sum) %>% dselect(-Gene) %>% unique %>% ungroup
+GPH <- left_join(ISR_gene_counts,HRI_matrix, by=c("Symbol"="Gene"))
+boxplot(GPH[2:ncol(GPH)])
+GPH_norm <- normalizeBetweenArrays(GPH[2:ncol(GPH)])
+boxplot(GPH_norm)
+GPH_norm %<>% data.frame %>% mutate(Gene = GPH$Symbol) %>% select(Gene, everything())
+save(GPH_norm, file="GPH_norm.rdata")
+load("d:/FLX/GCN2/ISR_data/RNA_seq/GPH_norm.rdata")
+#```
+
+
+########################
+Normalize data
+Limma
+Default is quantile Norm
+########################
+```{r fig.height=4, fig.width=10}
+boxplot(ISR_counts[3:ncol(ISR_counts)])
+boxplot(ISR_norm[3:ncol(ISR_norm)])
+ISR_norm <- normalizeBetweenArrays(ISR_counts[3:ncol(ISR_counts)])
+
+#put the gene and transcript names back on the matrix
+ISR_norm %<>% data.frame %>% mutate(Symbol=ISR_counts$Symbol, Gene=ISR_counts$Gene) %>% dselect(Symbol,Gene,everything())
+
+ggplot(ISR_counts[,3:ncol(ISR_counts)] %>% gather(Sample, mRNA) %>% dfilter(mRNA != 0), aes(x=Sample, y=mRNA)) + geom_boxplot(outlier.shape = NA) + ylim(0.01,5) + coord_trans(y='log10') +  labs(y="Log10 mRNA signal") + theme(axis.text.x=element_text(angle=90, size=14)) 
+ggplot(ISR_norm[,3:ncol(ISR_counts)] %>% gather(Sample, mRNA) %>% dfilter(mRNA != 0), aes(x=Sample, y=mRNA)) + geom_boxplot(outlier.shape = NA) + ylim(0.01,5) + coord_trans(y='log10') +  labs(y="Log10 mRNA signal") + theme(axis.text.x=element_text(angle=90, size=14)) 
+```
+
+UMAP
+
+UMAP with limma normalized data
+
+The UMAP shows some biological replicates are all over the place and not next to each other 
+```{r}
+library(umap)
+library(ggrepel)
+custom.config <- umap.defaults
+custom.config$n_neighbors = 2
+custom.config$spread= 3
+custom.config$min_dist = 2
+ISR_umap <- umap(ISR_norm %>% dselect(-Symbol,-Gene) %>% t %>% data.frame, custom.config)
+colnames(ISR_umap$layout) <- c("UMAP_dim_1","UMAP_dim_2")
+plot(ISR_umap$layout, col=rep(1:12, each=3)) #sooooooo ugly
+
+ggplot(ISR_umap$layout %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Group =factor(rep(c("G_AAS","G_DMSO","G_NT","G_Thap","P_AAS","P_DMSO","P_NT","P_Thap","WT_AAS","WT_DMSO","WT_NT","WT_Thap"), each=3))), aes(x=UMAP_dim_1, y=UMAP_dim_2,label=Group, alpha=1, fill=Group)) + geom_label_repel(nudge_x=5, label.padding = unit(0.1, "lines")) + geom_point(size=3) #+ ggsave("MouseAD_limma_UMAP.jpg", width=6, height=4, dpi=300, plot= last_plot(), units = "in")
+
+
+```
+Check genotypes of the MEF cells
+
+PERK does not look like a mRNA detection.... check the transcript. A WB might be needed to figure this one out otherwise
+```{r fig.height=5, fig.width=12}
+
+#Order by treatment
+ISR_norm %>% dfilter(Symbol %in% c("Eif2ak4","Eif2ak3")) %>% dfilter(Gene %in% c("ENSMUST00000005233.11","ENSMUST00000034093.14")) %>% dselect(-Gene) %>% gather(Condition, mRNA_signal,-Symbol) %>% separate(Condition, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap")), Genotype = factor(Genotype, levels=c("WT","G","P"))) %>% ggplot(aes(x=interaction(Genotype,Treatment),y=mRNA_signal,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Symbol) + theme(axis.text.x=element_text(angle=90, size=14)) # + ggsave("GCN2_PERK_expression.jpg", width=12, height=5, dpi=300, plot= last_plot(), units = "in")
+
+
+#Order by treatment
+GPH_norm %>% dfilter(Gene %in% c("Eif2ak4","Eif2ak3","Eif2ak1")) %>% gather(Condition, mRNA_signal,-Gene) %>% separate(Condition, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36*3),rep("Erythrocyte",12*3))) %>% mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype,Cell),y=mRNA_signal,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scale="free_y") + theme(axis.text.x=element_text(angle=90, size=14)) #+ ggsave("GCN2_PERK_HRI_expression.jpg", width=12, height=5, dpi=300, plot= last_plot(), units = "in")
+
+
+
+#Order by genotype
+#ISR_counts %>% dfilter(Symbol %in% c("Eif2ak4","Eif2ak3","Eif2ak1")) %>% dfilter(Gene %in% c("ENSMUST00000005233.11","ENSMUST00000034093.14","ENSMUST00000100487.5")) %>% dselect(-Gene) %>% gather(Condition, mRNA_signal,-Symbol) %>% mutate(Group =factor(rep(c("G_AAS","G_DMSO","G_NT","G_Thap","P_AAS","P_DMSO","P_NT","P_Thap","WT_AAS","WT_DMSO","WT_NT","WT_Thap"), each=6))) %>% mutate(Genotype=factor(rep(c("GCN2-","PERK-","WT"), each=24))) %>% ggplot(aes(Group,mRNA_signal,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Symbol, scale="free_y") + theme(axis.text.x=element_text(angle=90, size=14)) 
+
+```
+Check the ISR signal
+
+```{r fig.height=5, fig.width=6}
+ISR_zscore <- ISR_norm %>% group_by(Symbol) %>% mutate_if(is.numeric,sum) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate_if(is.numeric,mx_zscore2)
+#save(ISR_zscore, file="ISR_zscore.rdata")
+
+isr <- c("Ddit3","Trib3","Ppp1r15a","Asns","Atf4")
+aas_sig_m <- c("Clic4","Yars","Sars","Phgdh","Gars","Asns","Sat1","Slc3a2","Ddit3","Wars","Chac1","Herpud1","Pycr1","Trib3","Cebpb","Ppp1r15a","Atf4")
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Defa1", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "Ltf", "F13a1", "Ppbp", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Cd24", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+
+isr_s <- ISR_zscore %>% dfilter(Symbol %in% isr) %>% summarise_if(is.numeric,sum) #Asns
+aas_s <- ISR_zscore %>% dfilter(Symbol %in% aas_sig_m) %>% summarise_if(is.numeric,sum) 
+#gMDSC_s <- ISR_zscore %>% dfilter(Symbol %in% gMDSC_sig_m) %>% summarise_if(is.numeric,sum) 
+#mMDSC_s <- ISR_zscore %>% dfilter(Symbol %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum) 
+
+sigs <- rbind(isr_s,aas_s) %>% data.frame
+rownames(sigs) <- c("ISR_score","AAS_score")
+sigs %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% gather(Signature, Score, -Sample,-Genotype,-Treatment, -Rep) %>% mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap")), Genotype = factor(Genotype, levels=c("WT","G","P"))) %>% ggplot(aes(x=interaction(Genotype,Treatment),y=Score,colour=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Signature, scales= "free_y", ncol=2) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("AAS_ISR_signature.jpg", width=8, height=4, dpi=300, plot= last_plot(), units = "in")
+
+sigs %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% gather(Signature, Score, -Sample,-Genotype,-Treatment, -Rep) %>% ggplot(aes(x=interaction(Genotype,Treatment),y=Score,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Signature, scales= "free_y", ncol=2) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("AAS_ISR_signature_Genotype.jpg", width=8, height=4, dpi=300, plot= last_plot(), units = "in")
+```
+Plot specific markers
+
+```{r fig.height=8, fig.width=20}
+ISR_norm %>% group_by(Symbol) %>% mutate_if(is.numeric,sum) %>% dselect(-Gene) %>% unique %>% ungroup %>% dfilter(Symbol %in% isr) %>% gather(Sample, mRNA_signal,-Symbol) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Symbol=factor(Symbol, levels=isr) ,Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap")), Genotype = factor(Genotype, levels=c("WT","G","P"))) %>% ggplot(aes(x=interaction(Genotype,Treatment), y=mRNA_signal, colour=Genotype)) +geom_boxplot() + geom_point() + facet_wrap(~Symbol, scales= "free_y", ncol=5) + theme(axis.text.x=element_text(angle=90, size=14)) #+ ggsave("ISR_markers.jpg", width=20, height=4, dpi=300, plot= last_plot(), units = "in")
+
+GCN2_s <- c("Tnfaip2","Gpr137b-ps","Fat2","Ccl20","Gm10419","Slc9a9","Chchd10","Trp53cor1")
+
+ISR_norm %>% group_by(Symbol) %>% mutate_if(is.numeric,sum) %>% dselect(-Gene) %>% unique %>% ungroup %>% dfilter(Symbol %in% GCN2_s) %>% gather(Sample, mRNA_signal,-Symbol) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Symbol=factor(Symbol, levels= GCN2_s) ,Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap")), Genotype = factor(Genotype, levels=c("WT","G","P"))) %>% ggplot(aes(x=interaction(Genotype,Treatment), y=mRNA_signal, colour=Genotype)) +geom_boxplot() + geom_point() + facet_wrap(~Symbol, scales= "free_y", ncol=4) + theme(axis.text.x=element_text(angle=90, size=14)) # + ggsave("GCN2s_markers.jpg", width=20, height=8, dpi=300, plot= last_plot(), units = "in")
+
+GCN2_s2 <- c("Adm2","Sspo","Glrp1","Klf15","Cass4","Fut1","Trim66")
+ISR_norm %>% group_by(Symbol) %>% mutate_if(is.numeric,sum) %>% dselect(-Gene) %>% unique %>% ungroup %>% dfilter(Symbol %in% GCN2_s2) %>% gather(Sample, mRNA_signal,-Symbol) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% ggplot(aes(x=interaction(Genotype,Treatment), y=mRNA_signal, colour=Genotype)) +geom_boxplot() + geom_point() + facet_wrap(~Symbol, scales= "free_y", ncol=4) + theme(axis.text.x=element_text(angle=90, size=14)) 
+
+
+ISR_norm %>% group_by(Symbol) %>% mutate_if(is.numeric,sum) %>% dselect(-Gene) %>% unique %>% ungroup %>% dfilter(Symbol %in% Gs[,1]) %>% gather(Sample, mRNA_signal,-Symbol) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% ggplot(aes(x=interaction(Genotype,Treatment), y=mRNA_signal, colour=Genotype)) +geom_boxplot() + geom_point() + facet_wrap(~Symbol, scales= "free_y", ncol=4) + theme(axis.text.x=element_text(angle=90, size=14)) 
+```
+
+Create DESeq2 object
+Import raw data with Tximport
+https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#transcript-abundance-files-and-tximport-tximeta
+
+#```{r}
+library(DESeq2)
+#BiocManager::install("tximport")
+library(tximport)
+my_files <- base::list.files("/Volumes/Voyager/GCN2_PERK_RNAseq/", pattern=".tsv", full.names=TRUE)
+
+all(file.exists(my_files)) # TRUE
+# A tx2gene file has to be created
+
+ISR_DeS <- tximport(my_files, type="kallisto", tx2gene=gencode_symbol)
+ISR_DeS$counts
+ISR_DeS$abundance
+#Create the DESeq2 object 
+coldata <- rep(c("G_AAS","G_DMSO","G_NT","G_Thap","P_AAS","P_DMSO","P_NT","P_Thap","WT_AAS","WT_DMSO","WT_NT","WT_Thap"), each=3) %>% data.frame
+colnames(coldata) <- "Condition"
+coldata %<>% separate(Condition, c("Genotype","Treatment"), sep="[_.]", remove=FALSE)
+
+ddsTxi <- DESeqDataSetFromTximport(ISR_DeS,
+                                   colData = coldata,
+                                   design = ~ Condition)
+
+
+
+coldata2 <- c(rep("Ctrl",24),rep("WT_AAS",3),rep("Ctrl",9)) %>% data.frame
+#olnames(coldata2) <- "Condition"
+
+ddsTxi_2 <- DESeqDataSetFromTximport(ISR_DeS,
+#                                   colData2 = coldata2,
+#                                   design = ~ Condition)
+#str(AD_des) #this is a combo of 3 matrizes, need to choose one. The manual is wrong
+#ncol(AD_des$abundance %>% data.frame) # 18
+#Filter
+#keep <- rowSums(counts(ddsTxi)) >= 10
+#table(keep)
+#ddsTxi <- ddsTxi[keep,]
+
+
+save(ddsTxi,file="GCN2_PERK_DESeq2.rdata")
+load("GCN2_PERK_DESeq2.rdata")
+#```
+
+```{r}
+load("/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/GCN2_PERK_DESeq2.rdata")
+```
+
+HRI DE analysis
+```{r}
+load("/Volumes/Picard/FLX/GCN2/ISR_data/GSE119365_matrix.rdata")
+load("/Volumes/Picard/FLX/GCN2/ISR_data/GSE119365_meta.rdata")
+
+#load("d:/FLX/GCN2/ISR_data/GSE119365_matrix.rdata")
+#load("d:/FLX/GCN2/ISR_data/GSE119365_meta.rdata")
+
+HRI_matrix
+HRI_meta %<>% mutate(Genotype=c(rep("WT",6),rep("HRI",6)), Treatment= rep(c("Fe","NoFe","Fe","NoFe"), each=3)) %>% mutate(Sample= paste(Genotype,Treatment, sep="_"))
+
+dds_hri <- DESeqDataSetFromMatrix(countData = HRI_matrix,
+                              colData = HRI_meta,
+                              design= ~ Sample)
+
+dds_hri$Sample <- relevel(dds_hri$Sample, ref = "WT_Fe")
+ddsTxi_hri <- DESeq(dds_hri)
+
+resultsNames(ddsTxi_hri_NoFe)
+#save(ddsTxi_hri, file="Sample_WT_NoFe_vs_WT_Fe_all.rdata")
+Ind_WT <- results(ddsTxi_hri, name="Sample_WT_NoFe_vs_WT_Fe") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange >= 0.5) #28
+#save(Ind_WT,file="Sample_WT_NoFe_vs_WT_Fe.rdata")
+#load("Sample_WT_NoFe_vs_WT_Fe.rdata")
+dds_hri$Sample <- relevel(dds_hri$Sample, ref = "WT_NoFe")
+ddsTxi_hri_NoFe <- DESeq(dds_hri)
+Ind_hri <- results(ddsTxi_hri_NoFe, name="Sample_HRI_NoFe_vs_WT_NoFe") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange <= -1) #44
+#save(Ind_hri, file="Sample_HRI_NoFe_vs_WT_NoFe.rdata")
+#load("Sample_HRI_NoFe_vs_WT_NoFe.rdata")
+length(Ind_WT$Gene)
+
+hri_de <- intersect(Ind_WT$Gene,Ind_hri$Gene)
+```
+
+
+Perform DE for all comparisons: Set reference level for all 6 comparisons and save to a different DE result
+
+
+```{r}
+#specify reference level
+ddsTxi$Condition <- relevel(ddsTxi$Condition, ref = "WT_NT")
+ddsTxi_WT_NT <- DESeq(ddsTxi)
+#resultsNames(ddsTxi_WT_NT)
+#save(ddsTxi_WT_NT, file="ddsTxi_WT_NT.rdata")
+#load("ddsTxi_WT_NT.rdata")
+
+ddsTxi$Condition <- relevel(ddsTxi$Condition, ref = "G_NT")
+ddsTxi_G_NT <- DESeq(ddsTxi)
+#save(ddsTxi_G_NT, file="ddsTxi_G_NT.rdata")
+#load("ddsTxi_G_NT.rdata")
+
+ddsTxi$Condition <- relevel(ddsTxi$Condition, ref = "WT_AAS")
+ddsTxi_WT_AAS <- DESeq(ddsTxi)
+#save(ddsTxi_WT_AAS, file="ddsTxi_WT_AAS.rdata")
+#load("ddsTxi_WT_AAS.rdata")
+
+ddsTxi$Condition <- relevel(ddsTxi$Condition, ref = "WT_DMSO")
+ddsTxi_WT_DMSO <- DESeq(ddsTxi)
+#save(ddsTxi_WT_DMSO, file="ddsTxi_WT_DMSO.rdata")
+#load("ddsTxi_WT_DMSO.rdata")
+
+ddsTxi$Condition <- relevel(ddsTxi$Condition, ref = "P_DMSO")
+ddsTxi_P_DMSO <- DESeq(ddsTxi)
+#save(ddsTxi_P_DMSO, file="ddsTxi_P_DMSO.rdata")
+#load("ddsTxi_P_DMSO.rdata") #d:/FLX/GCN2/ISR_data/RNA_seq/
+
+ddsTxi$Condition <- relevel(ddsTxi$Condition, ref = "WT_Thap")
+ddsTxi_WT_Thap <- DESeq(ddsTxi)
+#save(ddsTxi_WT_Thap, file="ddsTxi_WT_Thap.rdata")
+#load("ddsTxi_WT_Thap.rdata")
+
+```
+Get DE results
+
+G4 and P4 should not be hard thresholds, but a ratio value that can be ranked, since there is so much induction overlap in the two conditions
+G3 should also be taken out, because we know PERK will induce some GCN20-induced markers, so G_AAS vs G_NT is expected to have some induction
+```{r}
+
+G1 <- results(ddsTxi_WT_NT, name="Condition_WT_AAS_vs_WT_NT") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01,log2FoldChange >= 0.5) #1139
+G2 <- results(ddsTxi_WT_AAS, name="Condition_G_AAS_vs_WT_AAS") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01,log2FoldChange <= -0.5) #2332
+G3 <- results(ddsTxi_G_NT, name="Condition_G_AAS_vs_G_NT") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01,log2FoldChange >= 0.5) #716
+G4 <- results(ddsTxi_WT_AAS, name="Condition_P_AAS_vs_WT_AAS") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01,log2FoldChange <= -1) #2569 THIS FILTER IS LESS STRINGENT #1216 @ -1 logFC
+resultsNames(ddsTxi_P_DMSO)
+
+#Calculate overlaps
+length(G1$Gene) 
+length(intersect(G1$Gene,G2$Gene)) #486
+G1i2 <- intersect(G1$Gene,G2$Gene) #486
+write.table(G1i2, file="Gcn2_G1iG2.txt", sep="\t",row.names=FALSE, quote=FALSE,col.names = FALSE)
+length(G1i2)
+#length(setdiff(G1i2,G3$Gene)) # 435
+#G123 <- setdiff(G1i2,G3$Gene)
+#length(G123)
+#length(setdiff(G123,G4$Gene)) #74
+#G1234 <- setdiff(G123,G4$Gene) 
+#length(G1234)
+# GCN2 PERK
+#length(intersect(G123,P123))
+#GP_common <- intersect(G123,P123)
+GP_intersect <- intersect(G1i2,P1i2)
+intersect(GP_intersect,hri_de)
+length(GP_intersect)
+HRI_spec <- setdiff(hri_de,GP_intersect)
+HRI_spec %>% write.table(file="HRI_markers.txt", sep="\t",row.names=FALSE, quote=FALSE)
+
+length(GPH_intersect)
+GCN2_spec <- setdiff(G1i2,P1i2)
+GCN2_spec2 <- setdiff(GCN2_spec,hri_de)
+length(GCN2_spec)
+
+GCN2 <-c( "Cep85l","Txnrd1","Angptl4","Antxr2","Tcim", "Ptgs1", "Bdkrb2", "Prune2","Rbpj","Wdr45","Znrf2","Cnnm4","Grem1","Tnfaip2","Gpr137b-ps", "Car8", "Wipi2","Tmem171","Ndst3","Foxl1")
+save(GCN2_h_sig, file="GCN2_human_sig.rdata")
+isr_h
+save(aas_sig, file="AAS_human_sig.rdata")
+
+#The common_ISR signature
+GPH_intersect <- intersect(intersect(G1i2,P1i2),hri_de)
+GPH_intersect %>% write.table(file="GPH_common.txt", sep="\t",row.names=FALSE, quote=FALSE)
+PERK_spec <- setdiff(P1i2,G1i2)
+length(setdiff(G12,P12))
+
+#GCN2 PERK, HRI
+G1 %>% dfilter(Gene %in% GCN2_spec2)
+
+
+P1 <- results(ddsTxi_WT_DMSO, name="Condition_WT_Thap_vs_WT_DMSO") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01,log2FoldChange >= 0.5) #1051
+P2 <- results(ddsTxi_WT_Thap, name="Condition_P_Thap_vs_WT_Thap") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01,log2FoldChange <= -1) #1478
+P3 <- results(ddsTxi_P_DMSO, name="Condition_P_Thap_vs_P_DMSO") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01,log2FoldChange >= 0.5) #249
+P4 <- results(ddsTxi_WT_Thap, name="Condition_G_Thap_vs_WT_Thap") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01,log2FoldChange <= -0.5) #THIS FILTER IS LESS STRINGENT #1127 @ -1 logFC
+resultsNames(ddsTxi_WT_AAS)
+
+length(P2$Gene)
+#Calculate overlaps
+length(intersect(P1$Gene,P2$Gene)) #647
+P1i2 <- intersect(P1$Gene,P2$Gene) #649
+length(P1i2)
+PERK_spec <- setdiff(P1i2,G1i2)
+PERK_spec <- setdiff(PERK_spec,hri_de)
+
+save(PERK_spec,file="PERK_specific.rdata")
+
+length(PERK_spec)
+#length(setdiff(P1i2,P3$Gene)) # 590 # 216
+#P123 <- setdiff(P1i2,P3$Gene)
+#length(P123)
+#length(setdiff(P123,P4$Gene)) #485 #142
+#P1234 <- setdiff(P123,P4$Gene) #
+
+#By Comparing the LogFC values in DE of WT activated vs. baseline
+
+G1 <- results(ddsTxi_WT_NT, name="Condition_WT_AAS_vs_WT_NT") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01) #1139
+P1 <- results(ddsTxi_WT_DMSO, name="Condition_WT_Thap_vs_WT_DMSO") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.01) #1051
+
+G_spec <- results(ddsTxi_WT_NT, name="Condition_WT_AAS_vs_WT_NT") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dselect(Gene, log2FoldChange,lfcSE) 
+P_spec <- results(ddsTxi_WT_DMSO, name="Condition_WT_Thap_vs_WT_DMSO") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dselect(Gene, log2FoldChange,lfcSE)
+H_spec <- results(ddsTxi_hri, name="Sample_WT_NoFe_vs_WT_Fe") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dselect(Gene, log2FoldChange,lfcSE)
+
+
+FC_comp <- left_join(G_spec,P_spec, by="Gene") 
+FC_comp <- left_join(FC_comp,H_spec, by="Gene") 
+colnames(FC_comp) <- c("Gene","AAS_logFC","AAS_lfcSE","Thap_logFC","Thap_lfcSE","NoFe_logFC","NoFe_lfcSE") #   ,"NoFe_logFC","NoFe_lfcSE"
+FC_comp %<>% mutate(AASvsThap= AAS_logFC/Thap_logFC,AASsubThap= AAS_logFC-Thap_logFC, ThapvsAAS=Thap_logFC/AAS_logFC, ThapsubAAS=Thap_logFC-AAS_logFC)
+FC_comp %>% write.table(file="AAS_Thap_LogFC_comparison.txt",sep="\t",row.names=FALSE, quote=FALSE)
+FC_comp <- read.table("AAS_Thap_NoFe_LogFC_comparison.txt",sep="\t", header=TRUE)
+save(FC_comp, file="AAS_Thap_LogFC_comparison.rdata")
+save(FC_comp, file="AAS_Thap_NoFe_LogFC_comparison.rdata")
+load("AAS_Thap_NoFe_LogFC_comparison.rdata")
+```
+
+Select GCN2 specific genes from DE and then rank based on fold induction in AAS vs Thap or NoFe
+"Tnfaip2" did not make the DE because it's logFC in Thap is 0.68
+
+Select PERK specific genes from DE and then rank based on fold induction in AAS vs Thap or NoFe
+```{r}
+GCN2_A <- FC_comp %>% dfilter(Gene %in% G1i2) %>% dfilter(AAS_logFC > 1 & AASvsThap > 2 & Thap_logFC <= 0.7) %>% arrange(desc(AASvsThap))
+GCN2_B <- FC_comp %>% dfilter(Gene %in% G1i2) %>% dfilter((AAS_logFC > 1 & AASsubThap > 2 & Thap_logFC <= 0.7)) %>% arrange(desc(AASvsThap))
+GCN2_comb <- rbind(GCN2_A,GCN2_B) %>% data.frame %>% unique
+GCN2_comb$Gene %>% write.table(file="d:/FLX/GCN2/ISR_data/RNA_Seq/GCN2_markers20.txt",sep="\t",row.names=FALSE, quote=FALSE)
+#GCN2_markers <- FC_comp %>% dfilter(Gene %in% G1i2) %>% dfilter(AAS_logFC > 1, AASvsThap > 1) %>% arrange(desc(AASvsThap)) %>% dselect(Gene)
+GCN2_comb %>% write.table(file="d:/FLX/GCN2/ISR_data/GCN2_markers.txt",sep="\t",row.names=FALSE, quote=FALSE)
+GCN2_comb %>% write.table(file="/Volumes/Picard/FLX/GCN2/ISR_data/GCN2_markers.txt",sep="\t",row.names=FALSE, quote=FALSE)
+GCN2_markers <- read.table("GCN2_markers.txt",sep="\t",header=TRUE) 
+
+
+PERK_A <- FC_comp %>% dfilter(Gene %in% P1i2) %>% dfilter(Thap_logFC > 1 & AASvsThap < 0.5 & AAS_logFC <= 0.3) %>% arrange(AASsubThap) #22
+PERK_B <- FC_comp %>% dfilter(Gene %in% P1i2) %>% dfilter((Thap_logFC > 1 & AASsubThap < -1 & AAS_logFC <= 0.3)) %>% arrange(AASsubThap) #16
+PERK_comb <- rbind(PERK_A,PERK_B) %>% data.frame %>% unique #33
+
+# Thap non-induced
+FC_comp %>% dfilter(Gene %in% G1i2) %>% dfilter(AAS_logFC > 1, Thap_logFC < 0.3)
+
+FC_comp %>% dfilter(Gene %in% P1i2) %>% dfilter(AAS_logFC < 1, AASvsThap < 0.5) %>% dfilter() %>% arrange(AASvsThap)
+
+
+HRI_marker <- FC_comp %>% dfilter(Gene %in% HRI_spec) %>% dfilter(NoFe_logFC > 1, NoFe_logFC > AAS_logFC) %>% dfilter() %>% arrange(AASvsThap)
+```
+
+Plot logFC data for candidate markers
+
+```{r fig.height=4, fig.width=10}
+FC_comp %>% dfilter(Gene %in% GCN2_comb$Gene) %>% dselect(1:5) %>% gather(Variable, Value, -Gene) %>% separate(Variable, c("Treatment","value_type"), sep="[_.]", remove=TRUE) %>% pivot_wider(names_from=value_type, values_from=Value) %>% mutate(Treatment=factor(Treatment,levels=c("AAS","Thap","NoFe")), Gene=factor(Gene,levels=GCN2_comb$Gene)) %>% dfilter(Treatment != "NoFe") %>% mutate(FC=2^logFC) %>% ggplot(aes(x=Treatment, y=logFC, colour=Treatment)) + geom_point() + geom_errorbar(aes(ymin=logFC-lfcSE, ymax=logFC+lfcSE), position="dodge",width = 0.2) + expand_limits(y=-0.1) + facet_wrap(~Gene,scales="free_y", ncol=5) + geom_abline(slope=0, intersect=0) + ggsave("GCN2_markers_vs_PERK.jpg", width=12, height=6, dpi=300, plot= last_plot(), units = "in")
+
+FC_comp %>% dfilter(Gene %in% ISR_known) %>% dselect(-AASvsThap, -AASvsNoFe) %>% gather(Variable, Value, -Gene) %>% separate(Variable, c("Treatment","value_type"), sep="[_.]", remove=TRUE) %>% pivot_wider(names_from=value_type, values_from=Value) %>% mutate(Treatment=factor(Treatment,levels=c("AAS","Thap","NoFe")), Gene=factor(Gene,levels=ISR_known))  %>% mutate(FC=2^logFC) %>% ggplot(aes(x=Treatment, y=logFC, colour=Treatment)) + geom_point(size=5,pch=15) + geom_errorbar(aes(ymin=logFC-lfcSE, ymax=logFC+lfcSE), position="dodge",width = 0.2) + expand_limits(y=-0.1) + facet_wrap(~Gene,scales="free_y", ncol=5) + geom_abline(slope=0, intersect=0) + ggsave("ISR_logFC_known_markers.jpg", width=15, height=3, dpi=300, plot= last_plot(), units = "in") # %>% dfilter(Treatment != "NoFe")
+
+FC_comp %>% dfilter(Gene %in% PERK_comb$Gene) %>% dselect(1:5) %>% gather(Variable, Value, -Gene) %>% separate(Variable, c("Treatment","value_type"), sep="[_.]", remove=TRUE) %>% pivot_wider(names_from=value_type, values_from=Value) %>% mutate(Treatment=factor(Treatment,levels=c("AAS","Thap","NoFe")), Gene=factor(Gene,levels=PERK_comb$Gene))  %>% mutate(FC=2^logFC) %>% ggplot(aes(x=Treatment, y=logFC, colour=Treatment)) + geom_point(size=5,pch=15) + geom_errorbar(aes(ymin=logFC-lfcSE, ymax=logFC+lfcSE), position="dodge",width = 0.2) + expand_limits(y=-0.1) + facet_wrap(~Gene,scales="free_y", ncol=5) + geom_abline(slope=0, intersect=0) + ggsave("PERK_markers_FC.jpg", width=18, height=10, dpi=300, plot= last_plot(), units = "in") # %>% dfilter(Treatment != "NoFe")
+
+FC_comp %>% dfilter(Gene %in% HRI_marker$Gene) %>% dselect(1:7) %>% gather(Variable, Value, -Gene) %>% separate(Variable, c("Treatment","value_type"), sep="[_.]", remove=TRUE) %>% pivot_wider(names_from=value_type, values_from=Value) %>% mutate(Treatment=factor(Treatment,levels=c("AAS","Thap","NoFe")), Gene=factor(Gene,levels=HRI_marker$Gene))  %>% mutate(FC=2^logFC) %>% ggplot(aes(x=Treatment, y=logFC, colour=Treatment)) + geom_point(size=5,pch=15) + geom_errorbar(aes(ymin=logFC-lfcSE, ymax=logFC+lfcSE), position="dodge",width = 0.2) + expand_limits(y=-0.1) + facet_wrap(~Gene,scales="free_y", ncol=4) + geom_abline(slope=0, intersect=0) + ggsave("HRI_markers_FC.jpg", width=9, height=3, dpi=300, plot= last_plot(), units = "in") 
+
+GPH_norm %>% dfilter(Gene %in% PERK_comb$Gene) %>% gather(Condition, mRNA_signal,-Gene) %>% separate(Condition, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36*22),rep("Erythrocyte",12*22))) %>% mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte")), Gene=factor(Gene,levels=PERK_comb$Gene)) %>% ggplot(aes(x=interaction(Treatment,Genotype,Cell),y=mRNA_signal,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scale="free_y", ncol=5) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("PERK_marker_mRNA_norm.jpg", width=12, height=3, dpi=300, plot= last_plot(), units = "in")
+
+GPH_norm %>% dfilter(Gene %in% GCN2_comb$Gene) %>% gather(Condition, mRNA_signal,-Gene) %>% separate(Condition, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36*20),rep("Erythrocyte",12*20))) %>% mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte")), Gene=factor(Gene,levels=GCN2_comb$Gene)) %>% ggplot(aes(x=interaction(Treatment,Genotype,Cell),y=mRNA_signal,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scale="free_y", ncol=5) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("GCN2_markers_norm.jpg", width=12, height=6, dpi=300, plot= last_plot(), units = "in")
+
+GPH_norm %>% dfilter(Gene %in% HRI_marker$Gene) %>% gather(Condition, mRNA_signal,-Gene) %>% separate(Condition, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36*4),rep("Erythrocyte",12*4))) %>% mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte")), Gene=factor(Gene,levels=HRI_marker$Gene)) %>% ggplot(aes(x=interaction(Treatment,Genotype,Cell),y=mRNA_signal,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scale="free_y", ncol=5) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("HRI_markers_norm.jpg", width=12, height=5, dpi=300, plot= last_plot(), units = "in")
+
+
+
+GPH_ctrl <- GPH_norm  %>% dfilter(Gene %in% c("Eif2ak4","Eif2ak3","Eif2ak1")) %>% dselect(Gene, contains("WT_NT."),contains("WT_DMSO."),contains("WT_Fe_")) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=TRUE) %>% group_by(Genotype,Treatment) %>% mutate_if(is.numeric,mean) %>% unite(Sample,c(Genotype,Treatment,Rep),sep="_") %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+GPH_induced <- GPH_norm %>% dfilter(Gene %in% c("Eif2ak4","Eif2ak3","Eif2ak1")) %>% dselect(Gene, contains("WT_AAS."),contains("WT_Thap."),contains("WT_NoFe_")) 
+GPH_logfc = GPH_induced/GPH_ctrl
+GPH_norm %>% dselect(starts_with("G"))
+```
+
+Plot Literature ISR Markers
+
+
+```{r fig.height=6, fig.width=12}
+Lit_ISR <- c("Slc7a11","Soat2","Arl14ep","Pycr1","P4hb","Hspa5","Slc3a2","Hspa13") #"Ifit1","Isg15","Usp18",
+GPH_norm %>% dfilter(Gene %in% Lit_ISR) %>% gather(Condition, mRNA_signal,-Gene) %>% separate(Condition, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36*8),rep("Erythrocyte",12*8))) %>% mutate(Gene= factor(Gene,levels=Lit_ISR), Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype,Cell),y=mRNA_signal,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scale="free_y", ncol=4) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("Literature_ISR_markers.jpg", width=12, height=6, dpi=300, plot= last_plot(), units = "in")
+
+ISR_known <- c("Ddit3","Trib3","Ppp1r15a","Asns","Atf4")
+GPH_norm %>% dfilter(Gene %in% ISR_known) %>% gather(Condition, mRNA_signal,-Gene) %>% separate(Condition, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36*5),rep("Erythrocyte",12*5))) %>% mutate(Gene= factor(Gene,levels=ISR_known), Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype,Cell),y=mRNA_signal,colour=Genotype)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scale="free_y", ncol=3) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("Known_ISR_markers.jpg", width=12, height=7, dpi=300, plot= last_plot(), units = "in")
+
+FC_comp %>% dfilter(Gene %in% Lit_ISR) %>% dselect(-AASvsThap, -AASvsNoFe) %>% gather(Variable, Value, -Gene) %>% separate(Variable, c("Treatment","value_type"), sep="[_.]", remove=TRUE) %>% pivot_wider(names_from=value_type, values_from=Value) %>% mutate(Treatment=factor(Treatment,levels=c("AAS","Thap","NoFe")), Gene=factor(Gene,levels=Lit_ISR))  %>% mutate(FC=2^logFC) %>% ggplot(aes(x=Treatment, y=logFC, colour=Treatment)) + geom_point(size=5, pch=15) + geom_errorbar(aes(ymin=logFC-lfcSE, ymax=logFC+lfcSE), position="dodge",width = 0.2) + expand_limits(y=-0.1) + facet_wrap(~Gene,scales="free_y", ncol=4) + geom_abline(slope=0, intersect=0) + ggsave("Lit_ISR_markers_logFC.jpg", width=12, height=7, dpi=300, plot= last_plot(), units = "in")
+```
+
+
+
+Volcano plots
+
+Volcano Plot
+
+https://www.biostars.org/p/282295/
+
+```{r fig.height=10, fig.width=8}
+#install.packages("devtools")
+#devtools::install_github("hadley/devtools")
+#devtools::install_github('kevinblighe/EnhancedVolcano')
+library(EnhancedVolcano)
+
+pdf("Volcanoplot_AASvsNT.pdf",width = 8, height = 10)
+EnhancedVolcano(results(ddsTxi_WT_NT),
+                 lab = rownames(results(ddsTxi_WT_NT)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 xlim = c(-8, 8),
+                 #ylim = c(-0.1, 6),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'WT AAS versus WT NT',
+                 pCutoff = 0.01,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+
+pdf("Volcanoplot_ThapvsDMSO.pdf",width = 8, height = 10)
+EnhancedVolcano(results(ddsTxi_WT_DMSO),
+                 lab = rownames(results(ddsTxi_WT_DMSO)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 xlim = c(-8, 8),
+                 #ylim = c(-0.1, 6),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'WT Thap versus WT DMSO',
+                 pCutoff = 0.01,
+                 FCcutoff = 0.5,
+                 col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+
+
+pdf("Volcanoplot_NoFevsCtrl.pdf",width = 8, height = 10)
+EnhancedVolcano(results(ddsTxi_hri),
+                 lab = rownames(results(ddsTxi_hri)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 xlim = c(-8, 8),
+                 #ylim = c(-0.1, 6),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'WT NoFe versus WT Ctrl',
+                 pCutoff = 0.01,
+                 FCcutoff = 0.5,
+                 col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+
+
+pdf("Volcanoplot_Dex_padj0.01.pdf",width = 8, height = 10)
+EnhancedVolcano(res_dex,
+                 lab = rownames(res_il13),
+                 x = 'log2FoldChange',
+                 y = 'pvalue',
+                 xlim = c(-7, 7),
+                 ylim = c(-0.1, 22.5),
+                ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'Dex versus vehicle',
+                 pCutoff = 0.01,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+```
+
+MA plot
+Use DESeq2::plotMA or it's calling the wrong function from Limma instead!
+
+lfcStrink function removes noise associated with log2 fold changes from low abundance genes
+```{r}
+resLFC <- lfcShrink(ddsTxi, coef="condition_RPT193_vs_Vehicle", type="apeglm")
+DESeq2::plotMA(res)
+DESeq2::plotMA(resLFC, ylim=c(-3,2))
+DESeq2::plotMA(resLFC, ylim=c(-1,1))
+plotMA # this shows which package the function is being called from 
+DESeq2::plotMA(resLFC, ylim=c(-3,2))
+idx <- identify(res$baseMean, res$log2FoldChange)
+rownames(res)[idx]
+```
+
+Check the GCN2 score on the training data
+
+THe signature is PERK-dependent: split markers into PERK-dep and PERK-ind
+
+```{r}
+GPH_zscore <- GPH_norm %>% mutate_if(is.numeric,mx_zscore2)
+save(GPH_zscore, file="GPH_zscore.rdata")
+load("GPH_zscore.rdata")
+boxplot(GPH_zscore[2:ncol(GPH_zscore)])                                                                                                                                               
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+
+Common_RAPT <- c("Adm2","Arl14ep","Chac1","Cth","Ddit3","Nupr1","Shmt2","Slc1a4","Soat2","Trib3")
+Common <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+
+GPH_zscore %>% dfilter(Gene %in% aas_sig_m) %>% summarize_if(is.numeric,sum_mx) %>% gather(Sample,AAS_Score) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36),rep("Erythrocyte",12))) %>%  mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype, Cell), AAS_Score,colour=Genotype)) + geom_boxplot() + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("AAS_scores.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+GPH_zscore %>% dfilter(Gene %in% Common_RAPT) %>% summarize_if(is.numeric,sum_mx) %>% gather(Sample,Common_ISR_RAPT_Score) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36),rep("Erythrocyte",12))) %>%  mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype, Cell), Common_ISR_RAPT_Score,colour=Genotype)) + geom_boxplot() + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("Common_RAPT_scores.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+GPH_zscore %>% dfilter(Gene %in% Common) %>% summarize_if(is.numeric,sum_mx) %>% gather(Sample,Common_ISR) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36),rep("Erythrocyte",12))) %>%  mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype, Cell), Common_ISR,colour=Genotype)) + geom_boxplot() + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("Common_ISR_scores.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+GPH_zscore %>% dfilter(Gene %in% GCN2_comb$Gene) %>% summarize_if(is.numeric,sum_mx) %>% gather(Sample,GCN2_Score) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36),rep("Erythrocyte",12))) %>%  mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype, Cell), GCN2_Score,colour=Genotype)) + geom_boxplot() + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("GCN2_signature_scores20.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+GPH_zscore %>% dfilter(Gene %in% GCN2_PERKind) %>% summarize_if(is.numeric,sum_mx) %>% gather(Sample,GCN2_Score) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36),rep("Erythrocyte",12))) %>%  mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype, Cell), GCN2_Score,colour=Genotype)) + geom_boxplot() + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("GCN2_signature_scores_PERKind.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+GCN2_markers[,1] %>% write.table(file="GCN2_markers16.txt",sep=",", row.names=FALSE, quote=FALSE)
+GCN2_PERKind <- c("Angptl4","Tcim","Rbpj","Etv5","Tmem171")
+GCN2_PERKind %>% write.table(file="GCN2_markers_PERKind_4.txt",sep=",",row.names=FALSE, quote=FALSE)
+
+GPH_zscore %>% dfilter(Gene %in% PERK_comb$Gene) %>% summarize_if(is.numeric,sum_mx) %>% gather(Sample,PERK_Score) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36),rep("Erythrocyte",12))) %>%  mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype, Cell), PERK_Score,colour=Genotype)) + geom_boxplot() + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("PERK_signature_scores22.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+GPH_zscore %>% dfilter(Gene %in% PERK_GCN2ind) %>% summarize_if(is.numeric,sum_mx) %>% gather(Sample,PERK_Score) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36),rep("Erythrocyte",12))) %>%  mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype, Cell), PERK_Score,colour=Genotype)) + geom_boxplot() + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("PERK_signature_scores7.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+GPH_zscore %>% dfilter(Gene %in% HRI_marker$Gene) %>% summarize_if(is.numeric,sum_mx) %>% gather(Sample,PERK_Score) %>% separate(Sample, c("Genotype","Treatment","Rep"), sep="[_.]", remove=FALSE) %>% mutate(Cell=c(rep("MEF",36),rep("Erythrocyte",12))) %>%  mutate(Treatment= factor(Treatment, levels=c("NT","DMSO","AAS","Thap","Fe","NoFe")), Genotype = factor(Genotype, levels=c("WT","G","P","HRI")),Cell=factor(Cell,levels=c("MEF","Erythrocyte"))) %>% ggplot(aes(x=interaction(Treatment,Genotype, Cell), PERK_Score,colour=Genotype)) + geom_boxplot() + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("HRI_signature_scores4.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+PERK_GCN2ind <- c("Wnt1","Gem","Gm11331","Dbhos","Glis1","Pkdcc","Mmp19")
+PERK_GCN2ind %>% write.table(file="PERK_signature7.txt",sep="\t",quote=FALSE,row.names = FALSE)
+PERK_comb$Gene %>% write.table(file="PERK_signature22.txt",sep="\t",quote=FALSE,row.names = FALSE)
+```
+
+################
+
+Testing the GCN2 signature against other datasets
+ 
+So far it's been a disaster
+
+################
+
+Load test data from Do et al. 
+Mouse Genome 430_2.0 Arrays
+```{r}
+load("/Volumes/Picard/FLX/Reference_tables/Microarray_probe_gene_translations/Affymouse430_2_HUGO.rdata")
+do <- read.table("/Volumes/Picard/FLX/GCN2/ISR_data/Do_PERK_GCN2/GSE11685_series_matrix_data.txt", header=TRUE, sep="\t") #annotLookup_m
+annotLookup_m
+do <- left_join(do, annotLookup_m, by="ID_REF") %>% dselect(Gene, everything()) 
+do %<>% dselect(Gene, GSM289438:GSM289445,GSM296794:GSM296801) 
+colnames(do) <- c("Gene",paste(rep(c("WT_Met","WT_NoMet","GCN2_Met","GCN2_NoMet","WT_Ctrl","WT_tBuHQ", "PERK_Ctrl","PERK_tBuHQ"), each=2),c(1,2),sep="_"))
+save(do,file="Do_et_al_matrix.rdata")
+boxplot(do[2:ncol(do)], log="y")
+do_gene <- do %>% group_by(Gene) %>% mutate_if(is.numeric,sum) %>% ungroup %>% unique
+do_norm <- normalizeBetweenArrays(do_gene[2:ncol(do_gene)])
+do_norm %<>% data.frame %>% mutate(Gene=do_gene$Gene) %>% dselect(Gene, everything())
+
+do_zscore <- do_norm %>% mutate_if(is.numeric, mx_zscore2)
+boxplot(do_zscore[2:ncol(do_zscore)])
+```
+
+Plot GCN2 signature for Test data
+
+The samples from this dataset were not properly starved at all, there is no significant upregulation of ANY ISR kinase marker
+
+```{r}
+do_zscore %>% dfilter(Gene %in% GCN2_markers[,1]) %>% summarize_if(is.numeric,sum) %>% gather(Sample,GCN2_Score) %>% mutate(Sample= factor(Sample, levels=sample_order)) %>% ggplot(aes(Sample, GCN2_Score)) + geom_point(pch=15) + theme(axis.text.x=element_text(angle=90, size=14)) 
+sample_order <- colnames(do_gene)[2:ncol(do_gene)]
+do_gene %>% dfilter(Gene %in% isr) %>% gather(Sample,mRNA_norm, -Gene) %>% mutate(Sample= factor(Sample, levels=sample_order)) %>% ggplot(aes(Sample, mRNA_norm)) + geom_point(pch=15) +facet_wrap(~Gene,scales="free_y") + theme(axis.text.x=element_text(angle=90, size=14)) 
+```
+
+Load test data from Mao et al. PMID: 29429926 GSE102659
+This data isn't even transcript counts; it's a Genome walker type depth of coverage bed file for each transcript region, with no information on the size of the bins
+```{r}
+files <- list.files("/Volumes/Picard/FLX/GCN2/ISR_data/Mao_AAS/", pattern="_RNA_")
+data_files <- lapply(files, function(i){read.table(paste0("/Volumes/Picard/FLX/GCN2/ISR_data/Mao_AAS/",i),header=TRUE)})
+read.table("/Volumes/Picard/FLX/GCN2/ISR_data/Mao_AAS/GSM2742546_coverage_RNA_seq_TG_MEF_AA_suff.txt", sep="\t")
+```
+
+Load data from Kevin Struhl lab, Gameiro et al. 2018 Cell Reports 
+GSE114794
+rna values in RPKM
+```{r}
+FourHour <- read.table(file="/Volumes/Picard/FLX/GCN2/Struhl_Starvation/GSE114794_RPKM-Table_04hrs.txt", header=TRUE)
+FourHour %<>% dselect(genesym, contains(".rna."))
+dim(FourHour)
+ThirtyMin <- read.table(file="/Volumes/Picard/FLX/GCN2/Struhl_Starvation/GSE114794_RPKM-Table_30min.txt", header=TRUE)
+ThirtyMin %<>% dselect(genesym, contains(".rna."))
+colnames(ThirtyMin) <- c("genesym","EtOH_Ctrl_30min.rna.b","EtOH_NoQ_30min.rna.b","TAM_Ctrl_30min.rna.b","TAM_NoQ_30min.rna.b")
+
+struhl <- full_join(ThirtyMin,FourHour, by="genesym")
+struhl_meta <- colnames(struhl[2:length(colnames(struhl))]) %>% data.frame %>% rename("Condition"=.data$.) #this throws an error, but does change the column name, don't know why
+struhl_meta %<>% data.frame %>% separate(Condition,c("Cell_state","Treatment","Time",NA,"replicate"),sep= "[_.]", remove=FALSE) %>% separate(replicate,c(NA,"replicate"),sep=1,remove=TRUE)
+struhl_meta$replicate[struhl_meta$replicate == ""] <- 1 # fill in cells without a replicate number
+
+boxplot(struhl[2:28])
+struhl_norm <- normalizeBetweenArrays(struhl[2:28])
+struhl_norm %<>% data.frame %>% mutate(Gene = struhl$genesym) %>% dselect(Gene, everything())
+dim(struhl_norm)
+boxplot(struhl_norm[2:28], log="y")
+```
+Plot ISR markers to check data quality
+
+Translate Mouse markers to Human names
+```{r fig.height=6, fig.width=16}
+isr <- c("Ddit3","Trib3","Ppp1r15a","Asns","Atf4")
+isr_h <- c("DDIT3","TRIB3","PPP1R15A","ASNS","ATF4")
+GCN2_sig_m <-c( "Cep85l","Txnrd1","Angptl4","Antxr2","Tcim", "Ptgs1", "Bdkrb2", "Prune2","Rbpj","Wdr45","Znrf2","Cnnm4","Grem1","Tnfaip2","Gpr137b-ps", "Car8", "Wipi2","Tmem171","Ndst3","Foxl1")
+save(GCN2_sig_m, file="/Volumes/Picard/FLX/Reference_tables/GCN2_sig_m.rdata")
+GCN2_5marker_m <- c("Rbpj","Wdr45","Angptl4","Tmem171","Tcim")
+save(GCN2_5marker_m, file="/Volumes/Picard/FLX/Reference_tables/GCN2_sig_5marker_m.rdata")
+load("/Volumes/Picard/FLX/Silpa_data/mouseAnnot.rdata")
+
+PERK_m <- c("Mrgprf","Lzts1","Wnt1","Ptpn5","Gem","Slc2a6","Snx32","Gm11331","Prob1","Ccl7","Dbhos","Mir99ahg","Trpm6","N4bp2os","Glis1","Mmp19","Lrrc73","Cd74","Pkdcc","Osr2")
+PERK_h <- mouseAnnot %>% dfilter(GENE.SYMBOL %in% PERK_m) %>% pull(HumanName)
+save(PERK_h,file="D:/FLX/Reference_tables/PERK_human_signature.rdata")
+GCN2_human <- mouseAnnot %>% dfilter(GENE.SYMBOL %in% GCN2) %>% pull(HumanName)
+GCN2_5marker_human <- mouseAnnot %>% dfilter(GENE.SYMBOL %in% GCN2_5marker) %>% pull(HumanName)
+mouseAnnot %>% mouseAnnot$HumanName[grep("^TCI", mouseAnnot$HumanName)] # this is really not in the dataset
+
+HRI_mouse <- read.table("/Volumes/Picard/FLX/GCN2/ISR_data/RNA_seq/HRI_markers.txt") %>% data.frame %>% pull(V1) %>% .[2:6]
+HRI_h <- mouseAnnot %>% dfilter(GENE.SYMBOL %in% HRI_mouse) %>% pull(HumanName)
+
+struhl_norm %>% dfilter(Gene %in% GCN2_5marker_human) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Condition") %>% gather(Gene,mRNA_RPKM,-Condition) %>% left_join(struhl_meta, by="Condition") %>% mutate(Treatment= factor(Treatment, levels=c("Ctrl","NoG","NoCys","NoBCAA","NoQ","Torin"))) %>% ggplot(aes(x= interaction(Treatment,Time), y=mRNA_RPKM, colour=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Gene,scale="free_y", ncol=5) + theme(axis.text.x=element_text(angle=90, size=14))  ggsave("ISR_markers_Struhl.jpg", width=16, height=6, dpi=300, plot= last_plot(), units = "in")
+```
+Plot individual GCN2 and PERK markers
+
+Struhl only has 6000 genes reported, and reporting 8 out of the 20 GCN2 markers 
+There was a >10 RPKM cutoff for genes, does not say how many million reads were sequenced per sample
+```{r fig.height=8, fig.width=16}
+struhl_norm %>% dfilter(Gene %in% GCN2_h_sig) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Condition") %>% gather(Gene,mRNA_RPKM,-Condition) %>% left_join(struhl_meta, by="Condition") %>% mutate(Treatment= factor(Treatment, levels=c("Ctrl","NoG","NoCys","NoBCAA","NoQ","Torin"))) %>% ggplot(aes(x= interaction(Cell_state,Treatment,Time), y=mRNA_RPKM, colour=Cell_state)) + geom_boxplot() + geom_point() + facet_wrap(~Gene,scale="free_y", ncol=4) + theme(axis.text.x=element_text(angle=90, size=14))
+
+#EtOH only 
+struhl_norm %>% dfilter(Gene %in% GCN2_h_sig) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Condition") %>% gather(Gene,mRNA_RPKM,-Condition) %>% left_join(struhl_meta, by="Condition") %>% mutate(Treatment= factor(Treatment, levels=c("Ctrl","NoG","NoCys","NoBCAA","NoQ","Torin"))) %>% dfilter(Cell_state =="EtOH")%>% ggplot(aes(x= interaction(Cell_state,Treatment,Time), y=mRNA_RPKM, colour=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Gene,scale="free_y", ncol=4) + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("GCN2_markers_Struhl.jpg", width=16, height=8, dpi=300, plot= last_plot(), units = "in")
+
+#TAM only
+struhl_norm %>% dfilter(Gene %in% GCN2_h_sig) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Condition") %>% gather(Gene,mRNA_RPKM,-Condition) %>% left_join(struhl_meta, by="Condition") %>% mutate(Treatment= factor(Treatment, levels=c("Ctrl","NoG","NoCys","NoBCAA","NoQ","Torin"))) %>% dfilter(Cell_state =="TAM")%>% ggplot(aes(x= interaction(Cell_state,Treatment,Time), y=mRNA_RPKM, colour=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Gene,scale="free_y", ncol=4) + theme(axis.text.x=element_text(angle=90, size=14))
+
+```
+
+Convert to z-score for signature score calculations
+```{r fig.height=5, fig.width=6}
+struhl_zscore <- struhl_norm %>% mutate_if(is.numeric,mx_zscore2)
+
+boxplot(struhl_zscore[2:28])
+
+GCN2_score <- struhl_zscore %>% dfilter(Gene %in% GCN2_h_sig) %>% summarise_if(is.numeric, sum_mx)
+rownames(GCN2_score) <- "GCN2_sig_score"
+GCN2_score %>% t %>% data.frame %>% tibble::rownames_to_column("Condition") %>% left_join(struhl_meta, by="Condition") %>% mutate(Treatment= factor(Treatment, levels=c("Ctrl","NoG","NoCys","NoBCAA","NoQ","Torin"))) %>% dfilter(Cell_state =="EtOH") %>% ggplot(aes(x= interaction(Cell_state,Treatment,Time), y=GCN2_sig_score, colour=Treatment)) + geom_boxplot() + geom_point() + theme(axis.text.x=element_text(angle=90, size=14))  + ggsave("GCN2_score_Struhl.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+GCN2_5marker_score <- struhl_zscore %>% dfilter(Gene %in% GCN2_5marker_human) %>% summarise_if(is.numeric, sum_mx)
+rownames(GCN2_5marker_score) <- "GCN2_sig_score"
+GCN2_5marker_score %>% t %>% data.frame %>% tibble::rownames_to_column("Condition") %>% left_join(struhl_meta, by="Condition") %>% mutate(Treatment= factor(Treatment, levels=c("Ctrl","NoG","NoCys","NoBCAA","NoQ","Torin"))) %>% dfilter(Cell_state =="EtOH") %>% ggplot(aes(x= interaction(Cell_state,Treatment,Time), y=GCN2_sig_score, colour=Treatment)) + geom_boxplot() + geom_point() + theme(axis.text.x=element_text(angle=90, size=14))  + ggsave("GCN2_score_Struhl.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+ISR_score <- struhl_zscore %>% dfilter(Gene %in% isr_h) %>% summarise_if(is.numeric, sum_mx)
+rownames(ISR_score) <- "ISR_sig_score"
+ISR_score %>% t %>% data.frame%>% tibble::rownames_to_column("Condition") %>% left_join(struhl_meta, by="Condition") %>% mutate(Treatment= factor(Treatment, levels=c("Ctrl","NoG","NoCys","NoBCAA","NoQ","Torin"))) %>% dfilter(Cell_state =="EtOH") %>% ggplot(aes(x= interaction(Cell_state,Treatment,Time), y=ISR_sig_score, colour=Treatment)) + geom_boxplot() + geom_point() + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("ISR_score_Struhl.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+# None of the markers are in this dataset
+PERK_score <- struhl_zscore %>% dfilter(Gene %in% c(PERK_h,"CCL7","ATF4")) %>% summarise_if(is.numeric, sum_mx)
+rownames(PERK_score) <- "PERK_sig_score"
+PERK_score %>% t %>% data.frame%>% tibble::rownames_to_column("Condition") %>% left_join(struhl_meta, by="Condition") %>% mutate(Treatment= factor(Treatment, levels=c("Ctrl","NoG","NoCys","NoBCAA","NoQ","Torin"))) %>% dfilter(Cell_state =="EtOH") %>% ggplot(aes(x= interaction(Cell_state,Treatment,Time), y=PERK_sig_score, colour=Treatment)) + geom_boxplot() + geom_point() + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("PERK_score_Struhl.jpg", width=6, height=5, dpi=300, plot= last_plot(), units = "in")
+
+```
+

@@ -1,0 +1,118 @@
+---
+title: "Mouse_AD_Nanostring"
+author: "Mengshu"
+date: "5/6/2019"
+output: html_document
+---
+
+Analyze Aparna's Mouse AD Nanostring dataset exported from nSolver software
+Experimental setup: with no biological replicates
+	Treatment	Challenge
+1	Vehicle	  ETOH
+2	Vehicle	  FITC
+3	DEX	      ETOH
+4	DEX	      FITC
+5	FLX193	  ETOH
+6	FLX193	  FITC
+
+The challenge (ETOH mock, or FITC) was performed on the left and right ears of each mouse
+Sample input was normalized by total ng of RNA across samples: due to sample limitations, 50ng was pipetted in as 1uL for each sample qc'd to 50ng/uL (this reduced precision of input amount)
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+AD samples
+```{r}
+raw <- read.table("MouseADraw.txt", sep="\t", header=TRUE)
+colnames(raw) <- c("Gene","Accession","Class","Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","FLX193_ETOH","FLX193_FITC")
+AD <- raw %>% select(-Accession,-Class) %>% gather(key= Sample, value= "Count", -Gene) # Both they Key and Value are newly created for the gathered data. Specity the column that doesn't change in the 3rd term with -
+AD$Sample <- as.factor(AD$Sample)
+AD %<>% dselect(Sample, Gene, Count)
+```
+
+All samples
+```{r}
+all <- read.table("All_sample_Nanostring.txt", sep="\t",skip=1)
+colnames(all) <- c("Gene","Accession","Class","Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","FLX193_ETOH","FLX193_FITC","CT26-Tumor","CT26-OVA","CT26-LMP1_Tumor1","CT26-LMP1_Tumor2","3-3_Ctrl","6-1_Treatment")
+All_R <- all %>% select(-Accession,-Class) %>% gather(key= Sample, value= "Count", -Gene) # Both they Key and Value are newly created for the gathered data. Specity the column that doesn't change in the 3rd term with -
+All_R$Sample <- as.factor(All_R$Sample)
+All_R %<>% dselect(Sample, Gene, Count)
+```
+
+Plot Housekeeping genes
+```{r fig.height=6, fig.width=10}
+housekeeping= c("Cltc","Gapdh","Gusb","Hprt","Pgk1","Tubb5")
+
+ggplot(AD %>% dfilter(Gene == "Gapdh"| Gene == "Cltc" | Gene == "Gusb" | Gene == "Hprt" | Gene == "Pgk1" | Gene == "Tubb5"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) +
+ggsave("Nanostring_AD_HK.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+
+ggplot(All_R %>% dfilter(Gene == "Gapdh"| Gene == "Cltc" | Gene == "Gusb" | Gene == "Hprt" | Gene == "Pgk1" | Gene == "Tubb5"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) +
+ggsave("Nanostring_All_HK.jpg", width= 11, height=6, dpi=600, plot= last_plot(), units = "in")
+
+
+AD %>% dfilter(Gene == c("Cltc","Gapdh","Gusb","Hprt","Pgk1","Tubb5"))
+AD %>% dfilter(Gene == "Gapdh"| Gene == "Cltc" | Gene == "Gusb" | Gene == "Hprt" | Gene == "Pgk1" | Gene == "Tubb5")
+
+```
+Plot genes of interest from raw data
+CCL22
+FOXP3
+GATA3
+IFNB1
+IFNG
+IL13
+IL17a
+IL17b
+IL17F
+IL22
+IL33
+IL4
+IL5
+Pdcd1
+Tgfb1
+Tgfb2
+Tgfb3
+Tslp
+
+"CCL22","IFNB1","IFNG","IL13","IL17a","IL22","IL4","IL5","Tgfb1","Tgfb2","Tgfb3","Tslp"
+NOT in the dataset: "FOXP3" "GATA3" "IL17b" "IL17F" "IL33" "Pdcd1"
+DEX_ETOH     DEX_FITC  FLX193_ETOH  FLX193_FITC Vehicle_ETOH Vehicle_FITC
+
+Too low signal
+Gene == "Ifnb1" 
+Gene == "Ifng" 
+Gene == "Il13" 
+Gene == "Il17a" 
+Gene == "Il22" 
+Gene == "Il4" 
+Gene == "Il4" 
+Gene == "Il5" 
+```{r fig.height=8, fig.width=12}
+table(AD$Sample)
+FITC <- AD %>% dfilter(Sample =="DEX_FITC" | Sample=="FLX193_FITC" | Sample=="Vehicle_FITC")
+FITC$Sample <- factor(FITC$Sample, levels=c("Vehicle_FITC","DEX_FITC","FLX193_FITC"))
+ggplot(FITC %>% dfilter(Gene == "Ccl22"| Gene == "Ifnb1" | Gene == "Ifng" | Gene == "Il13" | Gene == "Il17a" | Gene == "Il22"| Gene == "Il4" | Gene == "Il4" | Gene == "Il5" | Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Tslp"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) +
+ggsave("Nanostring_AD_All_markers.jpg", width= 11, height=6, dpi=600, plot= last_plot(), units = "in")
+
+ggplot(FITC %>% dfilter(Gene == "Ccl22"|  Gene == "Tgfb1" | Gene == "Tgfb2" | Gene == "Tgfb3" | Gene == "Tslp"), aes(x=Sample, y= Count,fill=Gene)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Gene, scales="free_y") +
+  theme(panel.grid.major = element_line(colour = "grey", size = 0.2), axis.text.x = element_text(angle = 55, hjust = 1),legend.position = "none",plot.margin = unit(c(1,1,1,5), "cm")) +
+ggsave("Nanostring_AD_All_robust.jpg", width= 11, height=6, dpi=600, plot= last_plot(), units = "in")
+```
+

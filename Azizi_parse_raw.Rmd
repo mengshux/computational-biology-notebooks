@@ -1,0 +1,134 @@
+---
+title: "Azizi_pbmc_parse"
+author: "Mengshu"
+date: "12/19/2018"
+output: html_document
+---
+
+```{r}
+library(SAVER)
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+library(data.table)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+47016 rows (these are cells), 14880 cols (these are genes)
+```{r}
+Azizi_raw2 <- read.csv("GSE114725_rna_raw.csv", header=TRUE) #2.8GB
+#Cols are: "patient"    "tissue"    "replicate"   "cluster"    "cellid"    "A1BG" etc. 
+
+Azizi_raw2 %>% dselect(tissue) %>% group_by(tissue) %>% table
+
+Azizi_tumor <- Azizi_raw2 %>% dfilter(tissue=="TUMOR") #21253
+tumor_patient <- Azizi_tumor[,"patient"]
+dim(Azizi_tumor)
+#BLOOD LYMPHNODE    NORMAL     TUMOR 
+#16056      5167      4540     21253 
+```
+
+Keep cells from all tissues, save vectors of their identities to label in Seurat later. Do not filter out any cells when creating Seurat object, so that they would match up
+
+####### The file is too large for impute to process. Separate TUMOR from other cell types
+```{r}
+cell_tissue <- Azizi_raw[,"tissue"] # this returns a vector
+cell_tissue_dplyr <- Azizi_raw %>% dselect(tissue) #this returns a data.frame
+cell_patient <- Azizi_raw[,"patient"]
+str(cell_tissue)
+str(cell_tissue_dplyr)
+```
+Concatenate ID columns to create a cell ID columns, and get rid of the individual metadata cols
+Also, save the ID col to a vector, and get rid of it before the transpose, because transpose with it causes all numbers to change into strings
+```{r}
+#Azizi_raw2 %<>% mutate(ID=paste(patient,tissue,replicate,cluster,cellid, sep='_'))
+#IDs <- Azizi_raw2[,"ID"]
+Azizi_raw %<>% mutate(ID=paste(patient,tissue,replicate,cluster,cellid, sep='_')) %>% dselect(ID,-patient,-tissue,-replicate,-cluster,-cellid,6:14880)
+IDs <- Azizi_raw %>% dselect(ID)
+Azizi_raw %<>% dselect(-ID)
+Genes <- colnames(Azizi_raw)
+
+length(unique(Genes)) #14875
+
+Azizi_tumor %<>% mutate(ID=paste(patient,tissue,replicate,cluster,cellid, sep='_')) %>% dselect(ID,-patient,-tissue,-replicate,-cluster,-cellid,6:14881)
+IDs_tumor <- Azizi_tumor %>% dselect(ID)
+IDs_t <- Azizi_tumor[,"ID"]
+Azizi_tumor %<>% dselect(-ID)
+Genes_tumor <- colnames(Azizi_tumor)
+```
+Transpose
+Then put the cell ids back as colnames. There should be 47016 cols 14876 gene rows
+```{r}
+Azizi_t <- t(Azizi_raw)
+colnames(Azizi_t) <- IDs
+str(Azizi_t)
+
+Azizi_matrix <- as.matrix(Azizi_t)
+write.csv(Azizi_matrix,"Azizi_pbmc_raw_all_tissue.csv", row.names=TRUE,col.names=TRUE)
+
+Azizi_tumor_t <- t(Azizi_tumor)
+IDs_t <- as.matrix.data.frame(IDs_tumor)
+colnames(Azizi_tumor_t) <- IDs_t
+dim(Azizi_tumor_t)
+
+write.csv(Azizi_tumor_t,"Azizi_pbmc_raw_tumor.csv", row.names=TRUE,col.names=TRUE)
+```
+#################
+Create Seurat Object
+Add metadata about tissue and patient in
+#################
+
+```{r}
+azizi <- CreateSeuratObject(Azizi_matrix)
+azizi_tumor <- CreateSeuratObject(Azizi_tumor_t)
+#Error: vector memory exhausted (limit reached?)
+```
+#################
+Check the matrix looks ok. 
+```{r}
+azizi@raw.data["RPS10",5:50]
+str(azizi@raw.data)
+
+azizi_tumor@raw.data["RPS10",5:50]
+#14875 by 47016 
+```
+#####################
+Add metadata into the @meta.data slots
+#####################
+```{r}
+azizi@meta.data$patient <- cell_patient
+azizi@meta.data$tissue <- cell_tissue
+
+azizi_tumor@meta.data$patient <- tumor_patient
+
+```
+###################
+Save Seurat Object
+####################
+```{r}
+saveRDS(azizi,"Azizi_pbmc_Seurat_meta.rds")
+saveRDS(azizi,"Azizi_pbmc_tumor_Seurat_meta.rds")
+```
+
+
+###############
+Code for processing for SAVER only
+###############
+```{r}
+
+Azizi_raw <- read.csv("GSE114725_rna_raw.csv", header=TRUE) 
+dim(Azizi_raw)
+Azizi_raw %<>% mutate(ID=paste(patient,tissue,replicate,cluster,cellid, sep='_')) %>% select(ID,-patient,-tissue,-replicate,-cluster,-cellid,6:14880)
+IDs <- Azizi_raw %>% dselect(ID)
+Azizi_raw %<>% dselect(-ID)
+Genes <- colnames(Azizi_raw)
+Azizi_t <- t(Azizi_raw)
+colnames(Azizi_t) <- IDs
+write.csv(Azizi_matrix,"Azizi_pbmc_raw_all_tissue.csv", row.names=TRUE,col.names=TRUE)
+#I upload this file to AWS and read it back in with:
+expression_matrix <- read.table("Azizi_pbmc_raw_all_tissue.csv", header=TRUE, row.names=1, sep=",")
+expression_matrix <- as.matrix(expression_matrix)
+```
+

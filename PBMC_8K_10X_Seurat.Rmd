@@ -1,0 +1,235 @@
+---
+title: "Seurat R 10X PBMC 8K Aug 13"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+#Installation
+#install.package('Seurat')
+library(Seurat)
+library(dplyr)
+#??Seurat
+```
+```{r}
+#LOAD RAW DATA FILE
+pbmc_8k <- Read10X_h5("pbmc8k_raw_gene_bc_matrices_h5.h5")
+#Check size as dense or sparse dataset
+object.size(x=as.matrix(x=pbmc_8k)) # convert to standard dense matrix: vector memory exhausted
+object.size(x=pbmc_8k) #in the original sparse format: 341899568 bytes (341MB)
+#?Read10X_h5
+#Seurat Data versions: raw.data, data, and scale.data
+
+#raw.data: untouched matrix file
+
+#data: filtered, normalized and log2 transformed. Positive or 0 values only. The input for most visualization, differential analysis and stats functions
+
+#scale.data: Each cell:gene value is expressed relative to gene for all other cells, and data is 0-centered. Input for dimension reduction and clustering
+
+
+```
+
+```{r}
+#FILTER DATA: keep genes expression in at least 3 cells: cuts noise from non-expressed genes
+# keep cells expressing at least 200 genes: excludes non-cell GEMs
+#populate the raw.data slot, this data is untouched, and straight away, it is filtered here
+pbmc <- CreateSeuratObject(raw.data=pbmc_8k, min.cells =3, min.genes=200, project ="10X_PBMC_8K")
+```
+
+```{r}
+#PRE-PROCESSING 
+# Automatic processes: 1. Number of genes expressed:nGene 2. Number of UMIs: nUMI 
+
+#Calculate percent.mito, which is a metric that indicates whether a cell has an apoptotic signature
+
+#Get genes that start with MT from the data matrix
+mito.genes <- grep(pattern="^MT-", x=rownames(x=pbmc@data), value=TRUE)
+#sum up Matrix rows that are mito, divided by sum of all matrix rows
+percent.mito <- Matrix::colSums(pbmc@raw.data[mito.genes,])/Matrix::colSums(pbmc@raw.data)
+summary(percent.mito)
+#Add percent.mito data to metadata
+
+```{r}
+pbmc <-AddMetaData(object=pbmc, metadata= percent.mito, col.name = "percent.mito")
+#Custom Seurat plot
+VlnPlot(object=pbmc, features.plot = c("nGene","nUMI","percent.mito"), nCol=3, point.size.use = 0.1)
+??VlnPlot
+#There are cells with high percent.mito content, and cells with low nUMI which should be filtered out
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+```{r}
+#Plot the nUMI vs. percent.mito GenePlot doesn't just plot genes, but any metadata as well
+par(mfrow =c(1,3)) # This specifies two plots in one row and 2 cols
+GenePlot(object=pbmc, gene1="nUMI", gene2="percent.mito")
+GenePlot(object=pbmc, gene1="nUMI", gene2="nGene")
+GenePlot(object=pbmc, gene1="nGene", gene2="percent.mito")
+??GenePlot
+#The number on top of the graph is Pearson correlation coefficient
+#Cells that have low nUMI and low nGene have a mitochondrial expression signature and represent apoptotic cells. Filter these out. >0.1 percent.mito and <250 nGene
+```
+```{r}
+# Filter apoptotic cells and cells with too many or too few UMIs
+#The upper bound of nGene doesn't look too aberrant, so I'm not setting an upper limit right now. Not applying the 2500 upper limit nGene in the example
+pbmc <- FilterCells(object=pbmc, subset.names = c("nGene", "percent.mito"), low.thresholds =c(250,-Inf), high.thresholds = c(Inf, 0.1))
+```
+
+```{r}
+#Re-plot after filtering
+par(mfrow =c(1,3)) # This specifies two plots in one row and 2 cols
+GenePlot(object=pbmc, gene1="nUMI", gene2="percent.mito")
+GenePlot(object=pbmc, gene1="nUMI", gene2="nGene")
+GenePlot(object=pbmc, gene1="nGene", gene2="percent.mito")
+```
+```{r}
+#NORMALIZE DATA
+pbmc <- NormalizeData(object=pbmc, normalization.method="LogNormalize", scale.factor=10000) #, display.progress=TRUE)
+```
+```{r}
+#DETECT VARIABLE GENES. PLOT AVERAGE EXPRESSION VS. DISPERSION, BINS THE GENES, THEN OUTPUTS Z-SCORE FOR DISPERSION IN EACH BIN. 
+#typically low expression correlates with high dispersion
+#Many of the most highly expressed genes are frequent flyer genes in differential expression results in cLoupe and Monocle. These may not be approapriate for DE
+#Filter out High expressors >3, and very low expressors <0.0125. Include genes with dispersion between samples (more informative) that have dispersion > 0.5
+pbmc <- FindVariableGenes(object=pbmc, mean.function = ExpMean, dispersion.function = LogVMR, x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+
+```
+
+```{r}
+#How many genes made the cut
+length(x=pbmc@var.genes)
+```
+```{r}
+#Scaling the data and removing unwanted sources of variation
+#Uninteresting variation comes from cell cycle state and percent mitochondrial content. 
+#Identify features to "regress" from the data, so that they will NOT be made PC components.
+pbmc <- ScaleData(object = pbmc, vars.to.regress = c("nUMI", "percent.mito"))
+```
+
+```{r}
+##PERFORM LINEAR DIMENSIONAL REDUCTION. here the first 5 PC are printed out, with 10 genes within each PC
+pbmc <- RunPCA(object = pbmc, pc.genes = pbmc@var.genes, do.print = TRUE, pcs.print = 1:7, 
+    genes.print = 15)
+```
+
+```{r}
+#VISUAL EXAMINATION
+PrintPCA(object = pbmc, pcs.print = 1:5, genes.print = 5, use.full = FALSE)
+```
+
+```{r}
+#Visualize top genes associated with principal components
+VizPCA(object=pbmc, pcs.use=1:2)
+```
+
+```{r}
+PCAPlot(object = pbmc, dim.1 = 2, dim.2 = 3)
+```
+
+```{r}
+#Heatmaps of each PC by top distinguiching genes
+PCHeatmap(object = pbmc, pc.use = 1, cells.use = 500, do.balanced = TRUE, label.columns = FALSE)
+```
+```{r}
+PCHeatmap(object = pbmc, pc.use = 1:12, cells.use = 500, do.balanced = TRUE, 
+    label.columns = FALSE, use.full = FALSE)
+#PC7 has Tc markers
+#PC2 has B cell markers
+```
+
+```{r}
+#It's hard to tell the quality of the PCs
+#Run resampling insired by the JackStraw procedure. Randomly permute 1% of the data, and see how much PCs are affected. Looking for PCs with enriments for low P-value genes
+pbmc <- JackStraw(object = pbmc, num.replicate = 100, display.progress = TRUE)
+
+```
+
+```{r}
+JackStrawPlot(object = pbmc, PCs = 1:20)
+#The solid line that stays above the dotted line is significant, with low P-values. 
+# According to this, there are 19 significant PCs
+```
+```{r}
+#A less stringent, more ad hoc method for looking for a PC cut-off, same as Monocle
+PCElbowPlot(object = pbmc)
+#According to this, cut off at 12 PCs
+#most strong PC are 1-4
+```
+```{r}
+#CLUSTER CELLS, USING A NEW ALGORIGHM BASED ON GRAPHICAL CLUSTERING
+# save.SNN = T saves the SNN so that the clustering algorithm can be rerun
+# using the same graph but with a different resolution value: resolution determined the granularity of the clusters, higher is more clusters
+# resolution 0.6 and 0.7 gave same results
+pbmc <- FindClusters(object = pbmc, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.7, print.output = 0, save.SNN = TRUE)
+```
+
+```{r}
+PrintFindClustersParams(object = pbmc)
+```
+
+```{r}
+#run t-sne as a visualization tool, using the same PCs
+pbmc <- RunTSNE(object = pbmc, dims.use = 1:10, do.fast = TRUE)
+#takes a few minutes
+```
+```{r}
+TSNEPlot(object = pbmc)
+ggsave("No.RNA vs Total_RNAs in 10K cells.png", dpi = 300, plot = last_plot())
+```
+```{r}
+#save object
+saveRDS(pbmc, file = "10X_PBMC_8K_clustered.rds")
+#1.28GB file 
+```
+```{r}
+#PERFORM DIFFERENTIAL ANALYSIS OF ALL CLUSTERS AGAINST THE REST OF THE CELLS
+#FindAllMarkers performs DE on all clusters to find defining markers 
+#min.pct requires the gene to be expressed in a minimum % of the two groups being compared. This cuts down on computation time and reduces noise
+#thresh.test requires a minimum fold-change in DE
+# find all markers of cluster 1
+#ident.1 is the first group, ident.2 is the second group. When ident.2 is not named, all other groups are used.
+cluster1.markers <- FindMarkers(object = pbmc, ident.1 = 1, min.pct = 0.25)
+print(x = head(x = cluster1.markers, n = 20))
+#This cluster are either cytotoxic T cells or NK cells. NK: NKG7 expression, but is CD3D expressing, so more likely T cyt???
+```
+```{r}
+VlnPlot(object = pbmc, features.plot = c("GZMA","GZMB", "GZMK", "CD3D"), point.size.use = 0.05)
+#CCL5 is not a good marker, in 3 clusters
+#Cluster 1 is (high,low,high) for GZ A, B and K
+```
+
+```{r}
+#FIND DE MARKERS FOR ALL CLUSTERS AND REPORT THE N UP GENES
+pbmc.markers <- FindAllMarkers(object = pbmc, only.pos = TRUE, min.pct = 0.25, 
+    thresh.use = 0.25)
+#1-2 min X # of clusters ~20 min total
+pbmc.markers %>% group_by(cluster) %>% top_n(5, avg_logFC)
+```
+```{r}
+#Differential analysis and ROC test to determine the classification power of each sig. DE gene
+#The cluster numbering starts at 0, so 1 is actually the second group
+cluster1.markers <- FindMarkers(object = pbmc, ident.1 = 1, thresh.use = 0.25, 
+    test.use = "roc", only.pos = TRUE)
+print(x = head(x = cluster1.markers, n = 20))
+```
+```{r}
+##VISUALIZATION
+VlnPlot(object = pbmc, features.plot = c("CD19","MS4A1", "CD79A"), point.size.use = 0.05)
+# use.raw = TRUE, y.log = TRUE # UMI plot
+MS4A1 is CD20 expressed in T and B cells, CD79A is a B-cell marker
+#Clusters 6 and 7 are B cells 
+```
+```{r}
+##What differentiates Cluster 6 and 7 B cells?
+cluster6vs7.markers <- FindMarkers(object = pbmc, ident.1 = 6,  ident.2= 7, thresh.use = 0.25)
+print(x = head(x = cluster6vs7.markers, n = 20))
+```
+```{r}
+VlnPlot(object = pbmc, features.plot = c("TCL1A","IL4R", "IGHG1"), point.size.use = 0.05)
+#Cluster 7 has high IGHG1 expression while Cluster 6 has high IL4R
+#TCL1A is called (misleadingly) T-cell Leukemia 1A but expressed in B cells
+```
+

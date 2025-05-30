@@ -1,0 +1,305 @@
+---
+title: "TCGA Component estimation"
+author: "Mengshu"
+date: "9/4/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(magrittr) # %<>%
+source("R_functions.r")
+```
+
+## R Markdown
+
+Looking at Gene's estimates of tumor sample purity in TCGA samples that did not have ESTIMATE analysis. 
+
+```{r}
+### Load Gene's data
+load("tcga_extra_annotation.rdata")
+ls()
+tcga <- tcga.extra.annotation
+View(tcga)
+tcga <- data.table(tcga)
+tcga[,unique(tcga$Tumor.Type)]
+```
+
+## All tumor types from the TCGA are covered. However, there are only ESTIMATE values, listed as fraction of predicted tumor content. There isn't a separate Immune or Stromal score. 
+
+```{r}
+########### Join table with a loop ##########
+cancer2code <- read.csv("Filename_TCGAcode.txt", header= TRUE, sep="\t")
+merge_file <- data.frame() # declare empty data.table or the rbind throws an "object 'merge_file' not found" error
+my_files <- cancer2code$File.name
+for (cancer_file_name in my_files)  {
+ #my_name <- unlist(strsplit(cancer_file_name, split="_RNAseqV2"))[1] # split, unlist into an atomic vector, keep first element
+ my_file <- read.csv(cancer_file_name, header= TRUE, sep="\t")
+ my_file %<>% mutate(File.name=cancer_file_name)
+ my_file %<>% mutate(Cancer.type=unlist(strsplit(File.name, split="_RNAseqV2"))[1])
+ my_file <- left_join(my_file,cancer2code,by="File.name")  ##The by parameter has to be specified with text quotes
+ #write.table(my_file,"TCGA_ESTIMATE_merge.txt", append=TRUE, sep="\t", row.names = FALSE, quote = FALSE)
+ merge_file <- rbind(merge_file,my_file)
+}
+View(merge_file)
+
+```
+
+
+ESTIMATE data
+
+```{r}
+########### Write same task without a loop now ###########
+#Load ESTIMATE data
+#######Problem here. How do I add the file name as a column in each file, within an lapply format???????########
+cancer2code <- read.csv("Filename_TCGAcode.txt", header= TRUE, sep="\t")
+my_csv <- cancer2code$File.name
+Cancer_CODE <- cancer2code$Code
+
+merge_csv <- lapply(my_csv,function(i){
+  read.csv(i,header= TRUE,sep="\t")
+  }) 
+names(merge_csv) <- sub("_RNAseqV2.txt","",my_csv)
+
+merge_csv <- lapply(seq_along(merge_csv), function(i){
+  c_name <- names(merge_csv)[i]
+  j <- merge_csv[[i]]
+  j %<>% mutate(
+    Patient=substr(ID,1,12),
+    Type=substr(ID,14,15),
+    Cancer_type = c_name
+    ) 
+  })
+#names(merge_csv) <- sub("_RNAseqV2.txt","",my_csv)
+#View(names(merge_csv))
+cancer_merge <- do.call('rbind',merge_csv)
+View(cancer_merge)
+#### rbind throwing an error saying col names don't match
+#identical(names(merge_csv[[1]]),names(merge_csv[[10]]))
+#View(merge_csv[[10]]) # there is some wonkyness in the "ID" column for this file. Fixed in the raw data spreadsheet
+#colnames(merge_csv[[10]]) <- c("ID","Stromal_score","Immune_score","ESTIMATE_score")
+```
+
+# Data was downloaded from the GDC data portal. The files were selected using the web browser interface. The manifest file containing UUIDs were used to download the files via the gdc-client bash tool. 
+The downloaded files were parsed in Unix and expression data for specific genes were extracted using perl script. 
+
+Load the UUID-to-SubmitterID lookup table for the Count files and FPKM files
+
+```{r}
+UUID2ID_Count <- read.csv("file_id2submitter_id_ESTIMATE_Count.txt", header = TRUE, sep= ",")
+UUID2ID_Count %<>% mutate(Patient= substr(submitter_id,1,12), Type=substr(submitter_id,14,15)) %>% dselect(-X)  # get rid of the extra column & HPK1 <- HPK1 
+HPK1 <- read.csv("HPK1_TCGA_RNA_Counts.txt", header= TRUE, sep="\t")
+HPK1 <- left_join(HPK1, UUID2ID_Count, by= c("UUID"="file_id"))
+HPK1 %<>% mutate(HPK1_Count=Count) %>% dfilter(!is.na(submitter_id))
+UUID2ID_FPKM  <- read.csv("file_id2submitter_id_ESTIMATE_FPKM.txt", header = TRUE, sep= "\t")
+UUID2ID_FPKM %<>% mutate(Patient= substr(submitter_id,1,12), Type=substr(submitter_id,14,15))
+HPK1_FPKM <- read.csv("HPK1_TCGA_FPKM.txt", header= TRUE, sep="\t")
+CD8A_FPKM <- read.csv("CD8A_TCGA_FPKM.txt", header= TRUE, sep="\t")
+HPK1_FPKM <- left_join(HPK1_FPKM, UUID2ID_FPKM, by= c("UUID"="file_id"))
+HPK1_FPKM %<>% mutate(HPK1_FPKM=FPKM)
+HPK1_FPKM <- left_join(HPK1_FPKM,CD8A_FPKM, by="UUID")
+HPK1_FPKM %<>% mutate(CD8A_FPKM=FPKM.y)
+#Merge the Count and FPKM data into HPK1
+HPK1_merge <- left_join(HPK1,HPK1_FPKM, by= c("Patient","Type"))
+HPK1_merge %<>% dselect(c("Patient","Type","HPK1_Count","HPK1_FPKM","CD8A_FPKM")) %>% group_by(Patient) %>% slice(1L) %>% ungroup()
+
+View(HPK1_FPKM)
+View(HPK1_merge)
+#rm(HPK1_FPKM)
+```
+
+
+# Load the TIMER estimate data
+```{r}
+########This data contains values for Normal samples. Filter them out before left_join
+TIMER_data <- read.csv("TCGA_TIMER_estimates.csv", header= TRUE, sep =",")
+View(TIMER_data)
+TIMER_data %<>% rename(ID = X) %>% mutate(Type=substr(ID,14,15), Patient=substr(ID,1,12)) %>% dfilter(Type != 11)
+TIMER_data %>% .$Type %>% table
+```
+
+
+Load Silpa's TCGA downloaded expression data, which has 10535 samples for all cancers. It has been quantile normalized and in TPM (Counts/transcript_Kb * 1 Million / Total Counts/transcript_Kb)
+```{r}
+load("mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized.rdata")
+TCGA <- as.data.frame(mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized)
+TCGA %<>% dselect(starts_with("TCGA-")) #%>% mutate(Gene= Genes)
+TCGA_select <- TCGA[c("MAP4K1","PTPRC","LCP2","CD8A"),]
+TCGA_select_t <- t(TCGA_select) # %>% gather(key= Gene)
+IDs <- rownames(TCGA_select_t)
+TCGA_select_t <- as.data.frame(TCGA_select_t) %>% mutate(ID=IDs) %>% mutate(Patient=substr(ID,1,12),Type=substr(ID,14,15)) %>% dselect(c("ID","Patient","Type","MAP4K1","PTPRC","LCP2","CD8A")) %>% rename(MAP4K1_TPM=MAP4K1) %>% rename(PTPRC_TPM=PTPRC) %>% rename(LCP2_TPM=LCP2) %>% rename(CD8A_TPM=CD8A) %>% dfilter(Type != 11)
+TCGA_select_t %<>% dfilter(Type != 20)
+TCGA_select_t %>% .$Type %>% table
+tail(TCGA_select_t)
+```
+#TOIL data
+```{r}
+toil <- read.csv("Toil_HPK1_denseDataOnlyDownload.txt", header= TRUE, sep="\t")
+toil %<>% dselect(sample,HPK1_001=ENST00000396857.6,HPK1_003=ENST00000589130.5,HPK1_006=ENST00000591921.1,MAP4K1_TPM_toil=MAP4K1,CD8A_TPM_toil=CD8A, CD4_TPM_toil=CD4,CD45_TPM_toil=PTPRC) %>% dfilter(sample %like% "^TCGA") %>% dfilter(sample %like% "01$"| sample %like% "06$" | sample %like% "02$" | sample %like% "03$"| sample %like% "07$") %>% mutate(Patient= substr(sample,1,12),Type=substr(sample,14,15)) %>% mutate(HPK1_001=(2^HPK1_001),HPK1_003=(2^HPK1_003),HPK1_006=(2^HPK1_006)) %>% mutate(HPK1_full=HPK1_001+HPK1_003)
+toil %>% .$Type %>% table
+```
+
+Cancer codes matching Patient IDs
+
+```{r}
+TCGA_codes <- read.csv("matched-Code-list.tsv", sep= "\t", header= TRUE)
+TCGA_codes %<>% dselect(Patient=submittedCase.ID, Code=mappedProject) %>% mutate(Code=sub("TCGA-",'',Code))
+View(TCGA_codes)
+```
+
+## Merge all data
+# HPK1_merge: HPK1_FPKM non-normalized data
+# TIMER_data: TIMER data
+# cancer_merge: ESTIMATE data
+# TCGA_select_t: Silpa's TPM cross-sample normalized expression values
+# toil: UCSC toil HPK1 isoform expression data
+# TCGA_codes: TCGA Cancer codes matching Patient IDs
+
+```{r}
+HPK1_immune <- full_join(HPK1_merge,TIMER_data,by=c("Patient","Type"))
+HPK1_immune <- full_join(HPK1_immune,cancer_merge,by=c("Patient","Type"))
+HPK1_immune <- full_join(HPK1_immune,TCGA_select_t,by=c("Patient","Type"))
+HPK1_immune <- full_join(HPK1_immune,toil,by=c("Patient","Type"))
+HPK1_immune <- full_join(HPK1_immune,TCGA_codes,by="Patient")
+
+HPK1_immune %<>% dselect("Patient","Type","Cancer_type","Code","HPK1_Count","HPK1_FPKM","CD8A_FPKM","HPK1_001","HPK1_003","HPK1_006","HPK1_full","MAP4K1_TPM_toil","B_cell","T_cell.CD4","T_cell.CD8","Neutrophil","Macrophage","DC","Stromal_score","Immune_score","ESTIMATE_score","MAP4K1_TPM","PTPRC_TPM","LCP2_TPM","CD8A_TPM","CD8A_TPM_toil","CD4_TPM_toil","CD45_TPM_toil") 
+
+save(HPK1_immune, file="HPK1_immune.rdata")
+load("HPK1_immune.rdata")
+View(HPK1_immune)
+HPK1_immune %>% dfilter(is.na(Code))
+```
+
+
+#### Graphing
+
+```{r}
+library(ggplot2)
+##Set order
+Immune_HPK1$Cancer_type <- factor(Immune_HPK1$Cancer_type, levels=unique(Immune_HPK1$Cancer_type))
+#sort(unique(Immune_HPK1$Code))
+levels=c("AML","ACC","BLCA","BRCA","CESC","COAD","ESCA","GBM","HNSC","KICH","KIRC","KIRP","LGG" ,"LIHC","LUAD","LUSC","OV","PAAD", "PCPG","PRAD","SKCM","STAD","THCA","UCS" ) #UCEC does not have toil data
+ggplot(HPK1_immune %>% dfilter(HPK1_006 >= -8) %>% dfilter(Code != "UCEC"), aes(Code, log2(HPK1_001), fill= Code, show.legend=TRUE)) +
+  geom_boxplot(outlier.shape = NA) + #outlier.shape = NA
+  geom_jitter(height=0, width=0.15, size=1, alpha=0.4, colour="grey31") +
+  theme(axis.text.x = element_text(angle=90, size=14),
+  axis.text.y=element_text(size=14),
+  axis.title = element_text(size=14)) +
+  ylab("HPK1-001 isoform log2(Count)") +
+ggsave("HPK1-001 isoform_TCGA.jpg", dpi=500, width= 30, height=20, plot= last_plot(), units = "cm")
+
+ggplot(HPK1_immune %>% dfilter(HPK1_001 >= -8) %>% dfilter(Code != "UCEC"), aes(Code, log2(HPK1_006), fill= Code, show.legend=TRUE)) +
+  geom_boxplot(outlier.shape = NA) + #outlier.shape = NA
+  geom_jitter(height=0, width=0.15, size=1, alpha=0.4, colour="grey31") +
+  theme(axis.text.x = element_text(angle=90, size=14),
+  axis.text.y=element_text(size=14),
+  axis.title = element_text(size=14)) +
+  ylab("HPK1-006 isoform log2(Count)") +
+ggsave("HPK1-006 isoform_TCGA.jpg", dpi=500, width= 30, height=20, plot= last_plot(), units = "cm")
+```
+
+```{r}
+###Plot HPK1 expression vs Immune score
+
+ggplot(Immune_HPK1, aes(x=HPK1_FPKM, y=MAP4K1_TPM, show.legend = FALSE)) +
+  geom_point(height=0, width=0.1, size=1, alpha=0.4, show.legend = FALSE) +
+  scale_x_log10() +
+  scale_y_log10()
+
+```
+```{r}
+cor.test(Immune_HPK1$HPK1_Count,Immune_HPK1$HPK1_FPKM)
+#0.919 2.2^-16
+cor.test(Immune_HPK1$HPK1_Count,Immune_HPK1$MAP4K1_TPM)
+#0.597
+```
+
+
+
+```{r}
+ggplot(Immune_HPK1, aes(x=Immune_score, y=MAP4K1_TPM, colour=Code, show.legend = FALSE)) +
+  geom_point(height=0, width=0.1, size=1, alpha=0.4, show.legend = FALSE) + 
+  geom_abline(intercept = 0.35, slope = 0.00016,linetype="dashed", show.legend = FALSE) +
+  facet_wrap( ~ Code, ncol=5) +
+  xlab("Immune Score") +
+  scale_y_log10(limits=c(1,10)) +
+  theme(axis.text.x=element_text(size=14, angle = 90), 
+        axis.text.y=element_text(size=14),
+        axis.title =element_text(size=14),
+        aspect.ratio = 1)
+
+ggplot(Immune_HPK1, aes(x=Immune_score, y=HPK1_FPKM, colour=Code, show.legend = FALSE)) +
+  geom_point(height=0, width=0.1, size=1, alpha=0.4, show.legend = FALSE) + 
+  geom_abline(intercept = 0, slope = 0.0004,linetype="dashed", show.legend = FALSE) +
+  facet_wrap( ~ Code, ncol=5) +
+  xlab("Immune Score") +
+  scale_y_log10() +
+  theme(axis.text.x=element_text(size=14, angle = 90), 
+        axis.text.y=element_text(size=14),
+        axis.title =element_text(size=14),
+        aspect.ratio = 1)
+
+ggsave("HPK1_TPMvsImmune_scores.jpg", dpi=500, width= 35, height=30, plot= last_plot(), units = "cm")
+```
+
+
+## Stromal Infiltration
+
+```{r}
+
+ggplot(Immune_HPK1, aes(x=Stromal_score, y=HPK1_FPKM, colour=Code, show.legend = FALSE)) +
+  geom_point(height=0, width=0.1, size=1, alpha=0.4, show.legend = FALSE) + 
+  #geom_abline(intercept = 0.35, slope = 0.00016,linetype="dashed", show.legend = FALSE) +
+  facet_wrap( ~ Code, ncol=5) +
+  xlab("Stromal Score") +
+  scale_y_log10(limits=c(1,10)) +
+  theme(axis.text.x=element_text(size=14, angle = 90), 
+        axis.text.y=element_text(size=14),
+        axis.title =element_text(size=14),
+        aspect.ratio = 1)
+
+ggsave("HPK1_FPKMvsStromal_scores.jpg", dpi=500, width= 40, height=30, plot= last_plot(), units = "cm")
+```
+
+##TIMER data
+
+```{r}
+ggplot(Immune_HPK1, aes(x=T_cell.CD8, y=HPK1_FPKM, colour=Code, show.legend = FALSE)) +
+  geom_point(height=0, width=0.1, size=1, alpha=0.4, show.legend = FALSE) + 
+  geom_abline(intercept = 0, slope = 1.5,linetype="dashed", show.legend = FALSE) +
+  facet_wrap( ~ Code, ncol=5) +
+  ylab("HPK1 FPKM") +
+  xlab("Predicted T_cell fraction") +
+  scale_y_log10() +
+  xlim(0,0.4)
+  theme(axis.text.x=element_text(size=14, angle = 90), 
+        axis.text.y=element_text(size=14),
+        axis.title =element_text(size=14),
+        aspect.ratio = 1)
+
+ggsave("HPK1_FPKMvsT_cell.CD8.jpg", dpi=500, width= 40, height=30, plot= last_plot(), units = "cm")
+```
+
+```{r}
+HPK1_mean <-Immune_HPK1 %>%
+            mutate(Immune.score.pos=Immune_score +2300) %>%
+            group_by(Code) %>%
+            mutate(Immune.score.pos=Immune_score +2300) %>%
+            summarize(meanImmune.score= median(Immune.score.pos,na.rm=TRUE),meanHPK1_FPKM=median(HPK1_FPKM,na.rm=TRUE), meanCD45_TPM=median(PTPRC_TPM), mean.ratio=1000*(meanHPK1_FPKM/meanImmune.score)) 
+head(HPK1_mean)
+ggplot(HPK1_mean, aes(meanImmune.score, meanHPK1_FPKM, colour= mean.ratio, label = Code, show.legend=FALSE)) +
+  geom_point(show.legend=FALSE) +
+  geom_abline(intercept = -2.5, slope = 1/700,linetype="dashed", show.legend = FALSE) +
+  xlab("Median Immune score") +
+  ylab("Median HPK1 FPKM") +
+  xlim(2000,3700) +
+  ylim(0.5,3.25) +
+  geom_label(show.legend=FALSE)
+ggsave("HPK1_FPKM_vs_TCGA_immune.jpg", dpi=300, width= 14, height=10, plot= last_plot(), units = "cm" )
+```
+
+
+

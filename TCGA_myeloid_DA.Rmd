@@ -1,0 +1,538 @@
+---
+title: "TCGA_Myeloid_DA"
+author: "Mengshu"
+date: "4/2/2019"
+output: html_document
+---
+
+This script merges Immune cell infiltration data from QuanTIseq and Xcell, and tumor purity data from Aran et al. 2015 (purity calculated from ESTIMATE, SNV, CNA, and Me-DNA signatures)
+In addition, TCGA patient codes, disease code will also be included.
+
+Features cell types to cluster by:
+CD8 T cell
+CD4 T cell
+T reg
+Tumor purity
+Cancer type (in some)
+
+Immune cells being studied:
+M2
+DC
+
+```{r}
+library(limma)
+library(dplyr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+library(magrittr)
+library(tidyr)
+library(data.table) # %like% function
+```
+
+Load Saved data
+```{r}
+TCGA_meta_filter <- readRDS("TCGA_meta.rds")
+```
+
+Save the cleaned up TCGA expression data
+```{r}
+#saveRDS(meta_intersect, file="metadata_limma_input.rds")
+meta <- readRDS("metadata_limma_input.rds")
+
+#saveRDS(tcga_unique, file="tcgadata_limma_input.rds")
+tcga <- readRDS("tcgadata_limma_input.rds")
+```
+
+Load Expression data
+```{r}
+load("/Volumes/Picard/FLX/New Targets/mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized.rdata")
+```
+
+Tumor purity data
+purity_s
+8665 Tumor samples
+# This contains normals samples and cell lines
+# Filter for just "-0[1:9][A:Z]" samples
+```{r}
+purity <- read.table("/Volumes/Picard/FLX/New Targets/TCGA_purity_estimates/TCGA_purity_Aran2015.txt", sep ="\t", header = TRUE)
+purity_s <- purity %>% dselect(Sample.ID, Cancer.type, CPE) %>% dfilter(Sample.ID %like% "-0") %>% rename(Purity=CPE) # select just the tumor samples
+head(purity_s)
+grep("-11", purity_s$Sample.ID)
+purity_s %<>% mutate(patientBarcode=substring(Sample.ID,1,12)) %>% dselect(patientBarcode, disease=Cancer.type, Purity, -Sample.ID)
+```
+Sanity check for samples: only tumor samples included
+```{r}
+#table(substring(purity_s$Sample.ID,13,16))
+```
+
+QuanTISeq data (Includes Cibersort-Relative data)
+quanti_ciber_myeloid
+
+Each line is duplicated
+```{r}
+quantiseq <- read.table("TCGA_quantiSeq.cellTypeFractionsAll.tsv", sep ="\t", header = TRUE)
+qts <- quantiseq  %>% distinct(.keep_all=TRUE) 
+qts_spread <- qts %>% spread(cell_type,quanTIseq_lsei_TIL10, sep=NULL)
+qts_spread_ciber <- qts %>% dselect(-quanTIseq_lsei_TIL10) %>% spread(cell_type,cibersort_LM22, sep=NULL)
+qts_spread_ciber %<>% dselect(patientBarcode,M2_ciber="Macrophage M2")
+qts_myeloid <- qts_spread %>% select(patientBarcode, disease, CD4="CD4 T cells" ,CD8="CD8 T cells",DC="Dendritic cells",M2="Macrophage M2",Treg="Regulatory T cells")
+quanti_ciber_myeloid <- left_join(qts_myeloid,qts_spread_ciber, by="patientBarcode")
+
+hist(qts_myeloid$M2)
+hist(qts_myeloid$DC)
+#head(qts)
+#head(quanti_ciber_myeloid)
+#qts_myeloid %>% dfilter(patientBarcode=="TCGA-OR-A5J6")
+```
+
+Xcell data
+```{r}
+xcell <- read.table("xCell_TCGA_RSEM.txt", sep="\t", header=TRUE)
+xcell_t <- data.frame(t(xcell %>% tibble::column_to_rownames("X")))
+dim(xcell_t)
+xcell_t[1:3,1:64]
+TCGA_id <- colnames(xcell)
+TCGA_id <- TCGA_id[2:length(TCGA_id)]
+celltypes <- xcell$X
+xcell %<>% dselect(-X)
+colnames(xcell) <- ""
+
+colnames(xcell_t) <- celltypes
+rownames(xcell_t) <- TCGA_id
+
+xcell_mye <- xcell_t %>% mutate(PatientBarcode=TCGA_id) %>% dselect(PatientBarcode,M2_xcell="Macrophages M2",DC_xcell=DC)
+TCGA <- gsub('\\.',"-",TCGA_id) #gsub replaces all instances, and the escape \ needs to used twice as \\
+TCGA_final <- sub("-01$","",TCGA)
+head(TCGA_final)
+head(xcell_mye, n=50)
+#grep("-02$",TCGA)
+TCGA[6217]
+xcell_mye %<>% dselect(-PatientBarcode) %>% mutate(patientBarcode=TCGA_final) %>% dselect(patientBarcode,M2_xcell,DC_xcell)
+hist(xcell_mye$M2_xcell)
+hist(xcell_mye$DC_xcell)
+```
+
+
+Merge Metadata columns
+
+purity_s
+quanti_ciber_myeloid
+xcell_mye
+```{r}
+TCGA_meta <- left_join(purity_s,quanti_ciber_myeloid,by="patientBarcode")
+TCGA_meta <- left_join(TCGA_meta,xcell_mye,by="patientBarcode")
+purity_s
+qts_myeloid
+xcell_mye
+tail(TCGA_meta, n=50)
+dim(TCGA_meta)
+```
+
+Filter away missing data
+7750 after filtering away quanTIseq missing data
+Tumor purity missing 66 cases
+7684 samples (not counting missing data in Xcell, keeping those because Xcell is only used for DC)
+xcell missing 1005 cases
+
+```{r}
+TCGA_filter <- TCGA_meta %>% dfilter(!is.na(CD4))
+TCGA_filter  %<>% dfilter(!is.na(Purity))
+
+#not run yet
+TCGA_filter %>% dfilter(is.na(M2_xcell))
+
+dim(TCGA_filter)
+head(TCGA_filter)
+grepl("NA",TCGA_filter) # There are NAs in the xcell data
+dim(TCGA_filter %>% dfilter(is.na(M2_xcell)))
+
+TCGA_filter %<>% mutate(M2_cbs=(1-Purity)*M2_ciber) %>% dselect(-M2_ciber) 
+TCGA_filter %<>% dselect(-disease.y) 
+TCGA_filter %<>% dselect(patientBarcode,disease=disease.x,Purity,CD4,CD8,Treg,M2,M2_cbs,DC_xcell,DC)
+#hist(TCGA_filter$M2)
+#hist(TCGA_filter$M2_xcell)
+#hist(TCGA_filter$M2_cbs)
+#hist(TCGA_filter$DC_xcell)
+#hist(TCGA_filter$Purity)
+
+```
+
+Save Data
+
+```{r}
+#saveRDS(TCGA_meta_filter,"TCGA_meta.rds")
+#write.table(TCGA_meta_filter,file="TCGA_meta_myeloid.txt",sep="\t",quote=FALSE,row.names = FALSE)
+```
+
+Investigate correlation between M2 and DC estimates between quantiSeq and Xcell
+```{r}
+library(ggplot2)
+
+ggplot(TCGA_meta_filter, aes(M2,M2_cbs)) +
+  geom_point() #+
+#ggsave("TCGA_M2_scatter.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in") 
+ggplot(TCGA_meta_filter, aes(DC,DC_xcell)) +
+  geom_point() #+
+#ggsave("TCGA_DC_scatter.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in") 
+
+ggplot(TCGA_meta_filter, aes(M2,Purity)) #+
+  geom_point() 
+  
+cor.test(TCGA_meta_filter$M2, TCGA_meta_filter$M2_cbs,method ="pearson")
+cor.test(TCGA_meta_filter$DC, TCGA_meta_filter$DC_xcell,method ="pearson")
+```
+
+
+Find the good bins for Purity
+```{r}
+library(ggbeeswarm)
+head(TCGA_meta_filter)
+
+quartiles <- as.numeric(quantile(TCGA_meta_filter$Purity, 
+                                   probs = c(0.25, 0.5, 0.75)))
+
+ggplot(TCGA_meta_filter, aes(x=Purity, y=M2,group = factor(purity_quant))) +
+  geom_point(size =0.5, colour="gray") +
+  geom_violin(fill="skyblue",alpha=0.5,aes(),draw_quantiles = c(0.25, 0.5, 0.75),scale = "width") #+
+#ggsave("TCGA_purity_M2_quartiles.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")  
+
+ggplot(TCGA_meta_filter, aes(x=Purity, y=M2_cbs,group = factor(purity_quant))) +
+  geom_point(size =0.5, colour="gray") +
+  geom_violin(fill="lightgreen",alpha=0.5,aes(),draw_quantiles = c(0.25, 0.5, 0.75),scale = "width") #+
+#ggsave("TCGA_purity_M2_cbs_quartiles.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")  
+
+ggplot(TCGA_meta_filter, aes(x=Purity, y=M2)) +
+  geom_violin(fill="skyblue", aes(group = cut_width(Purity, 0.16)))
+
+ggplot(TCGA_meta_filter, aes(x=Purity, y=M2)) +
+  geom_beeswarm(size=0.5) +
+  geom_violin(fill="skyblue", alpha=0.5, aes(group = cut_width(Purity, 0.3))) 
+#ggsave("TCGA_purity_quant.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+ggplot(TCGA_meta_filter, aes(Purity)) +
+  geom_histogram(aes(alpha=0.5), show.legend = FALSE, fill="blue") +
+  geom_vline(xintercept = quartiles) 
+#ggsave("TCGA_purity_quartiles.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+
+```
+
+Split by Purity, then find quantiles of M2 infiltration
+Take the average M2 score from CIBERSORT and quanTIseq
+At first I split by quartiles, this means each group is the same size, but the purity boundaries fall at 0.5, 0.7, 0.8, 0.9, which is concentrated on the upper range
+the 0 to 0.5 bin will give tumor-related DE genes
+```{r}
+# Divide M2s into 4 and 2 groups
+TCGA_meta_filter %<>% mutate(purity_quant= ntile(Purity, 4)) %>% group_by(purity_quant) %>% mutate(M2_bin2= ntile(M2,2))
+TCGA_meta_filter %<>% group_by(purity_quant) %>% mutate(M2_quant= ntile(M2,4))
+
+TCGA_meta_filter %<>% group_by(purity_quant) %>% mutate(M2_bin2= ntile(M2,2))
+head(TCGA_meta_filter)
+
+
+# Make groupings with cibersort M2 estimates too
+TCGA_meta_filter %<>% group_by(purity_quant) %>% mutate(M2_cbs_quant= ntile(M2_cbs,4))
+TCGA_meta_filter %<>% group_by(purity_quant) %>% mutate(M2_cbs_bin2= ntile(M2_cbs,2))
+
+TCGA_meta_filter %>% group_by(purity_quant,M2_quant) %>% summarize(mean_purity=mean(Purity),meanM2=mean(M2))
+#plot(quants$meanM2,quants$mean_purity) 
+#ggsave("TCGA_purity_M2_quantile.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+#Average M2 score
+TCGA_meta_filter %<>% mutate(M2_ave= (M2+M2_cbs)/2) %>% group_by(purity_quant) %>% mutate(M2_ave_quant= ntile(M2_ave,4))
+TCGA_meta_filter %<>% mutate(M2_ave= (M2+M2_cbs)/2) %>% group_by(purity_quant) %>% mutate(M2_ave_bin2= ntile(M2_ave,2))
+```
+
+Parse the TCGA expression data
+44201 11348
+TCGA starts at 814 11348
+1) select TCGA samples
+2) The meta data has sample types: the TCGA data has -03 samples which are blood cancers, remove those
+-01A -01B -01C -01D -01R -02A -02B -05A -06A -06B -07A 
+8665  221   26    1    1   51    6    2  388    2    1 
+data.table converts - into .
+
+Remaining samples:
+ -01  -02  -05  -06  -07  -20 
+9186   44   11  392    1    1 
+```{r}
+dim(mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized)
+mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized[1:10,11290:11300]
+tcga <- mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized[,814:11348]
+sample_name_format <- colnames(mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized[,814:11348])
+tcga <- data.frame(tcga)
+colnames(tcga) <- sample_name_format
+tcga %<>% dselect(everything(), -ends_with("-03"),-ends_with("-04"),-ends_with("-09")) #10362 samples
+tcga %<>% dselect(everything(), -ends_with("-10"),-ends_with("-11"),-ends_with("-12"),-ends_with("-13"),-ends_with("-14")) # get rid of normals 9635 samples
+tcga %<>% dselect(everything(), -ends_with("-20")) #9634 samples
+
+table(substring(colnames(tcga),13,16))
+tcga[1:5,9000:9010]
+dim(tcga)
+```
+
+
+Reorder the data to match the metadata order
+There are duplicates in both the metadata and TCGA data after the sample-type extensions are removed
+[1] 7684
+[1] 7647
+[1] 9634
+[1] 9561
+final tcga: 9634 44202
+Final intersect of meta data and tcga data: 7012 samples
+```{r}
+sample_order <- TCGA_meta_filter$patientBarcode
+tcga_presort_samples <- colnames(tcga)
+tcga_presort_samples_short <- substring(tcga_presort_samples,1,12)
+colnames(tcga) <- tcga_presort_samples_short #shorten TCGA names in tcga
+
+length(sample_order)
+length(unique(sample_order))
+length(tcga_presort_samples)
+length(unique(tcga_presort_samples_short))
+
+TCGA_meta_filter %<>% distinct(patientBarcode,.keep_all=TRUE) 
+length(TCGA_meta_filter$patientBarcode) #7667
+#Find the indexes where there are duplicates
+dups <- grep("TRUE",duplicated(colnames(tcga))) #this gives the duplicated occurences, leaving the first unique one unlisted
+#tcga %>% select(dups) #error
+#tcga %<>% dselect(sample_order) #error
+tcga_t <- t(tcga)
+tcga_t <- tibble::rownames_to_column(data.frame(tcga_t)) 
+tcga_t %<>% distinct(rowname,.keep_all=TRUE) 
+rownames(tcga_t) <- tcga_t$rowname
+tcga_t %<>% dselect(-rowname)
+dim(tcga_t) #9634 44202
+tcga_unique <- t(tcga_t) 
+#now the dashes have changed to . again, change back and replace
+dots <- colnames(tcga_unique)
+dashes <- gsub('\\.',"-",dots) 
+colnames(tcga_unique) <- dashes
+tcga_unique <- data.frame(tcga_unique)
+#tcga_unique %<>% dselect(sample_order) # error due to missing samples
+intersect_tcga <- dplyr::intersect(colnames(tcga_unique),sample_order)
+length(intersect_tcga) #7012
+```
+Select samples for final meta-data and expression-data matrices
+tcga_unique
+meta_intersect
+```{r}
+#Expression data
+tcga_unique %<>% dselect(intersect_tcga)
+
+#Meta data
+TCGA_meta_filter %<>% mutate(Group=LETTERS[2*purity_quant+M2_ave_bin2-2]) #THIS WILL GIVE ABCDEFGH
+# Add column Group_QTS to group by QuanTIseq and Group_CBS to group by CIBERSORT
+#meta %<>% mutate(Group_QTS=LETTERS[2*purity_quant+M2_bin2-2],Group_CBS=LETTERS[2*purity_quant+M2_cbs_bin2-2]) 
+#meta %>% dselect(Group_QTS) %>% table
+#meta %>% dselect(Group_CBS) %>% table
+
+head(TCGA_meta_filter, n=50)
+intersect_tcga_factor <- factor(intersect_tcga, levels=intersect_tcga)
+#select the intersect samples
+intersect_tcga <- unique(intersect_tcga)
+TCGA_meta_filter <- data.frame(TCGA_meta_filter) #######THIS IS CRITICAL, DON'T KEEP THE DATA AS A TIBBLE, IT DOES MESSED UP SHIT!!!!
+meta_intersect <- TCGA_meta_filter %>% distinct(patientBarcode,.keep_all=TRUE) %>% filter(patientBarcode %in% intersect_tcga) %>% arrange(factor(patientBarcode, levels=intersect_tcga))
+dim(meta_intersect)
+
+meta_intersect$patientBarcode == intersect_tcga
+meta_intersect$patientBarcode == colnames(tcga_unique)
+
+
+
+```
+
+
+Save the cleaned up TCGA expression data
+```{r}
+#saveRDS(meta_intersect, file="metadata_limma_input.rds")
+#saveRDS(tcga_unique, file="tcgadata_limma_input.rds")
+```
+
+Limma Linear Modeling
+A) Data: exp in cols, genes in rows
+B) Design: exp in cols, conditions in rows
+1) lmFit(Data,Design)
+2) makeContrasts() to set which comparisons to make
+3) contrasts.fit
+4) eBayes
+5) descideTests
+Results
+4)toptable, topTableF, volcanoplot, 
+
+
+B) Make design table
+1.purity_quant is [1, 2, 3, 4], M2_Ave_bin2 is [1,2], 
+2. This makes 8 groups, and I convert them to LETTER names using the formula LETTERS[2*purity_quant+M2_ave_quant-2], which gives A,B,C,D,E,F,G,H as a new column called Group
+3. simply model.matrix(~0+Group, data=TCGA_meta_filter). The 0+ prevents GroupA from being swallowed up as a control sample
+
+  GroupA GroupB GroupC GroupD GroupE GroupF GroupG GroupH GroupI GroupJ
+1       0      0      0      1      0      0      0      0      0      0
+2       0      0      1      0      0      0      0      0      0      0
+3       0      0      1      0      0      0      0      0      0      0
+4       0      0      0      0      0      0      0      1      0      0
+5       0      0      0      1      0      0      0      0      0      0
+6       0      0      0      0      0      1      0      0      0      0
+7       0      0      0      0      1      0      0      0      0      0
+8       1      0      0      0      0      0      0      0      0      0
+9       0      0      1      0      0      0      0      0      0      0
+10      0      0      0      1      0      0      0      0      0      0
+11      0      0      0      1      0      0      0      0      0      0
+```{r}
+#For complex design, use model.matrix
+design_tcga_ave <- model.matrix(~0+Group,data=meta)
+design_tcga_cbs <- model.matrix(~0+Group_CBS,data=meta)
+design_tcga_qts <- model.matrix(~0+Group_QTS,data=meta)
+#dim(design_tcga) This is the original matrix that must be run before the specific comparisons
+fit_qts <- lmFit(tcga,design_tcga_qts) 
+fit_ave <- lmFit(tcga,design_tcga_ave) 
+fit_cbs <- lmFit(tcga,design_tcga_cbs) 
+#now input the actual comparisons
+cont_ave <- makeContrasts(GroupB-GroupA,GroupD-GroupC,GroupF-GroupE,GroupH-GroupG, levels=design_tcga_ave)
+cont_qts <- makeContrasts(Group_QTSB-Group_QTSA,Group_QTSD-Group_QTSC,Group_QTSF-Group_QTSE,Group_QTSH-Group_QTSG, levels=design_tcga_qts)
+cont_cbs <- makeContrasts(Group_CBSB-Group_CBSA,Group_CBSD-Group_CBSC,Group_CBSF-Group_CBSE,Group_CBSH-Group_CBSG, levels=design_tcga_cbs)
+
+fit_ave <- contrasts.fit(fit1,contrasts=cont_ave)
+fit_ave <- eBayes(fit_ave) # calculates t-stats, log odds and standard errors
+
+fit_qts <- contrasts.fit(fit_qts,contrasts=cont_qts)
+fit_qts <- eBayes(fit_qts) # calculates t-stats, log odds and standard errors
+
+fit_cbs <- contrasts.fit(fit_cbs,contrasts=cont_cbs)
+fit_cbs <- eBayes(fit_cbs) # calculates t-stats, log odds and standard errors
+# results <- classifyTestsF(fit1) this is not stringent enough
+decide_tcga_qts <- decideTests(fit_qts, adjust.method="BH", p.value=0.05, lfc = 0.6) #LOG2 0.6 is ~1,5x change #this contains BOOLEANS on whether there is DE
+decide_tcga_ave <- decideTests(fit_ave, adjust.method="BH", p.value=0.05, lfc = 0.6) #LOG2 0.6 is ~1,5x change #this contains BOOLEANS on whether there is DE
+decide_tcga_cbs <- decideTests(fit_cbs, adjust.method="BH", p.value=0.05, lfc = 0.6)
+#Summarize each for whether Sig in all 4 comparisons
+qts_intersect <- data.frame(decide_tcga_qts) %>% 
+    rownames_to_column('gene')  %>% 
+    dfilter(`Group_QTSB...Group_QTSA`+`Group_QTSD...Group_QTSC`+`Group_QTSF...Group_QTSE`+`Group_QTSH...Group_QTSG`==4) %>% 
+    mutate(Intersect_qts=1) %>% 
+    dselect(gene,Intersect_qts)
+
+cbs_intersect <- data.frame(decide_tcga_cbs) %>% 
+    rownames_to_column('gene')  %>% 
+    dfilter(`Group_CBSB...Group_CBSA`+`Group_CBSD...Group_CBSC`+`Group_CBSF...Group_CBSE`+`Group_CBSH...Group_CBSG`==4) %>% 
+    mutate(Intersect_cbs=1) %>% 
+    dselect(gene,Intersect_cbs)
+
+ave_intersect <- data.frame(decide_tcga_ave) %>% 
+    rownames_to_column('gene')  %>% 
+    dfilter(`GroupB...GroupA`+`GroupD...GroupC`+`GroupF...GroupE`+`GroupH...GroupG`==4) %>%
+    mutate(Intersect_ave=1) %>% 
+    dselect(gene,Intersect_ave)
+
+decide_both <- full_join(qts_intersect,ave_intersect,by="gene")
+decide_all <- full_join(decide_both,cbs_intersect,by="gene") %>% column_to_rownames('gene') %>% replace_na(list(Intersect_qts=0,Intersect_ave=0, Intersect_cbs=0))
+head(decide_both)
+head(decide_all,n=50)
+intercept_2 <- decide_all %>% rownames_to_column('gene') %>% dfilter(Intersect_ave+Intersect_qts+Intersect_cbs>1)
+write.table(intercept_2,file="TCGA_M2_intercept2_UPonly_ranked.txt",sep="\t",quote=FALSE, row.names = FALSE)
+
+decide_all %>% rownames_to_column('gene') %>% dfilter(Intersect_ave==1 & Intersect_qts==0 & Intersect_cbs==0)
+vennDiagram(decide_tcga,cex=c(1.1,1,0.7), include= "up", lwd=1, circle.col=c("blue"))
+vennDiagram(decide_all,cex=c(1.1,1,0.7), include= "up", lwd=1, circle.col=c("grey40","blue","blue"))
+```
+
+
+
+```{r}
+library(tibble)
+my_results <- data.frame(fit1$t,decide_tcga, fit1$p.value)
+intersect_UP <- my_results %>% 
+  rownames_to_column('gene')  %>% 
+  dfilter(GroupB...GroupA.1+GroupD...GroupC.1+GroupF...GroupE.1+GroupH...GroupG.1==4) %>%
+  mutate(sum_FC=GroupB...GroupA+GroupD...GroupC+GroupF...GroupE+GroupH...GroupG) %>%
+  dselect(-GroupB...GroupA.1,-GroupD...GroupC.1,-GroupF...GroupE.1,-GroupH...GroupG.1) %>%
+  arrange(-sum_FC) %>%
+  column_to_rownames('gene')
+
+intersect_UP <- my_results %>% 
+  rownames_to_column('gene')  %>% 
+  dfilter(Group_QTSB...Group_QTSA.1+Group_QTSD...Group_QTSC.1+Group_QTSF...Group_QTSE.1+Group_QTSH...Group_QTSG.1==4) %>%
+  mutate(sum_FC=Group_QTSB...Group_QTSA+Group_QTSD...Group_QTSC+Group_QTSF...Group_QTSE+Group_QTSH...Group_QTSG) %>%
+  dselect(-Group_QTSB...Group_QTSA.1,-Group_QTSD...Group_QTSC.1,-Group_QTSF...Group_QTSE.1,-Group_QTSH...Group_QTSG.1) %>%
+  arrange(-sum_FC) %>%
+  column_to_rownames('gene')
+
+head(intersect_UP, n=50)
+
+vennCounts(decide_all)
+vennDiagram(decide_tcga_qts,cex=c(1.1,1,0.7), include= "up", lwd=1, circle.col=c("blue"))
+vennDiagram(decide_tcga_cbs,cex=c(1.1,1,0.7), include= "up", lwd=1, circle.col=c("blue"))
+vennDiagram(decide_tcga_ave,cex=c(1.1,1,0.7), include= "up", lwd=1, circle.col=c("blue"))
+vennDiagram(decide_all,cex=c(1.1,1,0.7), include= "up", lwd=1, circle.col=c("blue"))
+heatDiagram(decide_tcga,fit1,mar=c(2,8,1,1),primary=4 )
+
+write.table(intersect_UP,file="TCGA_M2_QTS_UPonly_ranked.txt",sep="\t",quote=FALSE,row.names=TRUE)
+
+```
+
+Heatmap
+DO NOT RUN THIS ON TCGA DATA!!! WILL FREEZE RSTUDIO
+```{r}
+#coolmap(tcga, cluster.by="de pattern", col=NULL,
+#linkage.row="complete", linkage.col="complete", show.dendrogram="both", ...)
+```
+
+Ontology enrichment
+
+```{r}
+install.packages("GO.db")
+de <- as.matrix(intersect_UP)
+goana(de, coef = sum_FC, geneid = rownames(de), FDR = 0.05, trend = FALSE,species="Hs")
+kegga(de, coef = sum_FC, geneid = rownames(de), FDR = 0.05, trend = FALSE,species="Hs")
+```
+
+
+Analyze just Breast cancer, LUAD/LUSC, SKCM
+
+BRCA
+            M2_ave_bin2
+purity_quant   1   2
+           1 137 136
+           2 136 136
+           3 136 136
+           4 136 136
+```{r}
+brca_meta <- meta %>% dfilter(disease == "LUAD" | disease == "LUSC") %>% dselect(-purity_quant,-M2_bin2,-M2_cbs_quant,-M2_cbs_bin2,-M2_quant,-M2_ave_quant,-Group,-M2_ave_bin2)
+brca_meta %<>% mutate(purity_quant= ntile(Purity, 4)) %>% group_by(purity_quant) %>% mutate(M2_ave_bin2= ntile(M2_ave,2)) %>% mutate(Group=LETTERS[2*purity_quant+M2_ave_bin2-2]) 
+brca_meta %>% select(purity_quant,M2_ave_bin2) %>% table
+brca_tcga <- tcga %>% dselect(brca_meta$patientBarcode)
+colnames(brca_tcga) == brca_meta$patientBarcode
+saveRDS(brca_meta,"BRCA_meta.rds")
+brca_meta <- readRDS("BRCA_meta.rds")
+ggplot(brca_meta, aes(x=Purity, y=M2_ave,group = factor(purity_quant))) +
+  geom_point(size =0.5, colour="gray") +
+  geom_violin(fill="lightgreen",alpha=0.5,aes(),draw_quantiles = c(0.5),scale = "width") +
+ggsave("SKCM_purity_M2_ave_quartiles.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in") 
+```
+Limma
+```{r}
+#For complex design, use model.matrix
+design <- model.matrix(~0+Group,data=brca_meta)
+fit <- lmFit(brca_tcga,design) 
+cont <- makeContrasts(GroupB-GroupA,GroupD-GroupC,GroupF-GroupE,GroupH-GroupG, levels=design)
+fit1 <- contrasts.fit(fit,contrasts=cont)
+fit1 <- eBayes(fit1) # calculates t-stats, log odds and standard errors
+fit1$t #contrasts
+fit1$p.value
+decide_tcga <- decideTests(fit1, adjust.method="BH", p.value=0.05, lfc = 0.6) #LOG2 0.6 is ~1,5x change #this contains BOOLEANS on whether there is DE
+library(tibble)
+my_results <- data.frame(fit1$t,decide_tcga, fit1$p.value)
+intersect_UP <- my_results %>% 
+  rownames_to_column('gene')  %>% 
+  dfilter(GroupB...GroupA.1+GroupD...GroupC.1+GroupF...GroupE.1+GroupH...GroupG.1==4) %>%
+  mutate(sum_FC=GroupB...GroupA+GroupD...GroupC+GroupF...GroupE+GroupH...GroupG) %>%
+  dselect(-GroupB...GroupA.1,-GroupD...GroupC.1,-GroupF...GroupE.1,-GroupH...GroupG.1) %>%
+  arrange(-sum_FC) %>%
+  column_to_rownames('gene')
+
+head(intersect_UP, n=50)
+
+vennDiagram(decide_tcga,cex=c(1.1,1,0.7), include= "up", lwd=1, circle.col=c("blue"))
+heatDiagram(decide_tcga,fit1,mar=c(2,8,1,1),primary=1 )
+
+write.table(intersect_UP,file="Lung_M2_DA_UPonly_ranked.txt",sep="\t",quote=FALSE,row.names=TRUE)
+
+```

@@ -1,0 +1,191 @@
+---
+title: "NASH.Rmd"
+author: "MX"
+date: "9/4/2020"
+output: html_document
+---
+
+```{r}
+library(limma)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(DESeq2)
+library(edgeR)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("d:/FLX/Files_from_Gene/R_functions.r")
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+```
+
+Read in the data file
+```{r}
+nash <- read.table("/Volumes/Picard/FLX/GCN2/NASH/GSE126848_Gene_counts_raw.txt.gz", header=TRUE)
+nash.meta <- read.table("/Volumes/Picard/FLX/GCN2/NASH/GSE126848_series_matrix.txt", header=TRUE) %>% data.frame %>% dfilter(Sample_title =="!Sample_description") %>% tibble::column_to_rownames("Sample_title") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample_title") %>% rename(Sample_description=X.Sample_description) %>% mutate(Sample_description = ifelse(nchar(Sample_description)==3,paste0("X0",Sample_description),paste0("X",Sample_description)))
+
+desc_colnames <- data.frame(Sample_description=colnames(nash)[2:length(nash)]) %>% left_join(nash.meta,by="Sample_description") %>% pull(Sample_title)
+
+colnames(nash) <- c("Gene",desc_colnames)
+
+save(nash, file="/Volumes/Picard/FLX/GCN2/NASH/nash.rdata")
+load("/Volumes/Picard/FLX/GCN2/NASH/nash.rdata")
+save(nash.norm, file="/Volumes/Picard/FLX/GCN2/NASH/nash_norm.rdata")
+load("/Volumes/Picard/FLX/GCN2/NASH/nash_norm.rdata")
+```
+
+Plot and normalize
+```{r}
+boxplot(nash[,2:58])
+nash.norm <- normalizeBetweenArrays(nash[,2:58])
+ggplot(nash %>% gather(Sample,Values,-Gene),aes(x=Sample, y=Values, group=Sample)) + geom_point() + scale_y_log10()
+ggplot(nash.norm %>% data.frame %>% gather(Sample,Values),aes(x=Sample, y=Values, group=Sample)) + geom_point() + scale_y_log10()
+
+nash.norm %<>% data.frame %>% mutate(Gene =nash$Gene) %>% dselect(Gene, everything())
+```
+
+```{r}
+nash848 <- getGEO("GSE126848")
+```
+
+
+Translate gene
+```{r}
+library(Hmisc)
+
+source("http://www.bioconductor.org/biocLite.R")
+require("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+listAttributes(mart)
+listEnsembl(mart)
+listDatasets(mart)
+annotLookup_h <- getBM(
+  mart = mart,
+  attributes = c(
+    "hgnc_symbol","affy_hugene_2_0_st_v1")  #GPL16686
+  )
+colnames(annotLookup_m) <- c("ID_REF","Gene")
+save(annotLookup_m,file="Affymouse430_2_HUGO.rdata") #GPL16686
+
+save(annotLookup_h,file="/Volumes/Picard/FLX/Reference_tables/Human_Affy_HuGene2_0v1_2HUGO.rdata")
+
+nash.gene <- nash.norm %>% left_join(annotLookup_h,by=c("Gene"="ensembl_gene_id")) %>% dselect(-Gene) %>% dselect(hgnc_symbol,everything()) %>% group_by(hgnc_symbol) %>% summarise_if(is.numeric, sum_mx) %>% dfilter(!is.na(hgnc_symbol), hgnc_symbol!="")
+```
+
+Plot markers
+```{r fig.height=6, fig.width=10}
+library(ggbeeswarm)
+
+isr_h <- c("DDIT3","TRIB3","PPP1R15A","ASNS","ATF4")
+GCN2_h_sig <- GCN2_human %>% pull(HumanName)
+GCN2_h_5marker <- c("RBPJ","WDR45","ANGPTL4","TMEM171","TCIM")
+
+nash.gene %>% dfilter(hgnc_symbol %in% c("EIF2AK4","ATF4","DDIT3","TRIB3","PPP1R15A","ASNS")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% separate(Sample, into=c("Type","Rep"),sep="_",remove=FALSE) %>% mutate(Type=factor(Type,levels=c("NASH","NAFL","Obese","Normal.weight"))) %>% ggplot(aes(x=Type,y=mRNA_signal, group=Type)) + geom_boxplot() + geom_beeswarm() + facet_wrap(~hgnc_symbol,scale="free_y")
+
+nash.gene %>% dfilter(hgnc_symbol %in% c("EIF2AK4","CD24","CD79A","TRIB3","PPP1R15A","ASNS")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% separate(Sample, into=c("Type","Rep"),sep="_",remove=FALSE) %>% mutate(Type=factor(Type,levels=c("NASH","NAFL","Obese","Normal.weight"))) %>% ggplot(aes(x=Type,y=mRNA_signal, group=Type)) + geom_boxplot() + geom_beeswarm() + facet_wrap(~hgnc_symbol,scale="free_y")
+
+nafl <- nash.gene %>% dfilter(hgnc_symbol %in% c("ATF4")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% separate(Sample, into=c("Type","Rep"),sep="_",remove=FALSE) %>% dfilter(Type=="NAFL") %>% pull(mRNA_signal)
+
+nash <- nash.gene %>% dfilter(hgnc_symbol %in% c("DDIT3")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% separate(Sample, into=c("Type","Rep"),sep="_",remove=FALSE) %>% dfilter(Type=="NASH") %>% pull(mRNA_signal)
+
+obese <- nash.gene %>% dfilter(hgnc_symbol %in% c("DDIT3")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% separate(Sample, into=c("Type","Rep"),sep="_",remove=FALSE) %>% dfilter(Type=="Obese") %>% pull(mRNA_signal)
+
+normal <- nash.gene %>% dfilter(hgnc_symbol %in% c("ATF4")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% separate(Sample, into=c("Type","Rep"),sep="_",remove=FALSE) %>% dfilter(Type=="Normal.weight") %>% pull(mRNA_signal)
+
+t.test(nash,obese)
+%>% mutate(Type=factor(Type,levels=c("NASH","NAFL","Obese","Normal.weight"))) 
+
+nash.gene %>% dfilter(hgnc_symbol %in% GCN2_h_5marker) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% separate(Sample, into=c("Type","Rep"),sep="_",remove=FALSE) %>% ggplot(aes(x=Type,y=mRNA_signal, group=Type)) + geom_boxplot() +geom_beeswarm() + facet_wrap(~hgnc_symbol,scale="free_y")
+```
+
+```{r}
+nash_treat <- read.table(file="/Volumes/Picard/FLX/GCN2/NASH/GSE106737_series_data.txt",header=TRUE, skip=1)
+nash_treat_meta <- read.table(file="/Volumes/Picard/FLX/GCN2/NASH/GSE106737_series_meta.txt") %>% tibble::column_to_rownames("V1") %>% t %>% data.frame
+nash_treat_meta %<>% separate(Sample_title, into=c("NA","No","gender","timepoint","NASH","T2D"),remove=FALSE, sep="-|_") %>% mutate(Outcome=c(rep("RYGB_R",42),rep("LSI_R",20),rep("LSI_NR",20),rep("Basal",29)))
+
+nash_treat %<>% left_join(annotLookup_h,by=c("ID_REF"="affy_hugene_2_0_st_v1")) %>% dselect(-ID_REF) %>% dselect(hgnc_symbol, everything()) %>% dfilter(!is.na(hgnc_symbol),hgnc_symbol != "") %>% group_by(hgnc_symbol) %>% summarise_if(is.numeric, sum_mx) 
+annotLookup_h
+nash_treat_norm <- normalizeBetweenArrays(nash_treat[,2:111]) #28546
+nash_treat_norm %<>% data.frame %>% mutate(Gene=nash_treat$hgnc_symbol) %>% dselect(Gene, everything())
+
+nash_basal <- nash_treat_norm[,84:111]
+nash_basal %<>% mutate(Gene=nash_treat$Gene) %>% dselect(Gene, everything())
+nash_treat <- nash_treat_norm[,1:83]
+
+nash_basal_meta <- nash_treat_meta[83:111,]
+nash_treat_meta <- nash_treat_meta[1:82,]
+```
+
+Plot
+
+```{r fig.height=6, fig.width=12}
+nash_treat %>% dfilter(Gene %in% c("EIF2AK4","ATF4","DDIT3","TRIB3","PPP1R15A","ASNS")) %>% gather(Sample,mRNA_signal,-Gene) %>% left_join(nash_treat_meta, by=c("Sample"="Sample_geo_accession")) %>% ggplot(aes(x=interaction(timepoint,Outcome),y=mRNA_signal)) + geom_boxplot() + geom_beeswarm() + facet_wrap(~Gene,scale="free_y") + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1))
+```
+
+Plot baseline
+```{r fig.height=5, fig.width=12}
+
+nash_basal %>% dfilter(Gene %in% c("EIF2AK4","ATF4","DDIT3")) %>% gather(Sample,mRNA_signal,-Gene) %>% left_join(nash_basal_meta, by=c("Sample"="Sample_geo_accession")) %>% mutate(NASH= factor(NASH, levels=c("NONASH","NASH")) ,T2D= factor(T2D, levels=c("NOT2D","T2D"))) %>% mutate(NASH=if_else(grepl("^NO",NASH),"Control","NASH")) %>% mutate(T2D=if_else(grepl("^NO",T2D),"","T2D")) %>% ggplot(aes(x=interaction(T2D,NASH),y=mRNA_signal)) + geom_boxplot() + geom_beeswarm() + facet_wrap(~Gene,scale="free_y") + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1)) + scale_x_discrete(labels= c("Control","Type II Diabetes (T2D)","NASH","NASH & T2D"))
+
+control <- nash_basal %>% dfilter(Gene %in% c("DDIT3")) %>% gather(Sample,mRNA_signal,-Gene) %>% left_join(nash_basal_meta, by=c("Sample"="Sample_geo_accession")) %>% dfilter(grepl("NONASH_NOT2D",Sample_title)) %>% pull(mRNA_signal)
+
+nash <- nash_basal %>% dfilter(Gene %in% c("DDIT3")) %>% gather(Sample,mRNA_signal,-Gene) %>% left_join(nash_basal_meta, by=c("Sample"="Sample_geo_accession")) %>% dfilter(grepl("NASH_T2D",Sample_title)) %>% pull(mRNA_signal)
+
+t.test(control,nash)
+#,"TRIB3","PPP1R15A","ASNS"
+```
+
+JCI 2017 Study with 104 NASH, 44 no NASH patients (all obese)
+
+GSEMatrix=TRUE only downloads the metadata, judging from the file size that is created
+
+      NASH liver baseline      NASH liver follow-up    no NASH liver baseline 
+                      104                        22                        44 
+  no NASH liver follow-up  undefined liver baseline undefined liver follow-up 
+                       54                         4                         3 
+```{r}
+BiocManager::install("GEOquery")
+library(GEOquery)
+gse <- getGEO("GSE83452",GSEMatrix=FALSE) #this downloads the expression data
+gse.matrix <- getGEO("GSE83452",GSEMatrix=TRUE) # this gives the metadata
+
+gse@gsms[[1]]@dataTable@table #this is where the actual read data are stored as Log2 RMA signal
+data_series <- cbind.data.frame(lapply(gse@gsms,function(i){i@dataTable@table %>% dselect(VALUE)}))
+data_meta <- data.frame(lapply(gse@gsms,function(i){i@header$source_name_ch1})) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")
+colnames(data_meta) <- c("Sample","Sample_type")
+data_meta %<>% left_join(translate_type, by="Sample_type")
+translate_type <- data_meta %>% dselect(Sample_type) %>% unique %>% mutate(Type=factor(c("Healthy_baseline","NASH_baseline","Healthy_followup","Undefined_baseline","NASH_followup","Undefined_followup"),levels=c("Healthy_baseline","Healthy_followup","NASH_baseline","NASH_followup","Undefined_baseline","Undefined_followup")))
+#str(gse@gsms[[1]])  
+#gse@gsms[[2]]@dataTable@table
+#gse@gsms[[1]]@header$geo_accession #sample name
+#gse@gsms[[1]]@header$source_name_ch1 # sample_description
+names <- list(lapply(gse@gsms,function(i){i@header$geo_accession}))
+colnames(data_series) <- names
+rownames(data_series) <- gse@gsms[[1]]@dataTable@table %>% pull(ID_REF)
+data_series %<>% tibble::rownames_to_column("ID_REF")
+```
+
+Normalize data
+Translate to gene name and group by gene, filter out non-genes
+```{r}
+library(limma)
+data_452_norm <-normalizeBetweenArrays(data_series)
+data_452_norm[1:5,1:5]
+data_452_norm %<>% data.frame %>% tibble::rownames_to_column("ID_REF") %>% left_join(annotLookup_h, by =c("ID_REF" = "affy_hugene_2_0_st_v1")) %>% dselect(ID_REF,hgnc_symbol, everything())
+#annotLookup_h %<>% mutate(affy_hugene_2_0_st_v1 = as.character(affy_hugene_2_0_st_v1))
+data_452_gene <- data_452_norm %>% dfilter(!is.na(hgnc_symbol),hgnc_symbol != "") %>% dselect(-ID_REF) %>% group_by(hgnc_symbol) %>% summarise_if(is.numeric,sum_mx) # 28546
+```
+
+Plot markers
+
+```{r fig.height=6, fig.width=12}
+data_452_gene %>% dfilter(hgnc_symbol %in% c("EIF2AK4","ATF4","DDIT3","TRIB3","ATF3","ASNS")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% left_join(data_meta, by="Sample") %>% dfilter(Type %nin% c("Undefined_baseline","Undefined_followup")) %>% ggplot(aes(x=Type,y=mRNA_signal)) + geom_boxplot() + geom_beeswarm() + facet_wrap(~hgnc_symbol,scale="free_y") + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1))
+
+pre <- data_452_gene %>% dfilter(hgnc_symbol %in% c("ASNS")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% left_join(data_meta, by="Sample") %>% dfilter(Type=="Healthy_baseline") %>% pull(mRNA_signal)
+post <- data_452_gene %>% dfilter(hgnc_symbol %in% c("ASNS")) %>% gather(Sample,mRNA_signal,-hgnc_symbol) %>% left_join(data_meta, by="Sample") %>% dfilter(Type=="Healthy_followup") %>% pull(mRNA_signal)
+
+t.test(pre,post)
+```
+

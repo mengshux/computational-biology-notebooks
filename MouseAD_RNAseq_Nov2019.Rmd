@@ -1,0 +1,661 @@
+---
+title: "MouseAD_RNAseq_Nov.rmd"
+author: "Mengshu Xu"
+date: "11/10/2019"
+output: html_document
+---
+
+This script is for looking at Mouse AD model bulk RNA sequencing results. This is copied from the pilot experiment
+This experiment is designed to detect low abundance transcripts of IL22, IL17 etc. which are functional markers of TH2 cells. 
+1ug of total RNA was submitted for library building, with notes to load as much RNA as possible. 
+Each sample was sequenced Illumina HiSeq PE100 at 50 Million reads. 
+Alignment was done with Kallisto to the GRCm38/mm10 transcriptome build fasta file, downloaded from UCSC Table Browser. The exact parameters are recorded in Apple Notes. 
+Update: the Apple notes have been lost. 
+
+
+```{r}
+library(limma)
+library(tibble)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+#BiocManager::install("DESeq2")
+library(DESeq2)
+#BiocManager::install("edgeR")
+library(edgeR)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+source("d:/FLX/Files_from_Gene/R_functions.r")
+
+
+#library(devtools)
+#install_github("vqv/ggbiplot")
+```
+Data File
+
+```{r}
+load("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/Kallisto_stranded_Nov2019.rdata")
+load("d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/Kallisto_stranded_Nov2019.rdata")
+
+save(AD_norm,file="/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_Norm_Nov2019.rdata")
+load("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_Norm_Nov2019.rdata")
+load("d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_Norm_Nov2019.rdata")
+#EdgeR data_file
+load("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_EdgeR.rdata")
+
+```
+
+Convert AD_norm to human gene names for xCell analysis
+
+```{r}
+load("/Volumes/Enterprise/FLX/Reference_tables/mouse_human_gene.rdata")
+mouseAnnot
+AD_norm_human <- inner_join(AD_norm,mouseAnnot,by=c("Symbol"="GENE.SYMBOL"))
+AD_norm_human %<>% dselect(Symbol,HumanName,everything()) %>% dselect(-Gene,-Symbol)
+write.table(AD_norm_human, file="AD_norm_human.txt", sep="\t",quote=FALSE, row.names = FALSE)
+```
+
+
+Load the gene translation table
+
+```{r}
+gencode_symbol <- read.table("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulk_RNAseq_Pilot/GRCm38_GENCODE2SYMBOL.txt", header=FALSE)
+gencode_symbol <- read.table("d:/FLX/Atopic_Dermatitis/bulk_RNAseq_Pilot/GRCm38_GENCODE2SYMBOL.txt", header=FALSE)
+colnames(gencode_symbol) <- c("Gene","Symbol")
+```
+
+Load the data
+Select the tpm for this table
+Merge the data, rename the columns, and tranlate the ENCODE genes to symbols
+
+```{r}
+files <- base::list.files("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/kallisto/", pattern="^[0-9]")
+files <- base::list.files("d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/kallisto", pattern="^[0-9]")
+#data_files <- lapply(files, function(i){read.table(paste0("d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/kallisto/",i),header=TRUE)})
+data_files <- lapply(files, function(i){read.table(paste0("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/kallisto/",i),header=TRUE)})
+AD_counts <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+#colnames(AD_counts) <- c("Vehicle_ETOH_UTR","Vehicle_ETOH","Vehicle_FITC_UTR","Vehicle_FITC","DEX_ETOH_UTR","DEX_ETOH","DEX_FITC_UTR","DEX_FITC","RPT193_ETOH_UTR","RPT193_ETOH","RPT193_FITC_UTR","RPT193_FITC")
+colnames(AD_counts) <- paste0(rep(c("RPT193","anti-IL13","Isotype","Predose","Vehicle","DEX"), each=3),rep(c("-1","-2","-3"),6))
+
+Genes <- sub("mm10_knownGene_","",data_files[[1]]$target_id)
+AD_counts %<>% mutate(Gene = Genes) %>% dselect(Gene, everything())
+AD_counts <- left_join(AD_counts, gencode_symbol, by="Gene") %>% dselect(Symbol,Gene, everything())
+
+save(AD_counts,file="d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/Kallisto_stranded_Nov2019.rdata")
+save(AD_counts,file="/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/Kallisto_stranded_Nov2019.rdata")
+``` 
+
+
+
+########################
+Normalize data
+Limma
+Default is quantile Norm
+########################
+```{r fig.height=4, fig.width=10}
+boxplot(AD_counts[,3:20])
+
+??normalizeBetweenArrays()
+
+AD_norm <- normalizeBetweenArrays(AD_counts[,3:20])
+AD_scale <- normalizeBetweenArrays(AD_counts[,3:20], method="scale")
+AD_cl <- normalizeBetweenArrays(AD_counts[,3:20], method="cyclicloess")
+#put the gene and transcript names back on the matrix
+AD_norm %<>% data.frame %>% mutate(Symbol=AD_counts$Symbol, Gene=AD_counts$Gene) %>% dselect(Symbol,Gene,everything())
+AD_cl %<>% data.frame %>% mutate(Symbol=AD_counts$Symbol, Gene=AD_counts$Gene) %>% dselect(Symbol,Gene,everything())
+AD_scale %<>% data.frame %>% mutate(Symbol=AD_counts$Symbol, Gene=AD_counts$Gene) %>% dselect(Symbol,Gene,everything())
+
+boxplot(AD_scale[,3:20],log10="y", ylim=c(0,10000))
+
+ggplot(AD_counts[,3:20] %>% gather(Sample, mRNA) %>% dfilter(mRNA != 0), aes(x=Sample, y=mRNA)) + geom_boxplot(outlier.shape = NA) + ylim(0.01,5) + coord_trans(y='log10') +  labs(y="Log10 mRNA signal") + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("MouseAD_raw.jpg", width=10, height=4, dpi=300, plot= last_plot(), units = "in")
+ggplot(AD_norm[,3:20] %>% gather(Sample, mRNA) %>% dfilter(mRNA != 0), aes(x=Sample, y=mRNA)) + geom_boxplot(outlier.shape = NA) + ylim(0.01,5) + coord_trans(y='log10') +  labs(y="Log10 mRNA signal") + theme(axis.text.x=element_text(angle=90, size=14)) + ggsave("MouseAD_Qnorm.jpg", width=10, height=4, dpi=300, plot= last_plot(), units = "in")
+range(AD_norm[,3:20]) #0 to 25000
+```
+UMAP with limma normalized data
+```{r}
+library(umap)
+library(ggrepel)
+custom.config <- umap.defaults
+custom.config$n_neighbors = 2
+custom.config$spread= 3
+custom.config$min_dist = 2
+AD_umap <- umap(AD_norm %>% dselect(-Symbol,-Gene) %>% t %>% data.frame, custom.config)
+plot(AD_umap$layout, col=rep(1:6, each=3)) #sooooooo ugly
+colnames(AD_umap$layout) <- c("UMAP_dim_1","UMAP_dim_2")
+
+ggplot(AD_umap$layout %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Group =factor(rep(c("RPT193","anti-IL13","Isotype","Predose","Vehicle","DEX"), each=3))), aes(x=UMAP_dim_1, y=UMAP_dim_2,label=Group, alpha=0.8, fill=Group)) + geom_label_repel(nudge_x=5, label.padding = unit(0.1, "lines")) + geom_point(size=3) + ggsave("MouseAD_limma_UMAP.jpg", width=6, height=4, dpi=300, plot= last_plot(), units = "in")
+```
+
+Normalize data with DESeq2
+DESeq2 has a PCA function
+DESeq2 requires integer read count input, which is never available, especially from Kallisto, but there is a tximport function that can take care of this
+https://bioconductor.statistik.tu-dortmund.de/packages/3.3/bioc/vignettes/tximport/inst/doc/tximport.html
+Even the ouput from tximport has to be rounded into integers before DESeq2 takes it
+
+https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#transcript-abundance-files-and-tximport-tximeta
+
+```{r}
+library(DESeq2)
+#BiocManager::install("tximport")
+library(tximport)
+my_files <- base::list.files("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/kallisto/", pattern="^[0-9]", full.names=TRUE)
+all(file.exists(my_files)) # TRUE
+# A tx2gene file has to be created
+
+gencode_symbol <- read.table("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulk_RNAseq_Pilot/GRCm38_GENCODE2SYMBOL.txt", header=FALSE)
+colnames(gencode_symbol) <- c("Gene","Symbol")
+
+AD_des <- tximport(my_files, type="kallisto", tx2gene=gencode_symbol)
+AD_des$counts
+AD_des$abundance
+#Create the DESeq2 object 
+coldata <- rep(c("RPT193","anti-IL13","Isotype","Predose","Vehicle","DEX"), each=3) %>% data.frame
+colnames(coldata) <- "condition"
+
+ddsTxi <- DESeqDataSetFromTximport(AD_des,
+                                   colData = coldata,
+                                   design = ~ condition)
+#str(AD_des) #this is a combo of 3 matrizes, need to choose one. The manual is wrong
+#ncol(AD_des$abundance %>% data.frame) # 18
+#Filter
+keep <- rowSums(counts(ddsTxi)) >= 10
+table(keep)
+ddsTxi <- ddsTxi[keep,]
+#specify reference level
+ddsTxi$condition <- relevel(ddsTxi$condition, ref = "Vehicle")
+ddsTxi <- DESeq(ddsTxi)
+
+save(ddsTxi,file="AD_DESeq2.rdata")
+load("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_DESeq2.rdata")
+load("d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_DESeq2.rdata")
+```
+
+Inspect DE results
+
+DataFrame with 6 rows and 2 columns
+                       type                                         description
+                <character>                                         <character>
+baseMean       intermediate           mean of normalized counts for all samples
+log2FoldChange      results log2 fold change (MLE): Condition RPT193 vs Vehicle
+lfcSE               results         standard error: Condition RPT193 vs Vehicle
+stat                results         Wald statistic: Condition RPT193 vs Vehicle
+pvalue              results      Wald test p-value: Condition RPT193 vs Vehicle
+padj                results                                BH adjusted p-values
+
+https://www.biostars.org/p/282295/
+```{r}
+
+resultsNames(ddsTxi_Veh)
+resultsNames(ddsTxi)
+
+ddsTxi$condition <- relevel(ddsTxi$condition, ref = "Vehicle")
+ddsTxi$condition <- relevel(ddsTxi$condition, ref = "Isotype")
+ddsTxi_Veh <- ddsTxi
+ddsTxi_Iso <- ddsTxi
+
+
+#Get DE results
+res_193 <- results(ddsTxi_Veh, contrast=c("condition","RPT193","Vehicle"))
+res_il13 <- results(ddsTxi, name="condition_anti.IL13_vs_Isotype")
+res_dex <- results(ddsTxi_Veh, name="condition_DEX_vs_Vehicle")
+res_Il13vsVeh <- results(ddsTxi_Veh, name="condition_anti.IL13_vs_Vehicle")
+
+#Filter for significance
+resSig <- res_193[which(res_193$padj < 0.11),] # 295 genes
+res_il13Sig <- res_il13[which(res_il13$padj < 0.11),] #16
+res_il13Sigpvalue <- res_il13[which(res_il13$pvalue < 0.01),] # 222
+res_Il13vsVehSig <- res_Il13vsVeh[which(res_Il13vsVeh$padj < 0.11),] # 161
+res_dexSig <- res_dex[which(res_dex$padj < 0.01),] #1491
+
+#Calculate overlaps
+length(intersect(rownames(res_dexSig),rownames(resSig))) #((1491,295)226
+length(intersect(rownames(res_il13Sig),rownames(resSig))) # (60,295) 4   "Eif4a-ps4" "Lix1l"     "Mmp12"     "Paqr3"    
+length(intersect(rownames(res_il13Sigpvalue),rownames(resSig))) #(222,295) 15
+length(intersect(intersect(rownames(res_il13Sigpvalue),rownames(resSig)),rownames(res_dexSig))) #(222,295,1491) 12
+length(intersect(rownames(res_Il13vsVehSig),rownames(resSig))) #(161, 295) 87
+length(intersect(rownames(res_il13Sig),rownames(res_dexSig))) #(1491, 295) 15
+
+#reorder for export
+res_il13Sigpvalue_order <- res_il13Sigpvalue[order(res_il13Sigpvalue$log2FoldChange),] #222
+res_il13Sigpvalue_order %>% write.table(file= "DESeq_IL13vsIsotype_pvalue_sig0.01.txt", sep="\t", quote=FALSE)
+
+res2 # Condition RPT193 vs Vehicle 
+
+resOrdered <- resSig[order(resSig$log2FoldChange),] #227 genes
+resSig %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene == "Il4")
+mcols(res, use.names=TRUE) # column information 
+
+res2$baseMean %>% summary
+
+write.table(as.data.frame(resOrdered), file="RPT193vsVehicle_Sig0.11.csv",sep="\t",quote=FALSE)295
+
+#DIY code
+res.df <- cbind(res$baseMean,res$log2FoldChange) %>% data.frame
+colnames(res.df) <- c("mean","log2FC")
+res.df %>% ggplot(aes(x= mean,y=log2FC)) + geom_point() + coord_trans(x='log10')
+
+res %>% data.frame %>% ggplot(aes(x=log2FoldChange,y=-log10(padj))) + geom_point(size=0.2) #+ coord_trans(x='log10')
+
+```
+
+Combine DE results for plotting
+
+```{r fig.height=3, fig.width=6}
+AD_combo <- cbind(res_193$log2FoldChange,res_il13$log2FoldChange,res_Il13vsVeh$log2FoldChange,res_dex$log2FoldChange)
+colnames(AD_combo) <- c("RPT193vsVeh","IL13vsIso","IL13vsVeh","DexvsVeh")
+rownames(AD_combo) <- rownames(res_193)
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% write.table(file="/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_combo.txt", sep="\t", row.names=FALSE)
+
+AD_combo <- cbind(res_193$log2FoldChange,res_il13$log2FoldChange,res_dex$log2FoldChange)
+colnames(AD_combo) <- c("RPT193vsVeh","IL13vsIso","DexvsVeh")
+rownames(AD_combo) <- rownames(res_193)
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% mutate(Gene2=Gene) %>% dselect(Gene,Gene2,everything()) %>% write.table(file="/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_combo2.cdt", sep="\t", row.names=FALSE)
+
+AD_combo_padj <- cbind(res_193$padj,res_il13$padj,res_Il13vsVeh$padj,res_dex$padj)
+colnames(AD_combo_padj) <- c("RPT193vsVeh_padj","IL13vsIso_padj","IL13vsVeh_padj","DexvsVeh_padj")
+rownames(AD_combo_padj) <- rownames(res_193)
+#AD_all <- left_join(AD_combo %>% data.frame, AD_combo_padj %>% data.frame, by="Gene")
+
+# select genes that are significant in the 193 sample
+#AD_all %>% dfilter(Gene %in% rownames(resSig)) %>% arrange(desc(RPT193vsVeh))
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% rownames(resSig)) %>% arrange(desc(RPT193vsVeh)) %>%  mutate(Gene2=Gene) %>% dselect(Gene,Gene2,everything()) %>% write.table(file="/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/AD_combo_Sig.cdt", sep="\t", row.names=FALSE)
+
+
+geneorder <- AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene")  %>% dfilter(Gene %in% rownames(resSig)) %>% arrange(RPT193vsVeh) %>% dselect(Gene)
+geneorder_all <- AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(RPT193vsVeh) %>% dselect(Gene)
+
+#plot all genes as heatmap
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% gather(Sample,Log2FC,-Gene) %>% mutate(Gene=factor(Gene,levels=geneorder_all[,1])) %>% ggplot(aes(x=Gene,y=Sample,fill=Log2FC)) + geom_tile() +  scale_fill_gradient2(low = "dodgerblue3", high = "red", na.value="grey", limit = c(-10,5)) + ggsave("MouseAD_heatmap_all.jpg", width=10, height=5, dpi=300, plot= last_plot(), units = "in")
+
+#Plot All genes as scatter plot 
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% gather(Sample,Log2FC,-Gene) %>% mutate(Gene=factor(Gene,levels=geneorder_all[,1])) %>% ggplot(aes(x=Gene,y=Log2FC, colour=Log2FC)) + geom_point() + ylim(-5,5) + facet_wrap(~Sample, ncol=1) + scale_color_gradient2(low = "dodgerblue3", high = "red", na.value="grey", limit = c(-5,5))  + ggsave("MouseAD_scatter_all.jpg", width=10, height=5, dpi=300, plot= last_plot(), units = "in")
+
+#Plot 193 Sig genes as scatter plot 
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% rownames(resSig)) %>% gather(Sample,Log2FC,-Gene) %>% mutate(Gene=factor(Gene,levels=geneorder[,1])) %>% ggplot(aes(x=Gene,y=Log2FC, colour=Log2FC)) + geom_point(size=0.2) + ylim(-5,5) + facet_wrap(~Sample, ncol=1) + scale_color_gradient2(low = "forestgreen", high = "purple", na.value="grey", limit = c(-5,5))  + ggsave("MouseAD_Sig_scatter.jpg", width=6, height=3, dpi=300, plot= last_plot(), units = "in")
+
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% rownames(resSig)) %>% gather(Sample,Log2FC,-Gene) %>% mutate(Gene=factor(Gene,levels=geneorder[,1])) %>% mutate(Sample=factor(Sample,levels=c("RPT193vsVeh","IL13vsIso","DexvsVeh"))) %>% ggplot(aes(x=Gene,y=Log2FC)) + geom_point(size=0.2) + ylim(-5,5) + facet_wrap(~Sample, ncol=1, theme(strip.text.x = element_blank()))  + ggsave("MouseAD_Sig_scatter_nocol.jpg", width=8, height=3, dpi=300, plot= last_plot(), units = "in")
+
+#plot 193 sig as heatmap
+
+library(scales)
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% rownames(resSig)) %>% gather(Sample,Log2FC,-Gene) %>% mutate(Gene=factor(Gene,levels=geneorder[,1])) %>% ggplot(aes(x=Gene,y=Sample,fill=Log2FC)) + geom_tile() +  scale_fill_gradient2(low = "forestgreen", high = "purple", na.value="grey", limit = c(-5,5), oob= squish) + ggsave("MouseAD_Sig_heatmap.jpg", width=6, height=2, dpi=300, plot= last_plot(), units = "in")
+
+AD_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% rownames(resSig)) %>% gather(Sample,Log2FC,-Gene) %>% mutate(Gene=factor(Gene,levels=geneorder[,1])) %>% ggplot(aes(x=Gene,y=Sample,fill=Log2FC)) + geom_tile() +  scale_fill_gradient2(low = "forestgreen", high = "purple", na.value="grey", limit = c(-5,5)) + ggsave("MouseAD_Sig_heatmap.jpg", width=6, height=2, dpi=300, plot= last_plot(), units = "in")
+
+
+```
+
+
+
+
+Volcano Plot
+
+https://www.biostars.org/p/282295/
+
+```{r fig.height=10, fig.width=8}
+install.packages("devtools")
+devtools::install_github("hadley/devtools")
+devtools::install_github('kevinblighe/EnhancedVolcano')
+library(EnhancedVolcano)
+
+pdf("Volcanoplot_RPT193vsVeh.pdf",width = 8, height = 10)
+EnhancedVolcano(res_193,
+                 lab = rownames(res_193),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 xlim = c(-7, 7),
+                 ylim = c(-0.1, 6),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'RPT193 versus Vehicle',
+                 pCutoff = 0.11,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+
+pdf("Volcanoplot_Il13vsIsotype_padj.pdf",width = 8, height = 10)
+EnhancedVolcano(res_il13,
+                 lab = rownames(res_il13),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 xlim = c(-7, 7),
+                 ylim = c(-0.1, 6),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'anti IL13 versus Isotype',
+                 pCutoff = 0.11,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+
+pdf("Volcanoplot_Il13vsIsotype_pvalue0.01.pdf",width = 8, height = 10)
+EnhancedVolcano(res_il13,
+                 lab = rownames(res_il13),
+                 x = 'log2FoldChange',
+                 y = 'pvalue',
+                 xlim = c(-7, 7),
+                 ylim = c(-0.1, 6),
+                 title = 'anti IL13 versus Isotype',
+                 pCutoff = 0.01,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+
+pdf("Volcanoplot_Dex_padj0.01.pdf",width = 8, height = 10)
+EnhancedVolcano(res_dex,
+                 lab = rownames(res_il13),
+                 x = 'log2FoldChange',
+                 y = 'pvalue',
+                 xlim = c(-7, 7),
+                 ylim = c(-0.1, 22.5),
+                ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'Dex versus vehicle',
+                 pCutoff = 0.01,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+```
+
+MA plot
+Use DESeq2::plotMA or it's calling the wrong function from Limma instead!
+
+lfcStrink function removes noise associated with log2 fold changes from low abundance genes
+```{r}
+resLFC <- lfcShrink(ddsTxi, coef="condition_RPT193_vs_Vehicle", type="apeglm")
+DESeq2::plotMA(res)
+DESeq2::plotMA(resLFC, ylim=c(-3,2))
+DESeq2::plotMA(resLFC, ylim=c(-1,1))
+plotMA # this shows which package the function is being called from 
+DESeq2::plotMA(resLFC, ylim=c(-3,2))
+idx <- identify(res$baseMean, res$log2FoldChange)
+rownames(res)[idx]
+```
+
+Gene plotting
+
+```{r}
+plotCounts(ddsTxi, gene=which.min(res$padj), intgroup="condition")
+plotCounts(ddsTxi, gene="Ccl4", intgroup="condition")
+log2FoldChange
+```
+Data transformations for visualization: transformations on the log2 scale that is normalized to library size and other factors. Normalization methods are used which don't rely on normalizing on the sample mean
+Blind Dispersion estimation
+vst or rlog, blind=true will disregard any sample information, but is not approapriate when treatments are expected to create large changes. 
+```{r}
+vsd <- vst(ddsTxi, blind=FALSE)
+rld <- rlog(ddsTxi, blind=FALSE)
+head(assay(vsd),3)
+
+# this gives log2(n + 1)
+ntd <- normTransform(ddsTxi)
+```
+
+Heatmap
+
+Very confusing colour scheme
+```{r fig.height=25, fig.width=8}
+library("pheatmap")
+#select <- order(rowMeans(counts(ddsTxi[rownames(resOrdered),],normalized=TRUE)),
+                decreasing=FALSE)[1:270]
+df <- as.data.frame(colData(ddsTxi)[,c("condition")])
+pheatmap(assay(ntd)[rownames(resOrdered),], cluster_rows=FALSE, show_rownames=TRUE,
+         cluster_cols=FALSE, annotation_col=df)
+```
+
+
+
+EdgeR
+
+calcNormFactors normalizes for RNA composition differences between samples by finding a set of scaling factors (genes?) that minimize the amout of log-fold changes between the samples for most genes. This is calculated using a trimmed meaof M-values or TMM between each pair of samples. The Library multiplied by this scaling factor become the "effective library size"
+TMM is recommended when more than half of mRNAs are not expected to change between samples
+
+norm.factors: a normalization factor < 1 means that a small number of super abundant transcripts are taking over the counts, causing the apparent levels of other genes to appear lower than they are, these libraries will be scaled up. 
+
+EdgeR does minimal normalization of samples, it is only concerned with Differential analysis; therefore this tool can be used for DE and signature searching, it is not ideal for data graphing
+DE significance tested by the Negative Binomial Distribution, which is similar to Fisher's exact test
+This test does pairwise comparisons, so I will only load two conditions at a time
+```{r fig.height=6, fig.width=6}
+y <- DGEList(counts= AD_counts %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% data.matrix(rownames.force=TRUE), group=treat) #
+treat <-factor(rep(c("RPT193","anti-IL13","Isotype","Predose","Vehicle","DEX"), each=3))
+treat <- relevel(treat, ref="Vehicle")
+
+
+#MDS plot
+plotMDS(y, col=rep(1:6, each=3))
+### DEX-1 is f-d up exclude it and redo 
+z <- DGEList(counts= AD_counts %>% dselect(-Symbol, -'DEX-1') %>% tibble::column_to_rownames("Gene") %>% data.matrix(rownames.force=TRUE), group=z_treat) #
+z_treat <-c(rep(c("RPT193","anti-IL13","Isotype","Predose","Vehicle"), each=3), "DEX","DEX") %>% factor
+z_treat <- relevel(z_treat, ref="Vehicle")
+z <- calcNormFactors(z)
+z <- estimateCommonDisp(z)
+z$samples
+```
+
+Filter data for non-expressed genes
+keep
+ FALSE   TRUE 
+107485  31445 
+```{r}
+keep <- rowSums(cpm(y)>2) >= 3
+table(keep) # look at how many gene were filtered out
+
+y <- y[keep, , keep.lib.sizes=FALSE]
+y <- calcNormFactors(y)
+y <- estimateCommonDisp(y)
+y$samples
+#MDS plot
+plotMDS(y, col=rep(1:6, each=3))
+#UMAP
+library(umap)
+AD_umap <- umap(y$counts %>% t %>% data.frame, custom.config)
+AD_names <- y$counts %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")
+custom.config <- umap.defaults
+custom.config$n_neighbors = 2
+custom.config$spread= 3
+custom.config$min_dist = 2
+plot(AD_umap$layout, col=rep(1:6, each=3))
+#plot.iris(AD_umap$layout, rownames(AD_umap$layout))
+colnames(AD_umap$layout) <- c("UMAP_dim_1","UMAP_dim_2")
+ggplot(AD_umap$layout %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Group =factor(rep(c("RPT193","anti-IL13","Isotype","Predose","Vehicle","DEX"), each=3))), aes(x=UMAP_dim_1, y=UMAP_dim_2,label=Group, alpha=0.8, fill=Group)) + geom_label_repel(nudge_x=5, label.padding = unit(0.1, "lines")) + geom_point(size=3) + ggsave("MouseAD_UMAP.jpg", width=6, height=4, dpi=300, plot= last_plot(), units = "in")
+save(y[,1:17],file="AD_EdgeR.rdata")
+```
+
+
+PCA
+!!! PCA has the samples in rows, and variable in columns, so transpose the data first
+This software package visualization tools is for small datasets. The number of genes overwhealms the visualization tools
+```{r}
+AD_PCA <- prcomp(y$counts %>% t %>% data.frame,center = TRUE,scale. = TRUE)
+summary(AD_PCA$x)
+summary(AD_PCA$rotation)
+dimnames(AD_PCA$rotation)
+AD_PCA <- AD_norm %>% dselect(-Gene) %>% group_by(Symbol) %>% summarise_if(is.numeric,sum) %>% mutate(mysum= rowSums(.[2:19])) %>% dfilter(mysum > 0) %>% dselect(-mysum) %>% tibble::column_to_rownames("Symbol")
+PCA_limma <- prcomp(AD_PCA, scale. = TRUE)
+PCA_limma$x %>% data.frame %>% tibble::rownames_to_column("Gene") %>% arrange(PC1) %>% tail(n=30)
+```
+Visualize PCAs with ggbiplot
+The plot looks like a nightmare
+```{r}
+library(devtools)
+install_github("vqv/ggbiplot")
+library(ggbiplot)
+ggbiplot(AD_PCA,choices=c(3,4))
+
+```
+
+
+
+Hierarchical Clustering
+```{r}
+Hierarchical clustering
+clusters <- hclust(dist(AD_norm %>% dselect(-Symbol,-Gene) %>% t))
+plot(clusters)
+###DE analysis
+design <- model.matrix(~group)
+y <- estimateDisp(y,design)
+
+fit <- glmQLFit(y, design)
+qlf.193vsveh <- glmQLFTest(fit, contrast=c(0,0,0,0,1,-1))
+topTags(qlf.193vsveh, n=100)
+
+AD_DE_193vsVeh <- left_join(topTags(qlf.193vsveh, n=200) %>% data.frame %>% tibble::rownames_to_column("Gene"), gencode_symbol, by="Gene") %>% dselect(Symbol,Gene, everything()) %>% arrange(desc(logFC)) %>% write.table(file="AD_DE_193vsVehicle.txt")
+
+```
+
+
+Plot Housekeeping genes with various normalization methods
+
+The default Quantile normalization is still the best
+```{r fig.height=6, fig.width=15}
+#Compare normalization methods
+AD_cl %>% dfilter(Symbol=="Daxx") %>% dfilter(Gene=="ENSMUST00000079421.14")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Daxx TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+AD_cl %>% dfilter(Symbol=="Tbp") %>% dfilter(Gene=="ENSMUST00000079421.14")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Daxx TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+AD_scale %>% dfilter(Symbol=="Daxx") %>% dfilter(Gene=="ENSMUST00000079421.14")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Daxx TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+tbp <- AD_norm %>% dfilter(Symbol=="Tbp") %>% dfilter(Gene=="ENSMUST00000014911.11")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot(show.legend = FALSE) + geom_point(show.legend = FALSE) + theme(axis.text = element_text(size=11)) + ggtitle("Tbp TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+
+#Compare Housekeeping genes
+mapk1 <- AD_norm %>% dfilter(Symbol=="Mapk1") %>% dfilter(Gene=="ENSMUST00000069107.13")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot(show.legend = FALSE) + geom_point(show.legend = FALSE) + coord_trans(y='log10') + theme(axis.text = element_text(size=11)) + ggtitle("Mapk1 TPM") + theme(plot.title = element_text(hjust = 0.5)) 
+
+nfe <- AD_norm %>% dfilter(Symbol=="Nfe2l2") %>% dfilter(Gene=="ENSMUST00000102672.4")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot(show.legend = FALSE) + geom_point(show.legend = FALSE) + theme(axis.text = element_text(size=11)) + ggtitle("Nfe2l2 TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+daxx <- AD_norm %>% dfilter(Symbol=="Daxx") %>% dfilter(Gene=="ENSMUST00000079421.14")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot(show.legend = FALSE) + geom_point(show.legend = FALSE) + theme(axis.text = element_text(size=11)) + ggtitle("Daxx TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+hmg <-AD_norm %>% dfilter(Symbol=="Hmgb2") %>% dfilter(Gene=="ENSMUST00000067925.7")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot(show.legend = FALSE) + geom_point(show.legend = FALSE) + theme(axis.text = element_text(size=11)) + ggtitle("Hmgb2 TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+mapkap <- AD_norm %>% dfilter(Symbol=="Mapkapk2") %>% dfilter(Gene=="ENSMUST00000016672.10")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot(show.legend = FALSE) + geom_point(show.legend = FALSE) + theme(axis.text = element_text(size=11)) + ggtitle("Mapkapk2 TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+rela <- AD_norm %>% dfilter(Symbol=="Rela") %>% dfilter(Gene=="ENSMUST00000025867.5")  %>% select(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot(show.legend = FALSE) + geom_point(show.legend = FALSE) + theme(axis.text = element_text(size=11)) + ggtitle("Rela TPM") + theme(plot.title = element_text(hjust = 0.5))
+
+library(gridExtra)
+
+g <- grid.arrange(mapk1, nfe, tbp, hmg, mapkap, rela, nrow=2) +
+ggsave("MouseAD_Housekeeping2.jpg", width=15, height=6, dpi=300, plot= last_plot(), units = "in")
+
+```
+
+
+Plot markers
+
+Th2 markers: Ccl17, Ccl22, Ccr4, Il9
+Treg markers: Il34, Il37, Foxp3
+Other T cells: Cxcr3 (Th1), Gata3 (Th2), Ccr6 (Th17)
+Others: Ifnb1, Ifng, Il10, Il13, Il17b, Il20, Il33, Il4, Il5, Il6, Tgfb1, Tgfb2, Tgfb3, Tslp
+
+```{r fig.height=4, fig.width=4}
+AD_norm %>% dfilter(Symbol=="Ccl17") %>% dselect(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Ccl17 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Ccl17.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Ccr4") %>% dfilter(Gene=="ENSMUST00000054414.4") %>% dselect(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Ccr4 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Ccr4.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Ccr6") %>% dfilter(Gene=="ENSMUST00000231340.1") %>% dselect(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Ccr6 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Ccr6.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Ccl22") %>% dfilter(Gene=="ENSMUST00000034231.3") %>% dselect(-Gene) %>% tibble::column_to_rownames("Symbol") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Ccl22 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Ccl22.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Cxcr3") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Cxcr3 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Cxcr3.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Foxp3") %>% dfilter(Gene=="ENSMUST00000115739.8") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Foxp3 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Foxp3.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il34") %>% dfilter(Gene== "ENSMUST00000154803.1") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il34 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il34.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Gata3") %>% dfilter(Gene=="ENSMUST00000102976.3") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Gata3 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Gata3.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+# F4/80 is Ly71 is Emr1 is Adgre1
+AD_norm %>% dfilter(Symbol=="Adgre1") %>% dfilter(Gene=="ENSMUST00000086763.12") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("F4/80 Adgre1 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_F4-80.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Itgam") %>% dfilter(Gene=="ENSMUST00000106242.9") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("CD11b ITGAM TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_CD11B.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Siglec1") %>% dfilter(Gene=="ENSMUST00000028794.9") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("CD169 SIGLEC1 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_CD169.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Marco") %>% dfilter(Gene=="ENSMUST00000027639.7") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Marco TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_MARCO.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+#This is mouse CD16 Fcgr3a
+AD_norm %>% dfilter(Symbol=="Fcgr4") %>% dfilter(Gene=="ENSMUST00000078825.4") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("CD16 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_CD16.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Acp2") %>% dfilter(Gene=="ENSMUST00000002172.13") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Acp2 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Acp2.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+```
+Other makers
+```{r fig.height=4, fig.width=4}
+AD_norm %>% dfilter(Symbol=="Il33") %>% dfilter(Gene=="ENSMUST00000025724.8") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il33 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il33.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Tgfb1") %>% dfilter(Gene=="ENSMUST00000002678.9") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Tgfb1 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Tgfb1.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Tgfb2") %>% dfilter(Gene=="ENSMUST00000045288.13") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Tgfb2 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Tgfb2.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Tgfb3") %>% dfilter(Gene=="ENSMUST00000003687.7") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Tgfb3 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Tgfb3.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Ifng") %>% dfilter(Gene=="ENSMUST00000068592.4") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Ifng TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Ifng.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il1b") %>% dfilter(Gene=="ENSMUST00000028881.13") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il1b TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il1b.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il17b") %>% dfilter(Gene=="ENSMUST00000025471.2") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il17b TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il17b.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il17a") %>% dfilter(Gene=="ENSMUST00000025471.2") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il17b TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il17b.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il6") %>% dfilter(Gene=="ENSMUST00000026845.11") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il6 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il6.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il5") %>% dfilter(Gene=="ENSMUST00000048605.2") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il5 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il5.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il4") %>% dfilter(Gene=="ENSMUST00000000889.6") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il4 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il4.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il9") %>% dfilter(Gene=="ENSMUST00000022019.3") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il9 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il9.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il10") %>% dfilter(Gene=="ENSMUST00000016673.5") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il10 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il10.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il13") %>% dfilter(Gene=="ENSMUST00000020650.1") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il13 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il13.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il20") %>% dfilter(Gene=="ENSMUST00000027673.10") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il20 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il20.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Il33") %>% dfilter(Gene=="ENSMUST00000025724.8") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Il33 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Il33.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Tslp") %>% dfilter(Gene=="ENSMUST00000234876.1") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Tslp TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Tslp.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Ccin") %>% dfilter(Gene=="ENSMUST00000095107.2") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Ccin TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Ccin.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Ppp1r15a") %>% dfilter(Gene=="ENSMUST00000211212.1" |Gene=="ENSMUST00000042105.10") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Gadd34 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Gadd34.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Nlrp3") %>% dfilter(Gene=="ENSMUST00000079476.9") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Nlrp3 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Nlrp3.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Cd14") %>% dfilter(Gene=="ENSMUST00000061829.6") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Cd14 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Cd14.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Cd33") %>% dfilter(Gene=="ENSMUST00000205503.1") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Cd33 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Cd33.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Csf3r") %>% dfilter(Gene=="ENSMUST00000030673.6") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Csf3r TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Csf3R.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Tnf") %>% dfilter(Gene=="ENSMUST00000025263.14") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Tnf TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Tnf.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Mki67") %>% dfilter(Gene=="ENSMUST00000033310.8") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Mki67 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Mki67.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Rsad2") %>% dfilter(Gene=="ENSMUST00000020970.9") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Rsad2 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Rsad2.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Ero1l") %>% dfilter(Gene=="ENSMUST00000022378.8") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Ero1a TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Ero1a.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+
+AD_norm %>% dfilter(Symbol=="Olfr56") %>% dfilter(Gene=="ENSMUST00000203412.1") %>% dselect(-Symbol) %>% tibble::column_to_rownames("Gene") %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% gather(Transcript, TPM,-Group) %>% ggplot(aes(x=Group, y=TPM, colour=Group)) + geom_boxplot() + geom_point() + theme(axis.text = element_text(size=11)) + ggtitle("Olfr56 TPM") + theme(plot.title = element_text(hjust = 0.5)) + nolegend() + ggsave("MouseAD_Olfr56.jpg", width=4, height=4, dpi=300, plot= last_plot(), units = "in")
+```
+Plot Xcell analysis
+The AD_norm matrix gene names were trawnslated into human, there were duplicate lines for each gene, but xcell summed these
+Samples were run on the online server: http://xcell.ucsf.edu/
+
+```{r fig.height=15, fig.width=10}
+xcell <- read.table("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/xcell_predictions/xCell_AD_norm_human_xCell_1846112619.txt", sep="\t", header=TRUE)
+xcell %<>% data.frame %>% mutate(sumrow=rowSums(.[2:19])) %>% dfilter(sumrow > 0.1) %>% dselect(-sumrow)
+colnames(xcell) <- c("Celltype",colnames(xcell)[2:19])
+xcell %>% gather(Sample,cell_prediction,-Celltype) %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=nrow(xcell)*3)) %>% ggplot(aes(x=Celltype,y=cell_prediction, color=Group)) + geom_boxplot() + geom_point(position=position_jitterdodge(jitter.width=0, dodge.width = 1)) + coord_flip()
+
+xcell %>% arrange(desc(RPT193.1))
+xcell %>% dfilter(Celltype %in% c("Th2 cells","Monocytes","Macrophages","StromaScore","Myocytes")) %>% gather(Sample,cell_prediction,-Celltype) %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=5*3)) %>% mutate(Celltype= factor(Celltype,levels=c("Th2 cells","Monocytes","Macrophages","StromaScore","Myocytes"))) %>% mutate(Group = factor(Group,levels=c("Predose","Vehicle","DEX","RPT193","a-IL13","Isotype"))) %>% ggplot(aes(x=Celltype,y=cell_prediction, color=Group)) + geom_boxplot() + geom_point(position=position_jitterdodge(jitter.width=0, dodge.width = 0.65)) + ylim(0,0.25) + ggsave("xcell_prediction.jpg", width=10, height=5, units="in", dpi=300, plot=last_plot())
+```
+Correlation between Th2 cells and myeloid cells
+```{r fig.height=5, fig.width=5}
+library(ggrepel)
+xcell %>% dfilter(Celltype %in% c("Monocytes","Macrophages","Th2 cells","StromaScore","CD4+ memory T-cells","Myocytes")) %>% tibble::column_to_rownames("Celltype") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Group = rep(c("RPT193","a-IL13","Isotype","Predose","Vehicle","DEX"), each=3)) %>% dfilter(Group !="a-IL13", Group!="Isotype") %>% ggplot(aes(x=Macrophages,y=Th2.cells, color=Group, label=Sample)) + geom_abline(slope=3, intercept=0) + geom_label_repel(nudge_x=0.005,label.padding = unit(0.2, "lines"),show.legend = FALSE) + geom_point(size=3,show.legend = FALSE) + ggsave("Th2_vs_Macrophage.jpg", width=5, height=5, units="in", dpi=300, plot=last_plot())
+
+t_xcell <- xcell %>% dfilter(Celltype %in% c("Monocytes","Macrophages","Th2 cells","StromaScore","CD4+ memory T-cells","Myocytes")) %>% tibble::column_to_rownames("Celltype") %>% t %>% data.frame
+cor(t_xcell$Macrophages,t_xcell$Th2.cells) # 0.924
+cor(t_xcell$Monocytes,t_xcell$Th2.cells) # 0.924
+cor(t_xcell$StromaScore,t_xcell$Th2.cells) # -0.43
+cor(t_xcell$CD4..memory.T.cells,t_xcell$Th2.cells) # 0.83
+cor(t_xcell$Myocytes,t_xcell$Th2.cells) # -0.34
+```
+

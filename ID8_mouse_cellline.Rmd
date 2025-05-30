@@ -1,0 +1,106 @@
+---
+title: "Greenberg_ID8_vegf_mouse_line"
+author: "Mengshu"
+date: "10/10/2019"
+output: html_document
+---
+
+Load useful packages
+```{r}
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(data.table)
+library(reshape2) #needed for the heatmap
+library(limma)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")
+#load("/Volumes/Enterprise/FLX/Reference tables/mouse_human_gene.rdata")
+```
+Load the data
+```{r}
+ID8 <- read.table("/Volumes/Enterprise/FLX/GCN2/Greenberg/GSE120263_series_matrix_data.txt", header=TRUE)
+```
+
+
+This array is the MTA, which I've parsed before
+translate to gene names and remove probe names
+```{r}
+Probe_Gene <- read.table("/Volumes/Enterprise/FLX/GCN2/VEGF/MTA_Affy_Mouse_Probe2Gene.txt",sep="\t", header=FALSE)
+colnames(Probe_Gene) <- c("Probe","Gene","Other") 
+Probe_Gene %<>% dselect(-Other)
+
+ID8_gene <- left_join(Probe_Gene,ID8, by=c("Probe"="ID_REF")) %>% dfilter(!is.na(GSM3397258),!is.na(Gene)) %>% dselect(-Probe)
+#ID8_gene_unique <- ID8_gene[unique(ID8_gene$Gene),] %>% remove_rownames()
+ID8_gene_unique <- ID8_gene[!duplicated(ID8_gene$Gene),] %>% remove_rownames()
+length(unique(ID8_gene_unique$Gene))
+save(ID8_gene,file="Greenberg_gene.rdata")
+
+```
+
+Merge this data with Mosely cell lines
+make a matrix of cell lines in rows, genes in columns for Mosely
+```{r}
+load("/Volumes/Enterprise/FLX/Silpa_data/mouseData_tum.rdata")
+load("/Volumes/Enterprise/FLX/Silpa_data/samples.info_tum.rdata")
+samples.info_tum
+mouseData_tum[1:5,1:93]
+mouse <- data.frame(bind_cols(samples.info_tum %>% dselect('SampleID'),mouseData_tum)) %>% tibble::column_to_rownames("SampleID") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+```
+Merge ID8 with Mosely
+transpose the ID8 first to genes in columns
+```{r}
+Mosely_ID8 <- left_join(ID8_gene_unique,mouse,by="Gene")
+my_samples <- c("ID8_T","ID8_T","ID8_T",samples.info_tum$`experimental group`)
+Mosely_ID8 %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Sample=my_samples) %>% dselect(Sample, everything())
+```
+Normalize
+Take Z-score
+```{r}
+library(limma)
+Mosely_ID8_norm <- normalizeBetweenArrays(Mosely_ID8[,2:97])
+boxplot(Mosely_ID8[,2:97])
+boxplot(Mosely_ID8_norm)
+Mosely_ID8_norm %<>% data.frame %>% mutate(Gene=Mosely_ID8$Gene) %>% dselect(Gene,everything())
+
+Mosely_ID8_zscore <- Mosely_ID8_norm %>% mutate_if(is.numeric,mx_zscore2)
+
+
+Mosely_ID8 %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% mutate(Sample=my_samples) %>% dselect(Sample, everything())
+```
+
+Filter for ISR markers and take double z-score
+```{r}
+isr_z <- Mosely_ID8_zscore %>% dfilter(Gene %in% ISR_markers)
+colnames(isr_z) <- c("Gene",paste0(my_samples,'_',1:96)) 
+
+isr_z_z <- isr_z %>% arrange(match(Gene,ISR_markers)) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("experimental.group") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("experimental.group") %>% t %>% as.data.frame %>% tibble::rownames_to_column("Gene")
+```
+
+Calculate GCN2 signature from other ISR signatures
+```{r}
+
+Common_s <- isr_z_z %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,sum)
+PRK_s <- isr_z_z %>% dfilter(Gene %in% PRK) %>% summarise_if(is.numeric,sum)
+PERK_s <- isr_z_z %>% dfilter(Gene %in% PERK_try) %>% summarise_if(is.numeric,sum)
+HRI_s <- isr_z_z %>% dfilter(Gene %in% HRI_sub) %>% summarise_if(is.numeric,sum)
+AAS_s <- isr_z_z %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum)
+gMDSC_s <- Mosely_ID8_zscore %>% dfilter(Gene %in% gMDSC_sig_m) %>% dfilter(Gene != "Defa1") %>% summarise_if(is.numeric,sum) # %>% mutate(Gene="gMDSC_score") %>% dselect(Gene, everything())
+colnames(gMDSC_s) <- colnames(isr_z_z)[2:97]
+mMDSC_s <- Mosely_ID8_zscore %>% dfilter(Gene %in% mMDSC_sig_m) %>% summarise_if(is.numeric,sum)
+colnames(mMDSC_s) <- colnames(isr_z_z)[2:97] #c(paste0(c("ID8_T","ID8_T","ID8_T",mouse$`experimental group`),'_',1:96))
+
+ISR_s <- bind_rows(Common_s,PRK_s,PERK_s,HRI_s,AAS_s,gMDSC_s,mMDSC_s)
+rownames(ISR_s) <- c("Common","PRK","PERK","HRI","AAS","gMDSC","mMDSC")
+
+exp_grp <- c("ID8_T","ID8_T","ID8_T",samples.info_tum$`experimental group`) # merge the cell line info for the Mosely data with the 3 ID8 lines
+ISR_s_t <- ISR_s %>% t %>% data.frame %>% mutate(Group = exp_grp)
+#ISR_s_t <- bind_cols(samples.info_tum,ISR_s_t)
+
+ISR_median <- ISR_s_t %>% mutate(PRKi= ifelse(PRK<0,0,PRK), PERKi=ifelse(PERK<0,0,PERK), HRIi=ifelse(HRI<0,0,HRI)) %>% 
+  mutate(GCN2_specific = Common - PRKi - PERKi - HRIi) %>% group_by(Group) %>% summarise_if(is.double,median) %>% dfilter(Group %like% "_T$") %>% arrange(desc(Common)) %>% dselect(Group,Group,Common,PRK,PERK,HRI,GCN2_specific,AAS,gMDSC,mMDSC) 
+
+ISR_median %>% write.table(file="ISR_scores_grouped_ZZscore_Oct11.cdt",sep="\t",row.names=FALSE,quote=TRUE)
+```

@@ -1,0 +1,211 @@
+---
+title: "GCN2_Signature_TCGA"
+author: "Mengshu Xu"
+date: "2/14/2020"
+output: html_document
+---
+
+With the GCN2 signature, find 
+1) Immune cell correlates in the TCGA
+  A) xCell 64 cell types
+  B) Cibersort 22 immune cell types
+  C) QuantiSeq 10 immune cell types
+  D) Timer 6 immune cell types
+  
+QuantiSeq and CiberSort are the only signatures that are comparable across immune cell types and across sapmles, because they are absolute fractions of the sample
+
+2) Correalates to onco-signatures
+
+3) Correlates to cBioPOrtal Meta signatures
+
+4) Correlates to specific genes of interest
+
+Load packages
+```{r}
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(scales)
+library(Hmisc)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("d:/FLX/Files_from_Gene/R_functions.r")
+```
+
+
+Load Immune_estimate datasets
+
+Cibersort has 8243 samples 
+QuantiSeq has 8488 samples : M1, M2, Mono, Neu, CD8, T Reg
+All of the samples overlap: however the cell types do not all overlap because the signature sets are different
+
+TIMER only has 6 categories: B, CD8 , CD4, Neu, Macro, DC.
+```{r}
+list.files("D:/FLX/Reference_tables/TIL_estimates/")
+Quanti_Ciber <- read.table("D:/FLX/Reference_tables/TIL_estimates/QuantiSeq_CiberSort_CellTypeFractionsData.tsv", sep="\t") 
+Quanti_Ciber <- read.table("/Volumes/Enterprise/FLX/Reference_tables/TIL_estimates/QuantiSeq_CiberSort_CellTypeFractionsData.tsv", sep="\t") 
+colnames(Quanti_Ciber) <- c("Sample","TT","Celltype","QuantiSeq","CiberSort")
+
+# Quanti_Ciber %<>% unique                             #365414
+# Quanti_Ciber %>% dfilter(!is.na(QuantiSeq)) #101638
+# Quanti_Ciber %>% dfilter(!is.na(CiberSort))  %>% dselect(Celltype) %>% unique # 8243 samples
+# Quanti_Ciber %>% dfilter(!is.na(QuantiSeq))  %>% dselect(Celltype) %>% unique # 8488 samples
+# inner_join(Quanti_Ciber %>% dfilter(!is.na(CiberSort))  %>% dselect(Sample) %>% unique,Quanti_Ciber %>% dfilter(!is.na(QuantiSeq))  %>% dselect(Sample) %>% unique, by="Sample" ) #8243
+# Quanti_Ciber %>% dfilter(!is.na(QuantiSeq)) %>% dfilter(!is.na(CiberSort)) %>% dselect(TT) %>% table #98916
+
+
+TIMER <- read.table("D:/FLX/Reference_tables/TIL_estimates/TCGA_TIMER_estimates.csv", sep=",", header=TRUE) %>% mutate(Sample=substr(X,1,12)) %>% dselect(Sample,B_cell,T_cell.CD4,T_cell.CD8,Neutrophil,Macrophage,DC)
+
+library(Hmisc) # for sedit
+xCell <- read.table("D:/FLX/Reference_tables/TIL_estimates/xCell_TCGA_RSEM.txt", sep="\t", header=TRUE) %>% data.frame %>% dfilter(X %in% c("aDC","B-cells","CD4+ memory T-cells","CD4+ naive T-cells","CD8+ naive T-cells","CD8+ T-cells","CD8+ Tcm","CD8+ Tem","DC","Macrophages M1","Macrophages M2","Monocytes","Neutrophils","NK cells","Tregs")) %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("TCGA") %>% mutate(Sample=substr(TCGA,1,12)) %>% mutate(Sample = sedit(Sample,'.','-')) %>% dselect(-TCGA) %>% dselect(Sample,everything())
+```
+
+Load TCGA Z_Score data
+
+To generate scores for hypoxia and pyruvate metabolism
+```{r}
+load("D:/FLX/Gabrilovich_data/allMergedData.quantileNormZscore.rdata") # Cancers_zscore
+hypoxia <- read.table("D:/FLX/GCN2/ISR_data/RNA_seq/GSEA_hypoxia.txt",sep="\n", header=TRUE) %>% pull(HALLMARK_HYPOXIA)
+hypoxia <- hypoxia[2:201]
+pyruvate_meta <- read.table("D:/FLX/GCN2/ISR_data/RNA_seq/GSEA_pyruvate_metabolism.txt",sep="\n", header=TRUE) %>% pull(KEGG_PYRUVATE_METABOLISM)
+pyruvate_meta <- pyruvate_meta[2:41]
+
+hypoxia_sig_score <- Cancers_zscore %>% dfilter(Gene %in% hypoxia) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% rename(Hypoxia_score=.data$.) %>% tibble::rownames_to_column("Sample")
+pyruvate_sig_score <- Cancers_zscore %>% dfilter(Gene %in% pyruvate_meta) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame %>% rename(Pyruvate_metabolism_score=.data$.) %>% tibble::rownames_to_column("Sample")
+
+```
+
+
+```{r}
+
+```
+
+Load TCGA RNA expression data and Meta data
+
+```{r}
+load("/Volumes/Picard/FLX/TCGA/allMergedData.quantileNorm.rdata")
+load("D:/FLX/TCGA/allMergedData.quantileNorm.rdata")
+load("/Volumes/Picard/FLX/TCGA/allMergedData.SampleInfo.rdata")
+load("D:/FLX/TCGA/allMergedData.SampleInfo.rdata")
+str(allMergedData.quantileNorm)
+cancer_t <- allMergedData.SampleInfo %>% dselect(Sample,TumorAbr,DzNormal) #,PrimaryDisease,Dataset,
+# Z-scored data signatures of interest
+# this dataset was generated in MDSC_Signature.Rmd
+load("D:/FLX/Gabrilovich_data/Signature_zscores_Jan2020.rdata")
+load("/Volumes/Picard/FLX/Gabrilovich_data/Signature_zscores_Jan2020.rdata")
+Sig_z <- Signature_zscores_Jan2020 %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")
+Sig_z %<>% dfilter(grepl("TCGA",Sample))
+GCN2_z <- Sig_z %>% dselect(Sample,GCN2,gMDSC,mMDSC)
+PERK_z <- Sig_z %>% dselect(Sample,PERK,gMDSC,mMDSC)
+HRI_z <- Sig_z %>% dselect(Sample,HRI,gMDSC,mMDSC)
+```
+
+Merge and Cor
+QuantiSeq sample names need -01 added to the end to match the expression Sig Sample names
+pivot_wider only works when there is a col with all unique numbers for each pivoted group: don't understand why
+```{r}
+GCN2_Ciber <- Quanti_Ciber %>% dfilter(!is.na(CiberSort)) %>% dselect(-QuantiSeq,-TT) %>% group_by(Celltype) %>% mutate(row = row_number()) %>% pivot_wider(names_from=Celltype,values_from=CiberSort) %>% dselect(-row) %>% mutate(Sample= sedit(Sample,"$","-01",Sample)) %>% inner_join(Sig_z, by="Sample") %>% unique
+
+GCN2_Ciber_Cor <- round(cor(GCN2_Ciber[2:34],use = "complete.obs"),2) %>% data.frame %>% tibble::rownames_to_column("Cell_type") 
+
+Ciber_order <- GCN2_Ciber_Cor %>% arrange(-GCN2) %>% dselect(Cell_type) %>% mutate(Cell_type= sedit(Cell_type," ",".")) %>% .[,1]
+
+
+GCN2_Quanti <- Quanti_Ciber %>% dfilter(!is.na(QuantiSeq)) %>% dselect(-CiberSort,-TT) %>% group_by(Celltype) %>% mutate(row = row_number()) %>% pivot_wider(names_from=Celltype,values_from=QuantiSeq) %>% dselect(-row) %>% mutate(Sample= sedit(Sample,"$","-01",Sample)) %>% dselect(-`Regulatory T cells`) %>% mutate_if(is.numeric,mx_zscore2) %>% inner_join(Sig_z, by="Sample") %>% unique
+
+GCN2_Quanti_Cor <- round(cor(GCN2_Quanti[2:17],use = "complete.obs"),2) %>% data.frame %>% tibble::rownames_to_column("Cell_type") 
+
+Quanti_order <- GCN2_Quanti_Cor %>% arrange(-GCN2) %>% dselect(Cell_type) %>% mutate(Cell_type= sedit(Cell_type," ",".")) %>% .[,1]
+```
+
+Plot heatmap
+```{r fig.height=10, fig.width=10}
+GCN2_Ciber_Cor %>% mutate(Cell_type= sedit(Cell_type," ",".")) %>% gather(Signature,Correlation,-Cell_type) %>% mutate(Cell_type=factor(Cell_type,levels=rev(Ciber_order)), Signature=factor(Signature,levels=Ciber_order)) %>% ggplot(aes(x=Signature,y=Cell_type, fill=Correlation)) + geom_tile() + scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(-1,1), name="Score",oob=squish) + theme(axis.text.x = element_text(angle=90,size=15,hjust=1,vjust=0.5), axis.text.y=element_text(size=15))  + ggsave("GCN2_Ciber_Cor.jpg", width=10, height=10, dpi=150, plot= last_plot(), units = "in")
+#+ ggsave("PERK_xcell_cor.jpg", width=15, height=15, dpi=150, plot= last_plot(), units = "in")
+
+GCN2_Quanti_Cor %>% mutate(Cell_type= sedit(Cell_type," ",".")) %>% gather(Signature,Correlation,-Cell_type) %>% mutate(Cell_type=factor(Cell_type,levels=rev(Quanti_order)), Signature=factor(Signature,levels=Quanti_order)) %>% ggplot(aes(x=Signature,y=Cell_type, fill=Correlation)) + geom_tile() + scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(-1,1), name="Score",oob=squish) + theme(axis.text.x = element_text(angle=90,size=15,hjust=1,vjust=0.5), axis.text.y=element_text(size=15)) + ggsave("GCN2_QuantiSeq_Cor.jpg", width=10, height=10, dpi=150, plot= last_plot(), units = "in")
+```
+
+Correlate by Tumor type
+
+pivot_wider: 1. Group_by the pivot column 2. mutate(row= row_number()) to give a unique value to each row, no idea why 3. pivot 4. dselect(-row)
+
+CIBER
+```{r fig.height=6, fig.width=8}
+
+Ciber <- Quanti_Ciber %>% dselect(-QuantiSeq) %>% dfilter(!is.na(CiberSort)) %>% mutate(Sample= sedit(Sample,"$","-01",Sample)) %>% unique
+
+Cor_MX <- function(i) { i %>% group_by(Celltype) %>% mutate(row = row_number()) %>% pivot_wider(names_from=Celltype,values_from=CiberSort) %>% dselect(-row) %>% inner_join(pyruvate_sig_score,by="Sample") %>% inner_join(GCN2_z, by="Sample") %>% unique %>% dselect(-Sample) %>% cor %>% data.frame %>% tibble::rownames_to_column("Cell_type") %>% dselect(Cell_type,Pyruvate_metabolism_score) }
+
+Ciber_by_cancer <- Ciber %>% group_by(TT) %>% group_modify(~Cor_MX(.x)) 
+
+Ciber_cancer_order <- Ciber %>% group_by(TT) %>% group_modify(~Cor_MX(.x)) %>% group_by(TT) %>% mutate(row = row_number()) %>% pivot_wider(names_from=TT, values_from = Pyruvate_metabolism_score) %>% dselect(-row) %>% mutate(RowSums=rowSums(.[2:20], na.rm=TRUE)) %>% arrange(RowSums) %>% pull(Cell_type)
+
+Ciber_by_cancer %>% mutate(Cell_type= factor(Cell_type, levels=Ciber_cancer_order)) %>% ggplot(aes(y=Cell_type, x=TT, fill=Pyruvate_metabolism_score)) + geom_tile() + scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(-1,1), name="Score",oob=squish) + theme(axis.text.x = element_text(angle=90,size=10,hjust=1,vjust=0.5), axis.text.y=element_text(size=10),axis.title = element_blank()) + ggsave("Pyruvate_Ciber_Cor.jpg", width=8, height=6, dpi=150, plot= last_plot(), units = "in")
+```
+
+QUANTI
+```{r fig.height=3, fig.width=6}
+
+Quanti <- Quanti_Ciber %>% dselect(-CiberSort) %>% dfilter(!is.na(QuantiSeq)) %>% mutate(Sample= sedit(Sample,"$","-01",Sample)) %>% unique %>% dfilter(grepl("TCGA",Sample))
+
+Cor_MX_QS <- function(i) { i %>% group_by(Celltype) %>% mutate(row = row_number()) %>% pivot_wider(names_from=Celltype,values_from=QuantiSeq) %>% dselect(-row) %>% inner_join(GCN2_z,by="Sample")%>% inner_join(pyruvate_sig_score,by="Sample") %>% unique %>% dselect(-Sample) %>% cor %>% data.frame %>% tibble::rownames_to_column("Cell_type") %>% dselect(Cell_type,Pyruvate_metabolism_score) }
+
+Quanti_by_cancer <- Quanti %>% group_by(TT) %>% group_modify(~Cor_MX_QS(.x)) 
+
+Quanti_cancer_order <- Quanti %>% group_by(TT) %>% group_modify(~Cor_MX_QS(.x)) %>% group_by(TT) %>% mutate(row = row_number())  %>% pivot_wider(names_from=TT, values_from = Pyruvate_metabolism_score) %>% dselect(-row) %>% mutate(RowSums=rowSums(.[2:20], na.rm=TRUE)) %>% arrange(RowSums) %>% pull(Cell_type)
+
+Quanti_by_cancer %>% mutate(Cell_type= factor(Cell_type, levels=Quanti_cancer_order)) %>% ggplot(aes(y=Cell_type, x=TT, fill=Pyruvate_metabolism_score)) + geom_tile() + scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(-1,1), name="Score",oob=squish) + theme(axis.text.x = element_text(angle=90,size=10,hjust=1,vjust=0.5), axis.text.y=element_text(size=10),axis.title = element_blank()) + ggsave("Pyruvate_Quanti_Cor.jpg", width=6, height=3, dpi=150, plot= last_plot(), units = "in")
+```
+
+xCELL
+```{r fig.height=6, fig.width=9}
+xcell_TCGA <- read.table("D:/FLX/Reference_tables/TIL_estimates/xCell_TCGA_RSEM.txt",sep="\t", header=TRUE) # 64 cell types, 9948 TCGA cases
+xcell_TCGA <- read.table("/Volumes/Enterprise/FLX/Reference_tables/TIL_estimates/xCell_TCGA_RSEM.txt",sep="\t", header=TRUE) # 64 cell types, 9948 TCGA cases
+
+xcell_TCGA_t_z <- xcell_TCGA %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% dselect(Sample,aDC,B.cells,starts_with("CD4"), starts_with("CD8"),cDC,iDC,starts_with("Macrophage"), Monocytes,Neutrophils,NK.cells,NKT, pDC,Th1.cells, Th2.cells,Tregs) %>% mutate(Sample = sedit(Sample,".","-"))
+
+Xcell <- xcell_TCGA_t_z %>% left_join(cancer_t, by="Sample") %>% inner_join(pyruvate_sig_score,by="Sample") %>% inner_join(GCN2_z,by="Sample") %>% unique 
+
+Cor_xcell <- function(i) { i %>% dselect(-Sample,-DzNormal,-PrimaryDisease,-Dataset) %>% cor %>% data.frame %>% tibble::rownames_to_column("Cell_type") %>% dselect(Cell_type,Pyruvate_metabolism_score) }
+
+Xcell_by_cancer <- Xcell %>% group_by(TumorAbr) %>% group_modify(~Cor_xcell(.x))
+
+xcell_cancer_order <- Xcell %>% group_by(TumorAbr) %>% group_modify(~Cor_xcell(.x)) %>% group_by(TumorAbr) %>% mutate(row = row_number())  %>% pivot_wider(names_from=TumorAbr, values_from = Pyruvate_metabolism_score) %>% dselect(-row) %>% mutate(RowSums=rowSums(.[2:29], na.rm=TRUE)) %>% arrange(RowSums) %>% pull(Cell_type)
+
+library(umap)
+hri_xcell_umap <- umap(Xcell %>% group_by(TumorAbr) %>% group_modify(~Cor_xcell(.x)) %>% group_by(TumorAbr) %>% mutate(row = row_number())  %>% pivot_wider(names_from=TumorAbr, values_from = HRI) %>% dselect(-row, -Cell_type) )
+
+cell_rows <- Xcell %>% group_by(TumorAbr) %>% group_modify(~Cor_xcell(.x)) %>% group_by(TumorAbr) %>% mutate(row = row_number())  %>% pivot_wider(names_from=TumorAbr, values_from = HRI) %>% pull(Cell_type) 
+
+hri_xcell_umap$layout %>% data.frame %>% mutate(Celltype= cell_rows) %>% ggplot(aes(x=X1,y=X2,label=Celltype)) + geom_point() + geom_label()
+
+Xcell_by_cancer %>% mutate(Cell_type= factor(Cell_type, levels=xcell_cancer_order)) %>% ggplot(aes(y=Cell_type, x=TumorAbr, fill=Pyruvate_metabolism_score)) + geom_tile() + scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(-1,1), name="Score",oob=squish) + theme(axis.text.x = element_text(angle=90,size=10,hjust=1,vjust=0.5), axis.text.y=element_text(size=10),axis.title = element_blank()) + ggsave("Pyruvate_Xcell_Cor.jpg", width=9, height=6, dpi=150, plot= last_plot(), units = "in")
+
+```
+
+Correlate GCN2 signature with all genes, by Tumor type
+```{r}
+allMergedData.quantileNorm
+
+cancer_t
+
+```
+
+```{r fig.height=4, fig.width=8}
+data.frame(Hotness = Hotness_score %>% t) %>% tibble::rownames_to_column("Sample")%>% left_join(cancer_t, by="Sample") %>% dfilter(DzNormal==c("Cancer","Metastatic")) %>% dfilter(TumorAbr %in% choice) %>% mutate(TumorAbr= fct_reorder(TumorAbr,Hotness, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=Hotness, color=TumorAbr)) + geom_jitter(pch=20, size=0.8, width=0.3) + coord_flip() + nolegend()
+
+data.frame(Hotness = Hotness_score %>% t) %>% tibble::rownames_to_column("Sample")%>% left_join(cancer_t, by="Sample") %>% dfilter(DzNormal==c("Cancer","Metastatic"))  %>% dfilter(TumorAbr %in% choice) %>% mutate(TumorAbr= fct_reorder(TumorAbr,Hotness, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=Hotness, color=TumorAbr)) + geom_jitter(pch=20, size=0.5, width=0.3) + nolegend() + theme(axis.title = element_text(size=12), axis.text.y = element_text(size=10), axis.text.x = element_text(angle=90,size=11,hjust=1))
+
+choice <- data.frame(Hotness = Hotness_score %>% t) %>% tibble::rownames_to_column("Sample")%>% left_join(cancer_t, by="Sample")  %>% dplyr::count(TumorAbr, sort=TRUE) %>% dfilter(n > 80) %>% pull(TumorAbr)
+
+```
+
+Plot medians
+```{r}
+median_cancer_TNF_hotness <- Cancers_zscore %>% dfilter(Gene =="TNF") %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(data.frame(Hotness = Hotness_score %>% t) %>% tibble::rownames_to_column("Sample") , by="Sample") %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr %in% choice, DzNormal %in% c("Cancer","Metastatic"), TumorAbr %nin% c("ALL","AML","GL")) %>% group_by(TumorAbr) %>% mutate(Median_TNF= median(TNF), Median_Hotness=median(Hotness)) %>% ungroup %>% dselect(-Sample,-TNF,-Hotness,-DzNormal) %>% unique
+ggplot(median_cancer_TNF_hotness,aes(x=Median_TNF, y=Median_Hotness, colour=TumorAbr)) + geom_label(aes(label=TumorAbr, alpha=0.5)) +nolegend()
+```
+

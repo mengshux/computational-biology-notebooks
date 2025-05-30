@@ -1,0 +1,95 @@
+---
+title: "BluePrint_HPK1_expression"
+author: "Mengshu"
+date: "9/20/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(magrittr)
+library(tidyr)
+library(data.table)
+library(ggplot2)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+#install.packages('ggbeeswarm')
+library(ggbeeswarm)
+#source("R_functions.r")
+```
+
+## Normal Immune cell expression data downloaded from BluePrint for all HPK1 transcript isoforms. File is in csv format withi FPKM values and needs to be filtered and plotted on a log scale
+
+```{r}
+## There are 0 values in the FPKM column. Can't log10 transform. Add a small decimal to all values. 
+BP_HPK1 <- read.csv("BP-DataPortal_Transcript_Expression.csv", header= TRUE, sep="\t")
+BP_HPK1 %<>% dfilter(transcript.name %like% "^MAP4K1") %>% mutate(FPKM=FPKM+0.1)
+BP_HPK1 %<>% mutate(broad.cell.type= case_when(
+  Cell.Types %like% "B cell" ~ "B-cell",
+  Cell.Types %like% "B lineage" ~ "B-cell",
+  Cell.Types %like% "CD8" ~ "CD8 T-cell",
+  Cell.Types %like% "CD4" ~ "CD4 T-cell",
+  Cell.Types %like% "monocyte" ~ "Monocyte",
+  Cell.Types %like% "macrophage" ~ "Macrophage",
+  Cell.Types %like% "natural killer" ~ "NK cell",
+  Cell.Types %like% "dendritic" ~ "Dendritic cell",
+  Cell.Types %like% "regulatory T cell" ~ "T-reg",
+  Cell.Types %like% "thymocyte" ~ "Thymocyte",
+  Cell.Types %like% "osteoclast" ~ "Osteoclast",
+  Cell.Types %like% "plasma cell" ~ "B-cell"
+  ))
+
+BP_HPK1 %>% dfilter(transcript.name=="MAP4K1-006") %>% .$Cell.Types %>% table
+```
+
+## Plots
+
+```{r}
+subset <- BP_HPK1 %>% dfilter(transcript.name == "MAP4K1-001"|transcript.name =="MAP4K1-002"|transcript.name =="MAP4K1-003"|transcript.name =="MAP4K1-006"|transcript.name =="MAP4K1-007"|transcript.name =="MAP4K1-009")
+
+isoform1 <- BP_HPK1 %>% dfilter(transcript.name == "MAP4K1-001") dselect()
+BP_HPK1 %>% dfilter(transcript.name == "MAP4K1-001") %>% group_by(broad.cell.type) %>% table
+isoform1$broad.cell.type <- factor(isoform1$broad.cell.type)
+levels(isoform1$broad.cell.type)
+isoform1$broad.cell.type <- factor(isoform1$broad.cell.type, levels=c("Dendritic cell","CD8 T-cell","B-cell","NK cell", "CD4 T-cell", "Monocyte", "Macrophage","T-reg","Thymocyte","Osteoclast"))
+   
+x$name <- factor(x$name, levels = x$name[order(x$val)])
+##make a vector to set order
+ordered <- subset %>% group_by(broad.cell.type) %>% summarize(median.expr=median(FPKM)) %>% arrange(desc(median.expr)) %>% pull(broad.cell.type)
+subset$broad.cell.type <-factor(subset$broad.cell.type, levels=ordered)
+
+ggplot(isoform1, aes(x=broad.cell.type, y= FPKM, fill=broad.cell.type, show.legend=FALSE)) +
+  geom_violin(outlier.shape = NA, alpha= 0.8, outline = "grey60", show.legend=FALSE) +
+  geom_beeswarm(size=1, show.legend=FALSE) +
+  #facet_wrap(~transcript.name, ncol=6) +
+  #scale_y_log2() +
+  scale_y_continuous(trans='log2') +
+  #ylim(0,30) +
+  #scale_y_continuous(breaks=seq(from =0, to = 30, by =1)) +
+  theme(axis.text.x.bottom = element_text(angle = 45, vjust=1, hjust=1, size=12)) +
+  scale_x_discrete(position = "bottom") +
+ 
+
+
+ggsave("BP_HPK1_isoform1_log2_matched.jpg", dpi=500, width= 12, height=8, plot= last_plot(), units = "cm")
+
+```
+#dplyr version code
+#subset %>% mutate(broad.cell.type=factor(broad.cell.type, levels=ordered))
+
+
+```{r}
+T_cell <- BP_HPK1 %>% dfilter(Cell.Types %like% "T cell") %>% dfilter(transcript.name == "MAP4K1-001"|transcript.name =="MAP4K1-002"|transcript.name =="MAP4K1-003"|transcript.name =="MAP4K1-006"|transcript.name =="MAP4K1-007"|transcript.name =="MAP4K1-009")
+T_cell %<>% mutate(Cell.Types=sub(", alpha-beta","",Cell.Types)) %>% mutate(Cell.Types=sub(", terminally differentiated","",Cell.Types))
+ggplot(T_cell, aes(x=Cell.Types, y= FPKM, fill=Cell.Types)) +
+  geom_boxplot(outlier.shape = NA, alpha= 0.8, outline = "grey60") +
+  geom_beeswarm(size=1, show.legend=FALSE) +
+  facet_wrap(~transcript.name, ncol=6) +
+  scale_y_continuous(trans='log2') +
+  #scale_y_log10() +
+  theme(axis.text.x.top = element_text(angle = 45, vjust=0, hjust=0, size=12)) +
+  scale_x_discrete(position = "top")
+ggsave("BP_HPK1_T-cells_log2.jpg", dpi=500, width= 40, height=15, plot= last_plot(), units = "cm")
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

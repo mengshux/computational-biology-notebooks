@@ -1,0 +1,292 @@
+---
+title: "Tang_AAS_MX"
+author: "Mengshu"
+date: "9/19/2019"
+output: html_document
+---
+
+Load useful packages
+```{r}
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(data.table)
+library(reshape2) #needed for the heatmap
+library(limma)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")
+#load("/Volumes/Enterprise/FLX/Reference tables/mouse_human_gene.rdata")
+```
+
+
+Load MIcroarray translation file
+ID_REF  Gene
+
+HG-U133A_2
+BiocManager::install("biomaRt")
+BiocManager::install("biocLite")
+source("http://www.bioconductor.org/biocLite.R")
+require("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+listAttributes(mart)
+listEnsembl(mart)
+listDatasets(mart)
+annotLookup_133a2 <- getBM(
+  mart = mart,
+  attributes = c(
+    "affy_hg_u133a_2", "hgnc_symbol")
+  )
+annotLookup_133a2 %<>% dfilter(affy_hg_u133a_2 != "")
+save(annotLookup_133a2,file="Affy_hg_u133a_2_HUGO.rdata")
+```{r}
+load("Affy_hg_u133a_2_HUGO.rdata")
+```
+Read Tang et al. files
+```{r}
+my_common <- read.table("/Volumes/Picard/FLX/GCN2/Tang_AAS/Tang_Common_AAS.txt",sep="\t",header=TRUE)
+my_unique <- read.table("/Volumes/Picard/FLX/GCN2/Tang_AAS/Tang_Unique_AAS.txt",sep="\t",header=TRUE) 
+
+#my_common <- read.table("D:/FLX/GCN2/Tang_AAS/Tang_Common_AAS.txt",sep="\t",header=TRUE)
+#my_unique <- read.table("D:/FLX/GCN2/Tang_AAS/Tang_Unique_AAS.txt",sep="\t",header=TRUE) 
+```
+Parse
+```{r}
+my_unique$IndividualAADep_Specific._probes
+unique_genes <- annotLookup_133a2 %>% dfilter(affy_hg_u133a_2 %in% my_unique$IndividualAADep_Specific._probes) %>% distinct(hgnc_symbol, .keep_all = TRUE) 
+my_unique <- left_join(my_unique,unique_genes, by=c("IndividualAADep_Specific._probes"="affy_hg_u133a_2"))
+my_unique %<>% dfilter(!is.na(hgnc_symbol))
+
+my_unique %>% dselect(AA) %>% table
+my_common %>% arrange(desc(Gln)) %>% dfilter(Gln >= 1) %>% dselect(Gene.Symbol) %>% distinct
+```
+
+Find Unique genes that are UP
+```{r}
+my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2))
+```
+Amino acid signatures: 14
+```{r}
+
+Gln_sig <- my_common %>% arrange(desc(Gln)) %>% dfilter(Gln >= 1) %>% dselect(Gene.Symbol) %>% distinct #51
+His_sig <- my_common %>% arrange(desc(His)) %>% dfilter(His >= 1) %>% dselect(Gene.Symbol) %>% distinct #54
+Ile_sig <- my_common %>% arrange(desc(Ile)) %>% dfilter(Ile >= 1) %>% dselect(Gene.Symbol) %>% distinct #120
+Val_sig <- my_common %>% arrange(desc(Val)) %>% dfilter(Val >= 1) %>% dselect(Gene.Symbol) %>% distinct #78
+Phe_sig <- my_common %>% arrange(desc(Phe)) %>% dfilter(Phe >= 1) %>% dselect(Gene.Symbol) %>% distinct #96
+Arg_sig <- my_common %>% arrange(desc(Arg)) %>% dfilter(Arg >= 1) %>% dselect(Gene.Symbol) %>% distinct #173
+Cys_sig <- my_common %>% arrange(desc(Cys)) %>% dfilter(Cys >= 1) %>% dselect(Gene.Symbol) %>% distinct #41
+Lys_sig <- my_common %>% arrange(desc(Lys)) %>% dfilter(Lys >= 1) %>% dselect(Gene.Symbol) %>% distinct #124
+Met_sig <- my_common %>% arrange(desc(Met)) %>% dfilter(Met >= 1) %>% dselect(Gene.Symbol) %>% distinct #161
+Ser_sig <- my_common %>% arrange(desc(Ser)) %>% dfilter(Ser >= 1) %>% dselect(Gene.Symbol) %>% distinct #65
+Thr_sig <- my_common %>% arrange(desc(Thr)) %>% dfilter(Thr >= 1) %>% dselect(Gene.Symbol) %>% distinct #159
+Tyr_sig <- my_common %>% arrange(desc(Tyr)) %>% dfilter(Tyr >= 1) %>% dselect(Gene.Symbol) %>% distinct #141
+Gly_sig <- my_common %>% arrange(desc(Gly)) %>% dfilter(Gly >= 1) %>% dselect(Gene.Symbol) %>% distinct #none
+Trp_sig <- my_common %>% arrange(desc(Trp)) %>% dfilter(Trp >= 1) %>% dselect(Gene.Symbol) %>% distinct #157
+Leu_sig <- my_common %>% arrange(desc(Trp)) %>% dfilter(Leu >= 1) %>% dselect(Gene.Symbol) %>% distinct #88
+
+His_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "HIS") %>% dselect(hgnc_symbol) #1
+Ile_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "ILE") %>% dselect(hgnc_symbol) #2
+Val_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "VAL") %>% dselect(hgnc_symbol) #0
+Phe_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "PHE") %>% dselect(hgnc_symbol) #1
+Arg_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "ARG") %>% dselect(hgnc_symbol) #8
+Cys_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "CYS") %>% dselect(hgnc_symbol) #1
+Lys_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "LYS") %>% dselect(hgnc_symbol) #12
+Met_u <- my_unique %>% dfilter(Delta_log2 > 2) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "MET") %>% dselect(hgnc_symbol) #15
+Ser_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "SER") %>% dselect(hgnc_symbol) #9
+Thr_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "THR") %>% dselect(hgnc_symbol) #13
+Tyr_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "TYR") %>% dselect(hgnc_symbol) #1
+Glu_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "GLU") %>% dselect(hgnc_symbol) #1
+Trp_u <- my_unique %>% dfilter(Delta_log2 > 0) %>% arrange(AA,desc(Delta_log2)) %>% dfilter(AA == "TRP") %>% dselect(hgnc_symbol) #4
+
+His_sig_u <- c(His_sig[,1],His_u[,1])
+Ile_sig_u <- c(Ile_sig[,1],Ile_u[,1])
+Val_sig_u <- c(Val_sig[,1],Val_u[,1])
+Phe_sig_u <- c(Phe_sig[,1],Phe_u[,1])
+Arg_sig_u <- c(Arg_sig[,1],Arg_u[,1])
+Cys_sig_u <- c(Cys_sig[,1],Cys_u[,1])
+Lys_sig_u <- c(Lys_sig[,1],Lys_u[,1])
+Met_sig_u <- c(Met_sig[,1],Met_u[,1])
+Ser_sig_u <- c(Ser_sig[,1],Ser_u[,1])
+Thr_sig_u <- c(Thr_sig[,1],Thr_u[,1])
+Tyr_sig_u <- c(Tyr_sig[,1],Tyr_u[,1])
+Glu_sig_u <- c(Glu_u[,1]) #1
+Gly_sig_u <- Gly_sig[,1] #0
+Trp_sig_u <- c(Trp_sig[,1],Trp_u[,1]) #161
+Gln_sig_u <- Gln_sig[,1] #51
+Leu_sig_u <- Leu_sig[,1] #87
+
+#His_sig_u %>% write.table(file="D:/FLX/Reference_tables/His_sig_h.txt",sep="\t", quote=FALSE, row.names=FALSE)
+#Trp_sig_u %>% write.table(file="D:/FLX/Reference_tables/Trp_sig_h.txt",sep="\t", quote=FALSE, row.names=FALSE)
+#Met_sig_u %>% write.table(file="D:/FLX/Reference_tables/Met_sig_h.txt",sep="\t", quote=FALSE, row.names=FALSE)
+#Leu_sig_u %>% write.table(file="D:/FLX/Reference_tables/Leu_sig_h.txt",sep="\t", quote=FALSE, row.names=FALSE)
+```
+
+Load TCGA (and other) data
+17921 samples
+Log2 of TPMs, not zero-centered
+GSE102349: Nasopharyngial
+GSE68799: Chinese Nasopharyngial
+ICGC: International Cancer Genome Consortium
+
+    GSE102349      GSE68799          ICGC        TARGET          TCGA TreeHouseUCSC 
+           34            45           602           614         10534           640 
+           
+        Cancer     Metastatic Normal/Control      Recurrent 
+         11162            396            751            160 
+```{r fig.height=5, fig.width=20}
+load("/Volumes/Picard/FLX/TCGA/allMergedData.quantileNorm.rdata")
+#load("D:/FLX/TCGA/allMergedData.quantileNorm.rdata")
+load("/Volumes/Picard/FLX/TCGA/allMergedData.SampleInfo.rdata")
+#load("D:/FLX/TCGA/allMergedData.SampleInfo.rdata")
+
+cancer_t <- allMergedData.SampleInfo %>% dselect(Sample,DzNormal,PrimaryDisease,Dataset,TumorAbr)
+cancer_t %>% dselect(TumorAbr) %>% unique %>% arrange(TumorAbr)
+```
+Load Z-scores
+```{r}
+
+#load("D:/FLX/Gabrilovich_data/allMergedData.quantileNormZscore.rdata")
+load("/Volumes/Picard/FLX/Gabrilovich_data/allMergedData.quantileNormZscore.rdata")
+```
+Calculate AAS Signatures
+```{r}
+
+load(file="/Volumes/Picard/FLX/Reference_tables/GCN2_human_sig.rdata")
+load(file="/Volumes/Picard/FLX/Reference_tables/PERK_human_sig.rdata")
+
+His_sig_score <- Cancers_zscore %>% dfilter(Gene %in% His_sig_u) %>% summarize_if(is.numeric,sum)
+Ile_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Ile_sig_u) %>% summarize_if(is.numeric,sum)
+Val_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Val_sig_u) %>% summarize_if(is.numeric,sum)
+Phe_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Phe_sig_u) %>% summarize_if(is.numeric,sum)
+Arg_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Arg_sig_u) %>% summarize_if(is.numeric,sum)
+Cys_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Cys_sig_u) %>% summarize_if(is.numeric,sum)
+Lys_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Lys_sig_u) %>% summarize_if(is.numeric,sum)
+Met_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Met_sig_u) %>% summarize_if(is.numeric,sum)
+Ser_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Ser_sig_u) %>% summarize_if(is.numeric,sum)
+Thr_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Thr_sig_u) %>% summarize_if(is.numeric,sum)
+Tyr_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Tyr_sig_u) %>% summarize_if(is.numeric,sum)
+#Glu_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Glu_sig_u) %>% summarize_if(is.numeric,sum)
+Trp_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Trp_sig_u) %>% summarize_if(is.numeric,sum)
+Gln_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Gln_sig_u) %>% summarize_if(is.numeric,sum)
+#Gly_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Gly_sig_u) %>% summarize_if(is.numeric,sum)
+Leu_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Leu_sig_u) %>% summarize_if(is.numeric,sum)
+
+
+GCN2_score <-  Cancers_zscore %>% dfilter(Gene %in% GCN2_h) %>% summarize_if(is.numeric,sum)
+PERK_score <-  Cancers_zscore %>% dfilter(Gene %in% PERK_h) %>% summarize_if(is.numeric,sum)
+#HRI_score <-  Cancers_zscore %>% dfilter(Gene %in% HRI_s) %>% summarize_if(is.numeric,sum)
+
+load("/Volumes/Picard/FLX/Gabrilovich_data/Patient_score_signature_Scores_Cancers.rdata")
+Other_sig_scores <- Patient_score
+
+AAS_zscores <- rbind.data.frame(GCN2_score, PERK_score, His_sig_score, Ile_sig_score,Leu_sig_score,Val_sig_score,Phe_sig_score,Arg_sig_score,Cys_sig_score,Lys_sig_score,Met_sig_score,Ser_sig_score,Thr_sig_score,Tyr_sig_score,Trp_sig_score,Gln_sig_score)
+rownames(AAS_zscores) <- c("GCN2","PERK","His","Ile","Leu","Val","Phe","Arg","Cys","Lys","Met","Ser","Thr","Tyr","Trp","Gln")
+
+AAS_zscores %>% dselect('TCGA-2J-AAB9-01') #the dashes changed into dots in TCGA names
+Other_sig_scores %>% dselect('TCGA.2J.AAB9.01')
+Other_sig_scores %>% dselect('TCGA-2J-AAB9-01')
+
+
+
+AAS_zscores <- rbind(AAS_zscores,Other_sig_scores)
+colnames(AAS_zscores %>% data.frame) == colnames(Other_sig_scores)
+#save(AAS_zscores,file="AAS_zscores.rdata")
+#load("AAS_zscores.rdata")
+
+#AAS_zzscores <- AAS_zscores %>% t %>% data.frame %>% mutate_if(is.numeric,mx_zscore2) 
+#rownames(AAS_zzscores) <- colnames(AAS_zscores)
+```
+UMAP
+```{r}
+AAS_zscores
+library(umap)
+imm_umap <- umap(AAS_zscores, n_neighbors=2, metric="manhattan", min_dist=0.3)
+imm_labels <- rownames(AAS_zscores)
+colnames(imm_umap$layout) <- c("X1","X2")
+imm_umap$layout %>% data.frame %>% tibble::rownames_to_column("Imm_Sig") %>% ggplot(aes(x=X1, y=X2, colour=Imm_Sig, label=Imm_Sig)) + geom_label(alpha=0.5, show.legend=FALSE,hjust="inward",vjust="inward") + ggsave("ImmSig_UMAP.jpg", width=5, height=4, dpi=600, plot= last_plot(), units = "in")
+
+tree <- hclust(dist(AAS_zscores))
+plot(tree)
+
+
+med_tree <- hclust(dist(med_sig %>% tibble::column_to_rownames("TumorAbr") %>% t))
+plot(med_tree)
+```
+
+```{r}
+imm_umap$layout
+```
+
+Find the correlations between immune metrics
+Correlate between individual samples
+TAKE OUT THE BLOOD CANCERS FIRST, THEY WILL SKEW ALL CORRELATIONS
+```{r fig.height=10, fig.width=10}
+Sig_zscores_noBlood <- AAS_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG")
+
+
+ggplot(Sig_zscores_noBlood,aes(x=Arg,y=GCN2)) + geom_point()
+cor(Sig_zscores_noBlood$GCN2,Sig_zscores_noBlood$Arg) #0.51
+
+#Sig_zscores_noBlood <- AAS_zzscores %>% tibble::rownames_to_column("Sample") %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG")
+
+#corr_sig <- round(cor(Sig_zscores_noBlood %>% tibble::column_to_rownames("Sample") %>% dselect(His,Ile,Leu,Val,Phe,Arg,Cys,Met,Ser,Thr,Tyr,Trp,Gln,Lys,Ile,Val,Arg,AAS,gMDSC,mMDSC,NK,Hotness,Merck18,Inflammasome,Common_ISR,HRI_s,PERK_s,PKR_s,-DzNormal,-TumorAbr)),2)
+
+corr_sig <- round(cor(Sig_zscores_noBlood %>% tibble::column_to_rownames("Sample") %>% dselect(His,Ile,Leu,Val,Phe,Arg,Cys,Met,Ser,Thr,Tyr,Trp,Gln,Lys,Ile,Val,Arg,GCN2,PERK,HRI,-DzNormal,-TumorAbr)),2)
+
+library(reshape)
+corr_sig <- get_upper_tri(corr_sig)
+melt_corr_sig <- melt(corr_sig)
+# Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+
+melt_corr_sig %>% mutate(Var1= factor(Var1,levels=colnames(corr_sig)),Var2= factor(Var2,levels=colnames(corr_sig))) %>% ggplot(aes(x=Var1, y=Var2, fill=value, label=value)) + geom_tile(color = "white")+
+    geom_text(aes(Var1, Var2, label = value), color = "grey30", size = 3) +
+ scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(0,1),oob=squish ,space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+    scale_x_discrete(position = "top") +
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 0))+
+ coord_fixed() +
+ggsave("GCN2_AAS_Tang_zzscore_heatmap.jpg", width=9, height=9, dpi=600, plot= last_plot(), units = "in")  
+```
+
+Plot the different scores as rectangular heatmap
+Equalize the different z-scores within each signature into- z-score of z-scoress so the heatmap scales are the same
+```{r fig.height=6, fig.width=12}
+med_sig <- AAS_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% group_by(TumorAbr) %>% summarize_if(is.numeric, median) %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG") %>% mutate_if(is.numeric,mx_zscore2) %>% mutate(TumorAbr= fct_reorder(TumorAbr,gMDSC, .fun = median)) # 
+
+
+melt_sig <- melt(med_sig) %>% mutate(variable= factor(variable,levels=c("His","Ile","Leu","Phe","Cys","Met","Ser","Thr","Tyr","Trp","Gln","Lys","Val","Arg","gMDSC","mMDSC","AAS","NK","Hotness","Merck18","Inflammasome","Common_ISR","HRI_s","PERK_s","PKR_s")))
+melt_sig  %>% dfilter(variable != "sMDSC",variable != "GCN2_s") %>% ggplot(aes(x=TumorAbr, y=variable, fill=value, label=value)) + geom_tile(color = "white") +
+scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(-6,6), name="Score") +
+theme_minimal()+ 
+scale_x_discrete(position = "top") +
+theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 0, size=14),axis.text.y = element_text(size=14)) +
+coord_fixed() +
+ggsave("Tumor_signature_Tang_heatmap.jpg", width=12, height=6, dpi=600, plot= last_plot(), units = "in")  
+```
+
+Explore Arg more in the TCGA data:
+Gene Cutler: Figure out Arg1 and Arg2 expression in the different tumors, and does that correlate with MDSC content?
+
+```{r}
+AAS_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=gMDSC_sig_score,y=sMDSC_sig_score, colour = DzNormal)) + geom_point(size=0.5) +
+ggsave("Tumor_gMDSC_vs_sMDSC.jpg", width=9, height=8, dpi=600, plot= last_plot(), units = "in")
+```
+
+
+
+Clean up and export the Arg_AAS signal
+```{r}
+Arg_sig_u[155] <- "USP18"
+Arg_sig_u[60] <- "LOC642732"
+save(Arg_sig_u,file="D:/FLX/Reference_tables/Arg_sig_u.rdata")
+load(file="D:/FLX/Reference_tables/Arg_sig_u.rdata")
+Arg_sig_u 
+```
+

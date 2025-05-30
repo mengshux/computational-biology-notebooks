@@ -1,0 +1,588 @@
+---
+title: "scRNA Seurat Oct"
+author: "Mengshu"
+date: "10/12/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(magrittr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+
+```
+
+#Seurat does not have a User Manual. All the help functions are in R. Pasted below for quick reference
+??Seurat
+monocle::importCDS		Import a seurat or scatter/scran CellDataSet object and convert it to a monocle cds.
+RBGL::isKuratowskiSubgraph		isKuratowskiSubgraph
+Seurat::AddSamples		Add samples into existing Seurat object.
+Seurat::Convert		Convert Seurat objects to other classes and vice versa
+Seurat::CreateSeuratObject		Initialize and setup the Seurat object
+Seurat::FilterCells		Return a subset of the Seurat object
+Seurat::MergeSeurat		Merge Seurat Objects
+Seurat::Seurat-deprecated		Deprecated function(s) in the Seurat package
+Seurat::SubsetByPredicate		Return a subset of the Seurat object.
+Seurat::SubsetData		Return a subset of the Seurat object
+Seurat::UpdateSeuratObject		Update old Seurat object to accomodate new features
+Seurat::seurat		The Seurat Class
+
+??Read10X
+data_dir <- 'path/to/data/directory'
+list.files(data_dir) # Should show barcodes.tsv, genes.tsv, and matrix.mtx
+expression_matrix <- Read10X(data.dir = data_dir)
+seurat_object = CreateSeuratObject(raw.data = expression_matrix)
+
+??Read10X_h5
+Read10X_h5(path/to/filename, ensg.names = FALSE) #labels the genes with ENSG names rather than the HUGO names
+
+??CreateSeuratObject 
+CreateSeuratObject(raw.data, project = "SeuratProject", min.cells = 0,
+  min.genes = 0, is.expr = 0, normalization.method = NULL,
+  scale.factor = 10000, do.scale = FALSE, do.center = FALSE,
+  names.field = 1, names.delim = "_", meta.data = NULL,
+  display.progress = TRUE, ...)
+  
+??VlnPlot
+  VlnPlot(object, features.plot, ident.include = NULL, nCol = NULL,
+  do.sort = FALSE, y.max = NULL, same.y.lims = FALSE, size.x.use = 16,
+  size.y.use = 16, size.title.use = 20, adjust.use = 1,
+  point.size.use = 1, cols.use = NULL, group.by = NULL, y.log = FALSE,
+  x.lab.rot = FALSE, y.lab.rot = FALSE, legend.position = "right",
+  single.legend = TRUE, remove.legend = FALSE, do.return = FALSE,
+  return.plotlist = FALSE, ...)
+  
+??GenePlot(object, gene1, gene2, cell.ids = NULL, col.use = NULL,
+  pch.use = 16, cex.use = 1.5, use.imputed = FALSE, use.scaled = FALSE,
+  use.raw = FALSE, do.hover = FALSE, data.hover = "ident",
+  do.identify = FALSE, dark.theme = FALSE, do.spline = FALSE,
+  spline.span = 0.75, ...)
+  
+??FilterCells(object, subset.names, low.thresholds, high.thresholds,
+  cells.use = NULL)
+  
+??FindVariableGenes(object, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.1, x.high.cutoff = 8, y.cutoff = 1,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE, ...)
+  
+??ScaleData(object, genes.use = NULL, data.use = NULL, vars.to.regress,
+  model.use = "linear", use.umi = FALSE, do.scale = TRUE,
+  do.center = TRUE, scale.max = 10, block.size = 1000,
+  min.cells.to.block = 3000, display.progress = TRUE, assay.type = "RNA",
+  do.cpp = TRUE, check.for.norm = TRUE, do.par = FALSE, num.cores = 1)
+  
+??RunPCA(object, pc.genes = NULL, pcs.compute = 20, use.imputed = FALSE,
+  rev.pca = FALSE, weight.by.var = TRUE, do.print = TRUE,
+  pcs.print = 1:5, genes.print = 30, reduction.name = "pca",
+  reduction.key = "PC", assay.type = "RNA", seed.use = 42, ...)
+Returns Seurat object with the PCA calculation stored in object@dr$pca.
+
+??VizPCA(object, pcs.use = 1:5, num.genes = 30, use.full = FALSE,
+  font.size = 0.5, nCol = NULL, do.balanced = FALSE)
+
+PCA visualization
+PrintPCA, VizPCA, PCAPlot PCHeatmap
+  
+FindClusters(object, genes.use = NULL, reduction.type = "pca",
+  dims.use = NULL, k.param = 30, plot.SNN = FALSE, prune.SNN = 1/15,
+  print.output = TRUE, distance.matrix = NULL, save.SNN = FALSE,
+  reuse.SNN = FALSE, force.recalc = FALSE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 0.8, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+  
+RunTSNE(object, reduction.use = "pca", cells.use = NULL, dims.use = 1:5,
+  genes.use = NULL, seed.use = 1, tsne.method = "Rtsne", add.iter = 0,
+  dim.embed = 2, distance.matrix = NULL, reduction.name = "tsne",
+  reduction.key = "tSNE_", ...)
+
+FindAllMarkers(object, genes.use = NULL, logfc.threshold = 0.25,
+  test.use = "wilcox", min.pct = 0.1, min.diff.pct = -Inf,
+  print.bar = TRUE, only.pos = FALSE, max.cells.per.ident = Inf,
+  return.thresh = 0.01, do.print = FALSE, random.seed = 1,
+  min.cells.gene = 3, min.cells.group = 3, latent.vars = NULL,
+  assay.type = "RNA", ...)
+
+
+#Import data. Save as a sparse data matrix, where missing values are not recorded, and the positins of data that do exist is specified by a second data object.
+10X data is in the h5.h5 format
+```{r}
+pbmc_8k <- Read10X_h5("pbmc8k_raw_gene_bc_matrices_h5.h5", ensg.names= FALSE)
+```
+
+Create a seurat object from the loaded raw data: Filter out noise expression, and GEMs without cells 
+Usually normalization is not performed at this point
+```{r}
+pbmc <- CreateSeuratObject(pbmc_8k, project="Seurat_pbmc", min.cells=3, min.genes=200, is.expr = 0)
+```
+
+Standard Preprocessing workflow: These used to be blackbox standardized, but make explicit in the newest version for transparency
+This involves data exploration by graphing and setting thresholds based on how the data looks
+
+Mitochondrial genes: Calculate the percent of mitochondrial genes expressed in each cell, as an indicator of apoptosis
+It looks like > 0.1 percent.mito should be filtered out
+```{r fig.height=6, fig.width=16}
+#gathers the values for all MT rows
+mito.genes <- grep(pattern="^MT-", x= rownames(x=pbmc@data), value=TRUE)
+ #calculate percent of genes that are MITO for each cell. Summing total expression for each cell, sumMITO/sumALL
+percent.mito <- Matrix::colSums(pbmc@raw.data[mito.genes,])/Matrix::colSums(pbmc@raw.data)
+#add this information into pbmc under metadata
+pbmc <- AddMetaData(object=pbmc, metadata = percent.mito, col.name= "percent.mito")
+VlnPlot(object=pbmc, features.plot=c("nGene", "nUMI", "percent.mito"), nCol=3,  point.size.use = 0.1)
+
+```
+
+Plot percent.mito vs. nUMI, and nGene vs. nUMI
+Again, percent.mito > 0.1 looks like outliers, and are associated with very low nUMI, probably apoptosed cell debris
+```{r}
+#GenePlot is usually used for correlation between two genes, but will do a 2D scatter plot of anythng
+par(mfrow=c(1,2)) # I think this is a way to do facet plotting of two graphs together
+GenePlot(object=pbmc, gene1= "nUMI", gene2 = "percent.mito")
+GenePlot(object=pbmc, gene1= "nUMI", gene2= "nGene")
+
+```
+Filter dataset
+```{r}
+# pbmc <- FilterCells(object = pbmc, subset.names = c("nGene", "percent.mito"), low.thresholds = c(200, -Inf), high.thresholds = c(2500, 0.05))
+#I'm not going to apply an upper game for nGenes, because I can't see a clustering that indices doublets. 
+pbmc <- FilterCells(object=pbmc, subset.names=c("nGene", "percent.mito"), low.thresholds =c(500,-Inf), high.thresholds=c(Inf,0.1))
+```
+
+Normalize data
+LogNormalize: normalize each cell by total expression, multiply by scale factor 10000, and log2 transform
+```{r}
+pbmc <- NormalizeData(object=pbmc, normalization.method="LogNormalize", scale.factor=10000)
+```
+Variable genes are useful for analysis. This step identifies them for downstream analysis
+Cutoff for high average expression, which should exclude the RPL genes, which are not very informative)
+```{r fig.height=15, fig.width=20}
+pbmc <- FindVariableGenes(pbmc, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0125, x.high.cutoff = 3.5, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+```
+```{r}
+length(x=pbmc@var.genes)
+```
+Remove uninteresting variable by regression: Here since the PBMCs are not cycling cells, regress by UMI and percent mito gene content. This regression is part of ScaleData
+ScaleData also scales and centers the data. 
+
+```{r}
+pbmc <- ScaleData(object=pbmc, vars.to.regress=c("nUMI","percent.mito"), display.progress = TRUE, assay.type = "RNA", check.for.norm = TRUE)
+```
+
+Perform linear dimensional reduction
+```{r}
+pbmc <- RunPCA(object = pbmc, pc.genes = pbmc@var.genes, pcs.compute = 29, do.print = TRUE, pcs.print = 1:29, 
+    genes.print = 5)
+```
+Examine PCA results visually
+```{r}
+#Just print PCA results
+PrintPCA(object=pbmc, pcs.print=1:10, genes.print = 10, use.full = FALSE)
+```
+# What do the values mean? 
+# The values are eigenvalues, which represent their contribution to the PC, the higher the number to 1, the more effect
+# What does a positive or a negative value mean?
+# Negative values mean the feature has a negative contribution to the PC: lower expression of the gene more strongly defines the PC 
+```{r fig.height=20, fig.width=20}
+VizPCA(object=pbmc, pcs.use=20:29,font.size = 1)
+
+```
+
+Only the first 12 PCs really change the shape of sample clusters. Starting with 13 on, the samples mostly fall into one large smooth ovoid cluster
+
+```{r}
+PCAPlot(object=pbmc, dim.1 = 15, dim.2 = 16)
+```
+PC1 doesn't separate cells from each other, it's continuous: IL7, CD3G are specific to T cells
+PC2 clearly separates cells into 2 groups: CD79A, CD79B are B cell markers
+PC3:All negative eigenvalues: NKG7 is a natural killer cell granule protein
+PC4: All negative eigenvalues: CD160 is a NK and T cell marker, and , PTCRA marks immature T cells
+PC5: All negative eigenvalues: IL3RA is CD123 Dendritic, granulocyte marker
+PC6: CD14, granulocyte, monocyte marker
+Divisive: 2,5,6,10,14*      Continuous: 1,3,7,8,9,11,12,13,15,16        No resolution: 4
+
+
+```{r fig.height=20, fig.width=20}
+PCHeatmap(object=pbmc, pc.use=1:18, cells.use = 500, do.balanced= TRUE, label.columns= FALSE)
+# All clusters look pretty distinctive
+```
+Determine statistically significant components
+A resampling test inspired by the JackStraw procedure. Randomly permutate a subset of data (1% default) and rerun PCA, looking for PCs that are enriched for genes that change PC grouping when changed. 
+This step takes a long time
+```{r fig.height=20, fig.width=20}
+#this process can take a long time
+pbmc <- JackStraw(object = pbmc, num.replicate = 100, display.progress = FALSE)
+JackStrawPlot(object = pbmc, PCs = 1:20) 
+ggsave("JackstrawPlot of PCs.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+```
+The PCE elbow plot is a more ad hoc wat of determining a cut-off. Here it looks like the cutoff is around 14, but from the JackStraw and heatmaps, all PCs are significant. Therefore, I will try keeping all PCs.
+
+```{r}
+PCElbowPlot(object = pbmc)
+#Elbow looks like it's at PC 14
+```
+#############################
+#############################
+
+          CLUSTERING
+
+#############################
+#############################
+Cluster cells into groups. Using graph-cased clustering. The method embeds cells in a graph structure, like a K-nearest neighbour graph, and then refines the edges. The cells are grouped iteratively. 
+Using the first 20 PCs is enough. The PCs after 13 don't really separate cells. Clustering using 29 didn't give meaningful sub-divisions
+```{r}
+pbmc <- FindClusters(pbmc,reduction.type = "pca",
+  dims.use = 1:20, k.param = 30, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = FALSE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 1.5, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+
+PrintFindClustersParams(object=pbmc)
+```
+Run t-SNE to cluster cells for visualization
+I removed the do.fast= TRUE term to try to improve results. 24
+```{r}
+pbmc <- RunTSNE(object = pbmc, dims.use = 1:20)
+
+```
+Plot tSNE
+```{r fig.height=6, fig.width=12}
+TSNEPlot(object = pbmc, do.label = TRUE, pt.size = 0.8, label.size = 4) 
+ggsave("tSNE_PBMC_8K_seurat_Nov8.jpg", width=12, height=8, dpi=600, plot= last_plot(), units="in")
+
+write.table(table(pbmc@ident), "PBMC_Cluster_counts.txt")
+
+```
+
+Save results
+```{r}
+saveRDS(pbmc, file="10X_8K_PBMC_Seurat.rds")
+saveRDS(pbmc_label, file="10X_8K_PBMC_Seurat.rds")
+pbmc <- readRDS("10X_8K_PBMC_Seurat.rds")
+rm(pbmc)
+ls()
+```
+#################################################
+#################################################
+
+               DIFFERENTIAL ANALYSIS
+
+#################################################
+#################################################
+Cluster Biomarkers: Find differentially expressed genes
+Seurat can perform differential expression analysis. It compares each group against all other groups, or only certain groups to each other
+First, identify cell types by running group against all
+```{r}
+all.markers <- FindAllMarkers(object=pbmc, min.pct=0.5, logfc.threshold = 0.5)
+all.markers2 <- FindAllMarkers(object=pbmc, min.pct=0.5, logfc.threshold = 0.3)
+#min.pct is the minimum proportion of cells expression the marker in either group. 
+all.markers %>% group_by(cluster) %>% top_n(20, avg_logFC)
+all.markers %>% dfilter(gene=="GNLY") %>% .$cluster %>% table
+all.markers %>% dfilter(cluster==18)
+```
+Plots
+
+VlnPlot()
+FeaturePlot() # darkers the gene on the dotplot
+RidgePlot() # 
+CellPlot()
+DotPlot()
+DoHeatmap() Heatmap of clusters and gene subset
+
+
+```{r fig.height=10, fig.width=20}
+plot_pbmc <- FeaturePlot(object=pbmc, features.plot = c("CD3D","CD8A","CD4","CD79A","GNLY","GZMB","PRF1","LYZ","CD14","KLF4","PPBP","KLRB1","CD69","CCR7","nUMI","percent.mito"), cols.use=c("grey","blue"), nCol=4, no.legend=FALSE) +
+ggsave("ClusterGenePlot_PBMC.jpg", width= 25, height=22, dpi=600, plot= last_plot(), units = "in")
+
+FeaturePlot(object=pbmc, features.plot = c("MAP4K1"), cols.use=c("grey","blue"), no.legend=FALSE) +
+ggsave("ClusterGenePlot_HPK1.jpg", width= 8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+pbmc@data %>% dfilter(var.genes=="MAP4K1")
+```
+T cells heatmaps
+
+```{r fig.height=15, fig.width=16}
+FeaturePlot(object=pbmc, features.plot = c("CD3D","CD8A","CD4","CCR7","GZMB","KLRB1","SELL","PRF1","GNLY","NKG7","CD14","ITGAE","CD69","LEF1"), cols.use=c("grey","blue"), no.legend=FALSE) +
+ggsave("Tcell_ClusterGenePlot.jpg", width= 30, height=18, dpi=600, plot= last_plot(), units = "in")
+VlnPlot(object=pbmc, features.plot = c("CD3D","CD8A","TRGC2","IFITM3","ZNF683","NCR3","XCL2"))
+```
+```{r fig.height=6, fig.width=16}
+FeaturePlot(object=pbmc, features.plot = c("CCR7","KLRB1","IFNG","IL2RB"), cols.use=c("grey","blue"), no.legend=FALSE) +
+ggsave("Naive&Active_ClusterGenePlot.jpg", width= 13, height=8, dpi=600, plot= last_plot(), units = "in")
+
+VlnPlot(object=pbmc, features.plot = c("nGene", "nUMI")) +
+ggsave("Cell_metrics_violin.jpg", width= 13, height=8, dpi=600, plot= last_plot(), units = "in")
+FeaturePlot(object=pbmc, features.plot = c("nGene", "nUMI"), cols.use=c("grey","blue"), no.legend=FALSE) +
+ggsave("Cell_metrics.jpg", width= 13, height=8, dpi=600, plot= last_plot(), units = "in")
+```
+
+What is the difference between cluter 0 and the rest of the CD8 T cells? 
+CCR7 expression, which differentiates Naive and effector T cells
+```{r}
+Tcells_vs_0 <- FindMarkers(object=pbmc, ident.1=0, ident.2 =c(14,7,16), min.pct=0.5, logfc.threshold = 0.5)
+Tcells_vs_0 %<>% mutate(gene=rownames(Tcells_vs_0)) %>% arrange(avg_logFC)
+tail(Tcells_vs_0)
+write.csv(Tcells_vs_0, file="Cluster0vsTcells.txt", sep="\t")
+```
+T cells: 
+cluster 16 from 14 and 7
+Cluster 15 from 14, 7, 16
+```{r}
+Tcells_vs_16 <- FindMarkers(object=pbmc, ident.1=16, ident.2 =c(7), min.pct=0.5, logfc.threshold = 0.3)
+Tcells_vs_16 %<>% mutate(gene=rownames(Tcells_vs_16)) %>% arrange(avg_logFC)
+
+Tcells_vs_15 <- FindMarkers(object=pbmc, ident.1=15, ident.2 =c(14,7,16), min.pct=0.5, logfc.threshold = 0.3)
+Tcells_vs_15 %<>% mutate(gene=rownames(Tcells_vs_15)) %>% arrange(avg_logFC)
+```
+NK cell: cluster 20 is SELL high
+20 vs 9 and 10
+```{r}
+NKcells_vs_20 <- FindMarkers(object=pbmc, ident.1=20, ident.2 =c(9,10), min.pct=0.5, logfc.threshold = 0.3)
+NKcells_vs_20 %<>% mutate(gene=rownames(Bcells_vs_20)) %>% arrange(avg_logFC)
+```
+
+CD4 T cells
+Cluster 1 vs 3 and 6 Cluster 6 vs 1 and 3
+```{r}
+CD4cells_vs_1 <- FindMarkers(object=pbmc, ident.1=1, ident.2 =c(3,6), min.pct=0.5, logfc.threshold = 0.3)
+CD4cells_vs_1 %<>% mutate(gene=rownames(CD4cells_vs_1)) %>% arrange(avg_logFC)
+
+CD4cells_vs_6 <- FindMarkers(object=pbmc, ident.1=6, ident.2 =3, min.pct=0.2, logfc.threshold = 0.3)
+CD4cells_vs_6 %<>% mutate(gene=rownames(CD4cells_vs_6)) %>% arrange(avg_logFC)
+```
+Monocyte heatmaps
+```{r fig.height=20, fig.width=20}
+FeaturePlot(object=pbmc, features.plot = c("LYZ","CD14","ITGAX", "HLA-DPB1","FCGR3A","CD1C","CXCL8","IL3RA","CLEC4C","CD33"), cols.use=c("grey","blue"),no.legend=FALSE) 
+ggsave("Myeloid_ClusterGenePlot.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+VlnPlot(object=pbmc, features.plot = c("LYZ","CD14","ITGAX", "HLA-DPB1","FCGR3A","CD1C","CXCL8","IL3RA","CLEC4C","CD33"), use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE)
+ggsave("Myeloid_VlnGenePlot.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+```
+Monocyte
+```{r}
+Monocyte_vs_13 <- FindMarkers(object=pbmc, ident.1=13, ident.2 =c(2,5,11,12), min.pct=0.5, logfc.threshold = 0.3)
+Monocyte_vs_13 %<>% mutate(gene=rownames(Monocyte_vs_13)) %>% arrange(avg_logFC)
+
+Monocyte_vs_12 <- FindMarkers(object=pbmc, ident.1=12, ident.2 =c(2,5,11,13), min.pct=0.5, logfc.threshold = 0.3)
+Monocyte_vs_12 %<>% mutate(gene=rownames(Monocyte_vs_12)) %>% arrange(avg_logFC)
+
+Monocyte_vs_11 <- FindMarkers(object=pbmc, ident.1=11, ident.2 =c(2,5), min.pct=0.5, logfc.threshold = 0.3)
+Monocyte_vs_11 %<>% mutate(gene=rownames(Monocyte_vs_11)) %>% arrange(avg_logFC)
+```
+B cell
+```{r fig.height=5, fig.width=13}
+Monocyte_vs_17 <- FindMarkers(object=pbmc, ident.1=17, ident.2 =c(4,8), min.pct=0.5, logfc.threshold = 0.3)
+Monocyte_vs_17 %<>% mutate(gene=rownames(Monocyte_vs_17)) %>% arrange(avg_logFC)
+
+Monocyte_4_vs_8 <- FindMarkers(object=pbmc, ident.1=4, ident.2 =c(8), min.pct=0.5, logfc.threshold = 0.3)
+Monocyte_4_vs_8 %<>% mutate(gene=rownames(Monocyte_4_vs_8)) %>% arrange(avg_logFC)
+
+Monocyte_4_vs_8 <- FindMarkers(object=pbmc, ident.1=4, ident.2 =c(8), min.pct=0.5, logfc.threshold = 0.3)
+Monocyte_4_vs_8 %<>% mutate(gene=rownames(Monocyte_4_vs_8)) %>% arrange(avg_logFC)
+
+Monocyte_2_vs_5 <- FindMarkers(object=pbmc, ident.1="2. CD14+ Monocytes", ident.2 ="5. CD14+ Monocytes", min.pct=0.5, logfc.threshold = 0.3)
+Monocyte_2_vs_5 %<>% mutate(gene=rownames(Monocyte_2_vs_5)) %>% arrange(avg_logFC)
+```
+#################################################
+#################################################
+
+               Relabel Cell Groups
+
+#################################################
+#################################################
+
+
+```{r}
+current.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+new.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+current.cluster.ids <- c("0. Naive CD8 T","1. Active CD4 T", "2. Active Monocyte", "3. Naive CD4 T", "4. B cells","5. Monocyte","6. Naive CD4 T","7. T EM","8. B cells","9. NK cell","10. NKT cell","11. Immature Monocyte","12. FCGR3A+ DC4", "13. DC2", "14. T effector", "15. Apoptotic T","16. T RM","17. CD3+ B","18. DC1","19. Megakaryocyte","20. NK precursor" )
+new.cluster.ids <- c("0. Naive CD8 T","1. Active CD4 T", "2. Active Monocyte", "3. Naive CD4 T", "4. B cell precursor","5. Monocyte","6. Naive CD4 T","7. T EM","8. B cells","9. NK cell","10. NKT cell","11. Immature Monocyte","12. FCGR3A+ DC4", "13. DC2", "14. T effector", "15. Apoptotic T","16. T RM","17. CD3+ B","18. DC1","19. Megakaryocyte","20. NK precursor" )
+pbmc@ident <- plyr::mapvalues(x = pbmc@ident, from = current.cluster.ids, to = new.cluster.ids)
+TSNEPlot(object = pbmc, do.label = TRUE, pt.size = 1, label.size = 3) 
+ggsave("Labelled_ClusterGenePlot.jpg", width= 14, height=7, dpi=600, plot= last_plot(), units = "in")
+
+
+```
+
+Violin Plots for markers
+```{r fig.height=7, fig.width=20}
+VlnPlot(object = pbmc, features.plot = c("CD3D","CD3E","CD3G","CD79A"), use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE) +
+ggsave("CD3+ B cell.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+```
+T RM heatmaps
+```{r fig.height=15, fig.width=20}
+FeaturePlot(object=pbmc, features.plot = c("CD69","CD8A","ITGAE","KLRB1","PRF1","GZMB","HAVCR2","CTLA4","PDCD1","SELL","KLRG1"), cols.use=c("grey","blue"),no.legend=FALSE) 
+#ggsave("Trm_ClusterGenePlot.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+VlnPlot(object=pbmc, features.plot = c("CD69","CD8A","ITGAE","KLRB1","PRF1","GZMB","HAVCR2","CTLA4","PDCD1","SELL","CCR7","KLRG1"), use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE)
+VlnPlot(object=pbmc, features.plot = c("nGene","percent.mito"), use.raw = TRUE, y.log = TRUE, x.lab.rot = TRUE) +
+ggsave("VlnGenePlot_mito_gene.jpg", width= 20, height=10, dpi=600, plot= last_plot(), units = "in")
+```
+
+HPK1
+```{r}
+library(plotly)
+FeaturePlot(object=pbmc, features.plot = c("MAP4K1"), cols.use=c("grey","blue"), no.legend=FALSE, do.hover=TRUE, data.hover = c("ident", "nGene")) 
+
+FeaturePlot(object=pbmc, features.plot = c("MAP4K1","GZMB"), cols.use=c("grey","blue","red","green"), overlay=TRUE, no.legend=FALSE, do.hover=TRUE, data.hover = c("ident", "nGene")) 
+
+VlnHPK1 <- VlnPlot(object=pbmc, features.plot = c("MAP4K1"), x.lab.rot = TRUE) 
+ggsave("Vln_Feature_HPK1.jpg", width= 9, height=5, dpi=600, plot= VlnHPK1, units = "in")
+
+FeaturePlot(object=pbmc_30, features.plot = c("IL4","IL6","IL10","IL13","nGene","nUMI","percent.mito"), cols.use=c("grey","blue"), no.legend=FALSE) 
+
+ggsave("Vln_Feature_HPK1.jpg", width= 9, height=7, dpi=600, plot= last_plot(), units = "in")
+```
+
+##########
+###########
+Re-CLUSTER
+
+################
+#####################
+
+
+
+```{r fig.height=6, fig.width=12}
+#Save original labels for clusters before re-clustering
+
+pbmc <- StashIdent(object = pbmc, save.name = "ClusterNames_1.5")
+
+
+#Re-run with higher resolution number: 2.0, to subdivide clusters further
+pbmc <- FindClusters(pbmc,reduction.type = "pca",
+  dims.use = 1:20, k.param = 30, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = FALSE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 3.0, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+
+plot1 <- TSNEPlot(object = pbmc, do.return = TRUE, no.legend = TRUE, do.label = TRUE)
+plot2 <- TSNEPlot(object = pbmc, do.return = TRUE, group.by = "ClusterNames_1.5", 
+    no.legend = TRUE, do.label = TRUE)
+plot_grid(plot1, plot2)
+```
+```{r}
+naiveCD8.markers <- FindMarkers(object = pbmc, ident.1 = 10, ident.2 = 4)
+naiveCD8.markers %<>% mutate(gene=rownames(naiveCD8.markers)) %>% arrange(avg_logFC)
+
+```
+
+
+Re-do PCA with 30 PCs
+```{r}
+pbmc_30 <- pbmc
+pbmc_30 <- RunPCA(object = pbmc, pc.genes = pbmc@var.genes, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5, pcs.compute = 30)
+```
+
+```{r}
+PCHeatmap(object = pbmc_30, pc.use = 20:30, cells.use = 500, do.balanced = TRUE, 
+    label.columns = FALSE, use.full = FALSE)
+```
+Re-run jackstraw with 30 PCs, 29 of them look significant
+```{r fig.height=24, fig.width=12}
+pbmc_30 <- JackStraw(object = pbmc_30, num.replicate = 100, display.progress = FALSE, num.pc=30)
+JackStrawPlot(object = pbmc_30, PCs = 1:30)
+
+```
+```{r}
+pbmc_30 <- FindClusters(object = pbmc_30, reduction.type = "pca", dims.use = 1:29, 
+    resolution = 1.5, print.output = 0, save.SNN = TRUE)
+pbmc_30 <- RunTSNE(object = pbmc, dims.use = 1:29, do.fast = TRUE)
+TSNEPlot(object = pbmc_30, do.label=TRUE)
+ggsave("Labelled_ClusterGenePlot30.jpg", width= 9, height=5, dpi=600, plot= last_plot(), units = "in")
+```
+
+##### Gene plots
+
+```{r fig.height=12, fig.width=16}
+FeaturePlot(object=pbmc_30, features.plot = c("CD3D","CD8A","CD79A","GNLY","LYZ","CD14","CD1C","KLF4","PPBP", "CD4","KLRB1","CD69","MAP4K1","CCR7","GZMB","PRF1","IL7R","MT-CYB","nGene", "nUMI", "percent.mito"), cols.use=c("grey","blue"), no.legend=FALSE) 
+FeaturePlot(object=pbmc_30, features.plot = c("MAP4K1"), cols.use=c("grey","blue"), no.legend=FALSE) 
+VlnPlot(object=pbmc_30, features.plot = c("MAP4K1")) 
+
+FeaturePlot(object=pbmc_30, features.plot = c("IL4","IL6","IL10","IL13","nGene","nUMI","percent.mito"), cols.use=c("grey","blue"), no.legend=FALSE) 
+
+ggsave("Feature_HPK1.jpg", width= 9, height=7, dpi=600, plot= last_plot(), units = "in")
+```
+DC markers
+
+```{r fig.height=12, fig.width=16}
+FeaturePlot(object=pbmc_30, features.plot = c("CD3D","CD8A","CD79A","HLA-DRB1","LYZ","CD14","CD1C","FCER1A","CLEC9A","S100A9","CD1D","FCGR3A","ITGAX","nGene","nUMI","percent.mito"), cols.use=c("grey","blue"), no.legend=FALSE) 
+```
+Differential Analysis of T cell clusters 19 and 20
+```{r}
+Tvs19.markers <- FindMarkers(object = pbmc_30, ident.1 = 19, ident.2 = 20)
+Tvs19.markers %<>% mutate(gene=rownames(Tvs19.markers)) %>% arrange(avg_logFC)
+
+Tvs7.markers <- FindMarkers(object = pbmc_30, ident.1 = 7, ident.2 = c(19))
+Tvs7.markers %<>% mutate(gene=rownames(Tvs7.markers)) %>% arrange(avg_logFC)
+
+T1vs11.markers <- FindMarkers(object = pbmc_30, ident.1 = 1, ident.2 = c(11))
+T1vs11.markers %<>% mutate(gene=rownames(T1vs11.markers)) %>% arrange(avg_logFC)
+
+T1vs22.markers <- FindMarkers(object = pbmc_30, ident.1 = 22, ident.2 = c(3))
+T1vs22.markers %<>% mutate(gene=rownames(T1vs22.markers)) %>% arrange(avg_logFC)
+```
+
+#################################################
+#################################################
+
+    CALCULATE AVERAGE EXPRESSION PER CLUSTER
+
+#################################################
+#################################################
+
+```{r}
+cluster.averages <- AverageExpression(object = pbmc, return.seurat = TRUE)
+```
+```{r}
+head(x = cluster.averages[, 1:5])
+```
+
+
+
+
+```{r}
+# How can I plot the average expression of NK cells vs. CD8 T cells?  Pass
+# do.hover = T for an interactive plot to identify gene outliers
+library(plotly)
+CellPlot(object = cluster.averages, cell1 = "7. T EM", cell2 = "16. T RM", do.hover = TRUE, hoverinfo="text")
+CellPlot(object = cluster.averages, cell1 = "4. B cells", cell2 = "8. B cells", do.hover = TRUE, hoverinfo="text")
+CellPlot(object = cluster.averages, cell1 = "9. NK cell", cell2 = "10. NKT cell", do.hover = TRUE, hoverinfo="text")
+CellPlot(object = cluster.averages, cell1 = "9. NK cell", cell2 = "20. NK precursor", do.hover = TRUE, hoverinfo="text")
+??do.hover
+```
+PC3: NK
+PC4: Megakaryocyte
+PC5: DC1
+PC6: DC4
+PC8: DC2
+PC9: T em
+PC10: B cell precursor vs mature
+PC11: not sure, Monocyte
+PC12: T eff
+PC18: B cell precursor
+PC20: T rm
+```{r}
+hi <-DoHeatmap(object = cluster.averages, genes.use = PCTopGenes(object = pbmc, pc.use = 20, do.balanced = TRUE), group.label.rot = TRUE, group.cex = 0)
+ggsave("Heatmap_PC20_Trm.jpg", width= 9, height=7, dpi=600, plot= hi, units = "in")
+```
+Differential expression table
+
+```{r}
+View(cluster.averages)
+```
+

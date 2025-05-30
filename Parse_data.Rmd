@@ -1,0 +1,298 @@
+---
+title: "Parse GEO expression data"
+author: "MX"
+date: "11/11/2020"
+output: html_document
+---
+
+Install packages
+```{r}
+install.packages("data.table","dplyr","magrittr","ggplot2")
+```
+
+
+```{r}
+library(data.table)
+library(magrittr) # for %<>% function
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+library(readxl)
+theme_bw
+```
+
+
+Read in Clinical metadata from Excel
+```{r}
+readxl::read_xlsx("/Volumes/Picard/FLX/Clinical_data_internship/Riaz_S_Table2.xlsx", sheet="Table S2", skip=2,trim_ws = TRUE)
+outcome <- readxl::read_xlsx("/Volumes/Picard/FLX/Clinical_data_internship/Riaz_S_Table2.xlsx", sheet="Table S2", skip=2,trim_ws = TRUE) %>% dselect(Patient,Response)
+```
+
+
+Read in raw reads data from file
+```{r}
+riaz <- read.table(file="/Users/mxu/Downloads/GSE91061_BMS038109Sample.hg19KnownGene.raw.csv",sep=",",header=TRUE)
+#riaz %>% dfilter(X %in% c(6134,2597))
+dim(riaz) # check how many rows and columns there are
+```
+
+Parse metadata out of data matrix and combine with Table S2 metadata
+
+#inspect the metadata
+There are some patients without Response data, did they drop of out of the study? 	Pt109 has On treatment data, but no outcome
+There are also some patients with multiple columns of data at Pre or On, like Pt109
+```{r}
+# parse meta data info out of colnames of data matrix
+long_name <- data.frame(orig_name = colnames(riaz)[2:length(colnames(riaz))]) %>% separate(orig_name,into=c("Patient","Time_point","Code"),sep="_", remove=FALSE)
+
+# combine long_name and outcome into one meta data table
+riaz_meta <- long_name %>% left_join(outcome, by="Patient") #  by= c("Patient"="other_name")
+??left_join
+# save the columns without Response data into a vector using pull(), to be removed from the matrix
+remove_cols <- riaz_meta %>% dfilter(is.na(Response) | Response=="NE") %>% pull(orig_name)
+
+# Categorize the 5 level response to R and NR, and filter out the NE 
+# Make a new column combining Pre/Post info and Response
+riaz_meta %<>% dfilter(Response != "NE") %>% dfilter(!is.na(Response)) %>% mutate(Resp_type = case_when(
+                     Response == "PD" ~ "NR",
+                     Response %in% c("PR","CR","SD") ~ "R")) %>%
+  mutate(Time_Response=paste0(Time_point,"_",Resp_type)) %>%
+  mutate(Time_Response = factor(Time_Response, levels=c("Pre_NR","On_NR","Pre_R","On_R")))
+
+```
+
+Remove patients without outcome from data matrix
+```{r}
+riaz %<>% dselect(-remove_cols)
+dim(riaz)
+```
+
+
+Translate Entrez Gene ID to HUGO
+Get translation table using biomaRt
+
+```{r}
+install.packages("BiocManager")
+BiocManager::install("biomaRt")
+require("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+listDatasets(mart)
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+listAttributes(mart) #entrezgene_id  hgnc_symbol external_gene_name
+
+annotLookup <- getBM(
+  mart = mart,
+  attributes = c(
+    "entrezgene_id","hgnc_symbol","external_gene_name") #  affy_hta_2_0
+  )
+colnames(annotLookup) <- c("entrezgene_id","hgnc_symbol","Gene")
+annotLookup %<>% dfilter(!is.na(entrezgene_id)) %>% dselect(-hgnc_symbol)
+annotLookup %<>% unique() %>% remove_rownames
+save(annotLookup,file="/Volumes/Picard/FLX/Reference_tables/ENTREZ_ID_2_HUGO.rdata")
+load(file="/Volumes/Picard/FLX/Reference_tables/ENTREZ_ID_2_HUGO.rdata")
+```
+
+Replace Entrez with HUGO names
+
+```{r}
+riaz %<>% left_join(annotLookup,by=c("X"="entrezgene_id")) %>% dselect(Gene,everything()) %>% dselect(-X)
+
+#There are duplicate genes: # group_by gene gives 20944 unique genes
+#There are missing Gene names apparently, there is 1 "NA"
+#riaz %>% group_by(Gene) %>% summarise(Num_sample=n()) %>% arrange(-Num_sample) #
+#riaz %>% dfilter(Gene %in% c("DDX11L1","ACBD6","CEP170","BACH1")) %>% arrange(Gene)#
+
+riaz %<>% group_by(Gene) %>% summarise_if(is.numeric,sum) %>% ungroup %>% dfilter(!is.na(Gene))
+save(riaz,file="riaz.rdata")
+```
+
+Create DESeq2 object 
+
+PCA plot
+
+https://support.bioconductor.org/p/77960/
+
+2 data inputs and 1 parameter are required to make a DESeq2 object:
+1. data matrix: cols of samples and rows of genes in a matrix, with gene names as rownames, ncol has to match nrow of...
+2. meta data: colData with samples in rows, meta data in columns, with no NAs, in data.frame format
+3. design: choose columns in meta data/colData to group samples with
+
+```{r}
+library(DESeq2)
+#library(tximport) # this is needed for importing from kallisto files
+#files <- base::list.files("/Volumes/Picard/FLX/HPK1/Listeria_OVA_HPK1/kallisto/", pattern=".tsv", full.names=TRUE)
+
+#convert the riaz data into a matrix
+riaz_m <-  riaz %>% tibble::column_to_rownames("Gene") %>% as.matrix # the main data file has to be a matrix
+
+riaz_de <- DESeqDataSetFromMatrix(riaz_m,
+                       colData = riaz_meta ,
+                       design= ~ Time_Response)
+
+riaz_de@assays@data$counts # the raw data counts are stored here
+```
+
+
+Apply regularized log transformation to the raw count data to prepare for PCA
+run >??DESeq2::rlog() to read more about it
+
+rlog() may take a long time with 50 or more samples,
+vst() is a much faster transformation: variance stabilizing transformation
+
+```{r}
+rld <- rlog(riaz_de) # this was taking too long
+vst_riaz <- vst(riaz_de)
+plotPCA(vst_riaz,intgroup="Time_Response") + scale_color_manual(values= c("orange","orangered","dodgerblue3","dodgerblue1"))
+
+plotPCA(vst_riaz,intgroup=c("Time_point")) + scale_color_manual(values= c("dodgerblue3","orangered"))
+
+plotPCA(vst_riaz,intgroup=c("Patient")) #+ scale_color_manual(values= c("dodgerblue3","orangered"))
+
+data <- plotPCA(vst_riaz,intgroup=c("Response"), returnData=TRUE) # plotPCA
+
+ggplot(data, aes(PC1,PC2, colour=group, label=Response, alpha=0.1)) + geom_label(vjust = "inward", hjust = "inward") 
+ggplot(data, aes(PC3,PC2, colour=group, label=Response, alpha=0.1)) + geom_label(vjust = "inward", hjust = "inward") 
+```
+
+Customize PlotPCA
+
+http://seqanswers.com/forums/showthread.php?t=66769
+```{r}
+plotPCA2 <- function (object, intgroup = "condition", ntop = 500, returnData = FALSE) 
+{
+    rv <- rowVars(assay(object))
+    select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, 
+        length(rv)))]
+    pca <- prcomp(t(assay(object)[select, ]))
+    percentVar <- pca$sdev^2/sum(pca$sdev^2)
+    if (!all(intgroup %in% names(colData(object)))) {
+        stop("the argument 'intgroup' should specify columns of colData(dds)")
+    }
+    intgroup.df <- as.data.frame(colData(object)[, intgroup, 
+        drop = FALSE])
+    group <- if (length(intgroup) > 1) {
+        factor(apply(intgroup.df, 1, paste, collapse = " : "))
+    }
+    else {
+        colData(object)[[intgroup]]
+    }
+    d <- data.frame(PC1 = pca$x[, 1], PC2 = pca$x[, 2], PC3 = pca$x[, 3], PC4 = pca$x[, 4], group = group, 
+        intgroup.df, name = colnames(object))
+    if (returnData) {
+        attr(d, "percentVar") <- percentVar[1:2]
+        return(d)
+    }
+    ggplot(data = d, aes_string(x = "PC2", y = "PC3", color = "group")) + 
+        geom_point(size = 3) + xlab(paste0("PC2: ", round(percentVar[1] * 
+        100), "% variance")) + ylab(paste0("PC3: ", round(percentVar[2] * 
+        100), "% variance")) + coord_fixed()
+}
+
+plotPCA2(vst_riaz,intgroup=c("Time_Response")) + scale_color_manual(values= c("orange","orangered","dodgerblue3","dodgerblue1"))
+
+```
+
+Explore genes in PCs
+https://www.biostars.org/p/339919/
+
+PC1: Coagulation: C3, MMP1, CLU, CFB, complement, Skin colour:TRPM1, OCA2
+PC2: CD45/Ptprc, HLA-DQA, CD74, S100A9, Cxcl9 myeloid markers
+PC4: CD24, S100A8/9 gMDSC
+```{r}
+rv = rowVars(assay(vst_riaz)) 
+select = order(rv, decreasing=TRUE)[seq_len(min(500, length(rv)))]
+pc = prcomp(t(assay(vst_riaz)[select,]))
+loadings = as.data.frame(pc$rotation)
+aload = abs(loadings)
+sweep(aload, 2, colSums(aload), "/")
+aload %>% arrange(-PC3) %>% top_n(n=200) %>% rownames %>% data.frame # %>% write.table(file="PC1.txt",quote=F,row.names = F)
+```
+
+
+####################
+####################
+
+DE Differential Expression analysis
+
+#####################
+####################
+
+Specify Reference to compare to and perform all pairwise analyses against reference sample
+Specify the worse response as baseline
+```{r}
+riaz_de$Time_Response <- relevel(riaz_de$Time_Response, ref = "Pre_NR") # Pre_R vs Pre_NR 
+riaz_de$Time_Response <- relevel(riaz_de$Time_Response, ref = "Pre_R")  # On_R vs Pre_R
+#riaz_de$Time_point <- relevel(riaz_de$Time_point, ref="Pre")
+
+riaz_de <- DESeq(riaz_de)
+resultsNames(riaz_de) # list all the different pairwise comparisons, "Time_Response_Pre_R_vs_Pre_NR"
+save(riaz_de,file="Riaz_DESeq2_object.rdata")
+```
+
+Extract, filter, arrange DE results
+```{r}
+Pre_R_vs_Pre_NR_UP <- results(riaz_de, name="Time_Response_Pre_R_vs_Pre_NR") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+Pre_R_vs_Pre_NR_UP %>% write.table(file="Riaz_Pre_R_vs_Pre_NR_UP.txt", sep="\t",row.names = FALSE,quote=F)
+
+Pre_R_vs_Pre_NR_DN <- results(riaz_de, name="Time_Response_Pre_R_vs_Pre_NR") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(padj)
+Pre_R_vs_Pre_NR_DN %>% write.table(file="Riaz_Pre_R_vs_Pre_NR_DN.txt", sep="\t",row.names = FALSE,quote=F)
+
+```
+
+Volcano Plot
+
+```{r fig.height=8, fig.width=6}
+
+library(EnhancedVolcano)
+#BiocManager::install("EnhancedVolcano")
+pdf("Time_Response_Pre_R_vs_Pre_NR",width = 6, height = 8)
+EnhancedVolcano(results(riaz_de,name="Time_Response_Pre_R_vs_Pre_NR"),
+                 lab = rownames(results(riaz_de)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 8),
+                 xlim = c(-12, 10),
+                 ylab = bquote(~-Log[10]~adjusted~italic(P)),
+                 title = 'Riaz Pre_R_vs_Pre_NR',
+                 pCutoff = 0.05,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'red'),
+                 colAlpha = 1)
+dev.off()
+
+```
+
+Read in kallisto data using tximport
+Create DeSeq2 object using tximport object
+```{r}
+library(tximport)
+files <- base::list.files("/Volumes/Picard/FLX/Clinical_data_internship/CPI_datasets/Gide/kallisto/kallisto/", pattern=".tsv", full.names=TRUE)
+tx2gene# gene translation get this using BioMart
+names <- base::list.files("/Volumes/Picard/FLX/Clinical_data_internship/CPI_datasets/Gide/kallisto/kallisto/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,"\\.")[[1]][1]}) %>% unlist
+gide <- tximport(files, type="kallisto", tx2gene=annotLookup,ignoreAfterBar=TRUE)
+colnames(gide$counts) <- names
+
+Gide <- DESeqDataSetFromTximport(gide,
+                       colData = data.frame(Sample=names) ,
+                       design= ~ Sample)
+
+gide$counts # <- raw counts matrix
+```
+
+Translate Ensembl transcript ID to HUGO
+Get translation table using biomaRt
+
+```{r}
+require("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+listDatasets(mart)
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+listAttributes(mart) #ensembl_transcript_id external_gene_name
+
+annotLookup <- getBM(
+  mart = mart,
+  attributes = c(
+    "ensembl_transcript_id_version","external_gene_name") #  affy_hta_2_0 "ensembl_transcript_id",
+  )
+```

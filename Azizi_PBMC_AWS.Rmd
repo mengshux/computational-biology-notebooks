@@ -1,0 +1,254 @@
+---
+title: "Azizi_PBMCs"
+author: "Mengshu"
+date: "12/17/2018"
+output: html_document
+---
+Load packages
+
+In the ssh terminal run:
+wajig install libcurl4-openssl-dev
+
+```{r}
+#install.packages("SAVER")  # no go, SAVER not available for R version 3.5.0
+devtools::install_github("mohuangx/SAVER")
+#Installation failed: error setting certificate verify locations:
+#  CAfile: microsoft-r-cacert.pem
+#  CApath: none
+install.packages("dplyr")
+library(SAVER)
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+#source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+
+Load data into table
+47016 cells by 14875 genes, split up into 5000 genes per batch
+```{r}
+expression_matrix <- read.table("Azizi_pbmc_raw_all_tissue.csv", header=TRUE, row.names=1, sep=",")
+expression_matrix[1:5,1:5]
+str(expression_matrix)
+dim(expression_matrix)
+# 12908 28013 28K cells, 12.9K genes
+```
+
+Impute
+Add row names and delete first column containing names
+Impute
+Save imputed object to rds
+BRCA.impute$estimate contains the data
+```{r}
+rownames(expression_matrix) <- expression_matrix[,1]
+expression_matrix <- expression_matrix[,-1]
+
+Azizi.impute1 <- saver(expression_matrix, pred.genes.only = TRUE, pred.genes= 1:7000, ncores=10, do.fast= FALSE, estimates.only=TRUE) #only do the impute to save computation resources
+#saveRDS(BRCA.impute, file="BRCA.SAVER.impute_Azizi.rds")
+saveRDS(BRCA.impute$estimate, file="BRCA_PBMC_SAVER.impute_Azizi.rds")
+BRCA.impute$estimate[1:5,1:5]
+#Impute of the entire dataset with SAVER took 18 hours running on 10 cores
+
+rownames(expression_matrix) <- expression_matrix[,1]
+expression_matrix <- expression_matrix[,-1]
+BRCA.impute$estimate[1:5,1:5]
+```
+
+Create Seurat object
+
+```{r}
+brca <- CreateSeuratObject(raw.data = BRCA.estimate, min.cells=3, min.genes=200, is.expr = 0.05)
+str(brca)
+```
+
+Add Mito data
+There is no need to filter by nGene or percent.mito, it all looks reasonable
+```{r}
+mito.genes <- grep(pattern="^MT-", x= rownames(x=brca@data), value=TRUE)
+ #calculate percent of genes that are MITO for each cell. Summing total expression for each cell, sumMITO/sumALL
+percent.mito <- Matrix::colSums(brca@raw.data[mito.genes,])/Matrix::colSums(brca@raw.data)
+#add this information into pbmc_mitounder metadata
+brca <- AddMetaData(object=brca, metadata=percent.mito, col.name= "percent.mito")
+
+VlnPlot(object=brca, features.plot=c("nGene", "nUMI", "percent.mito"),point.size.use = 0.05)
+#the reason all cells have the same nGene is due to the Imputation, it makes sure all genes have a non-0 value, even if it's small..To filter, set the is.expr filter to just above 0
+```
+
+Examine Ribosomal protein expression 
+```{r fig.height=6, fig.width=16}
+#gathers the values for all MT rows
+ribo.genes <- grep(pattern="^RP", x= rownames(x=brca@data), value=TRUE)
+ #calculate percent of genes that are MITO for each cell. Summing total expression for each cell, sumMITO/sumALL
+percent.ribo <- Matrix::colSums(brca@raw.data[ribo.genes,])/Matrix::colSums(brca@raw.data)
+#add this information into pbmc_mitounder metadata
+brca<- AddMetaData(object=brca, metadata = percent.ribo, col.name= "percent.ribo")
+
+VlnPlot(object=brca, features.plot=c("nGene", "nUMI", "percent.mito","percent.ribo"), nCol=4,  point.size.use = 0.1, x.lab.rot = TRUE)
+
+#Add RPS10 and RPL17
+RPS10 <- brca@raw.data[RPS10,]
+RPL17 <- brca@raw.data[RPL17,]
+brca<- AddMetaData(object=brca, metadata = RPS10, col.name= "RPS10")
+brca<- AddMetaData(object=brca, metadata = RPL17, col.name= "RPL17")
+```
+
+
+Normalize data
+LogNormalize: normalize each cell by total expression, multiply by scale factor 10000, and log2 transform
+```{r}
+brca<- NormalizeData(object=brca, normalization.method="LogNormalize", scale.factor=10000)
+```
+
+This step identifies variable genes for downstream analysis
+Cutoff for high average expression, which should exclude the RPL genes, which are not very informative)
+```{r fig.height=15, fig.width=20}
+brca<- FindVariableGenes(brca, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0125, x.high.cutoff = 2.5, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+```
+```{r}
+length(x=brca@var.genes)
+```
+! Re-do ScaleData. Regress RP genes. They were contributing to a division that wasn't meaningful. The problem with T cells is that some very abundant transcripts like CXCL13 are actually meaningful, so an abundance cut off will get rid of useful data. Also regress out percent.mito and nUMI in case it does make a difference
+```{r}
+brca <- ScaleData(object=brca, vars.to.regress=c("percent.ribo","percent.mito","nUMI","RPS10","RPL17"), display.progress = TRUE, assay.type = "RNA", check.for.norm = TRUE)
+```
+
+Perform linear dimensional reduction
+```{r}
+brca<- RunPCA(object = brca, pc.genes = brca@var.genes, pcs.compute = 20, do.print = TRUE, pcs.print = 1:20, 
+    genes.print = 5)
+```
+
+Determine statistically significant components
+A resampling test inspired by the JackStraw procedure. Randomly permutate a subset of data (1% default) and rerun PCA, looking for PCs that are enriched for genes that change PC grouping when changed. 
+This step takes a long time
+```{r fig.height=20, fig.width=20}
+#this process can take a long time
+brca<- JackStraw(object = brca, num.replicate = 100, display.progress = FALSE, num.pc = 40)
+JackStrawPlot(object = brca, PCs = 1:40) 
+ggsave("JackstrawPlot of PCs.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+```
+
+The PCE elbow plot is a more ad hoc way of determining a cut-off. 
+Here it looks like the cutoff is around 15, but from the JackStraw and heatmaps, all PCs are significant. PCs beyond 15 probably have minimal impact on clustering. Use 20 clusters. 
+```{r}
+PCElbowPlot(object = brca)
+#Elbow looks like it's at PC 14
+```
+Examine PCA results visually
+```{r}
+#Just print PCA results
+PrintPCA(object=brca, pcs.print=1:9, genes.print = 10, use.full = FALSE)
+
+```
+#############################
+#############################
+
+          CLUSTERING
+
+#############################
+#############################
+
+Cluster cells into groups. Using graph-cased clustering. The method embeds cells in a graph structure, like a K-nearest neighbour graph, and then refines the edges. The cells are grouped iteratively. 
+```{r}
+brca <- FindClusters(brca,reduction.type = "pca",
+  dims.use = 1:9, k.param = 30, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = FALSE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 0.4, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+
+PrintFindClustersParams(object=brca)
+```
+###################
+Run t-SNE to cluster cells for visualization
+#####################
+Default perplexity is 30
+Try 50
+```{r}
+brca <- RunTSNE(object = brca, reduction.use = "pca", cells.use = NULL, dims.use = 1:9,
+  genes.use = NULL, seed.use = 1, tsne.method = "Rtsne", add.iter = 0,
+  dim.embed = 2, distance.matrix = NULL, reduction.name = "tsne",
+  reduction.key = "tSNE_", perplexity = 50)
+
+```
+
+##################
+Run UMAP for visualization as comparison
+###################
+Seurat has a UMAP function, install the python version of umap on the local machine first, Seurat will call the python code from R
+In Terminal> sudo pip install umap-learn, then restart the R session
+n_neighbors = 30L   determines preservation of global structures (larger numbers). Typical range 5-50.
+Metrics: for this dataset, "manhattan"" works the best
+metric: chebyshev = manhattan (better borders) > cosine  > correlation > canberra (chaotic and clumpy) >>>> Jaccard (for binary data) >> Haversine (doens't run)
+```{r}
+library(umap)
+brca <- RunUMAP(brca, cells.use = NULL, dims.use = 1:9, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 10L,
+  min_dist = 0, metric = "manhattan", seed.use = 42)
+```
+
+Graph Clustering Results
+Plot tSNE and UMAP graphs
+#The global separation is not very distint, adjust the perplexity 
+Perplexity 100 doens't look any different from 50. 50 is a bit better than 30
+UMAP looks better than t-SNE for global relationships, and has fewer stray cells that don't agree with the clustering
+```{r fig.height=6, fig.width=8}
+par(mfrow=c(1,2)) #this doesn't work for Seurat plots
+TSNEPlot(object = brca, do.label = TRUE, pt.size = 0.5, label.size = 4) 
+DimPlot(object = brca, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 4) 
+DimPlot(object = BRCA_singlet, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 4) 
+ggsave("UMAP_BRCA_Azizi_nn10_manhattan.jpg", width=12, height=8, dpi=600, plot= last_plot(), units="in")
+
+write.table(table(pbmc_mito@ident), "PBMC_Cluster_counts.txt")
+
+```
+
+##############
+##############
+Save clustered data that isn't labelled -> Version A
+Save clustered data that isn't labelled, run 2 with regressing for percent.ribo, percent.mito, nUMI -> Version B # It didn't make much difference
+Save clustered data that isn't labelled, regression for RPS10 and RPL17, and only taking PC1-15-> Version C has 1 global cluster
+Tried running Clutering on just 9 PCs, still have 22 clusters, so the number of clusters is valid, and apparently very robust. 
+##############
+#############
+```{r}
+
+saveRDS(brca, file="BRCA_Seurat_Imputed_A.rds")
+
+saveRDS(brca, file="BRCA_Seurat_Imputed_B.rds")
+
+saveRDS(brca, file="BRCA_Seurat_Imputed_C.rds")
+brca <- readRDS("BRCA_Seurat_Imputed_C.rds")
+
+saveRDS(brca, file="BRCA_Seurat_Imputed_D.rds") # Dec 12 2018 9 clusters
+brca <- readRDS("BRCA_Seurat_Imputed_D.rds")
+
+saveRDS(brca_siglet,file="BRCA_singlet_Azizi.rds")
+BRCA_singlet <- readRDS("BRCA_singlet_Azizi.rds")
+
+```
+
+
+#################
+Identify cell clusters using cell markers
+#################
+, "percent.mito", "IFIT3", PPARGC1A is a marker of mitocohndrial activity in T cells
+IL7R- helper, TIGIT: T FH, CXCL13 T FH, Cxcr5 T fh, BCL6 T fh
+```{r fig.height=12, fig.width=15}
+FeaturePlot(object=brca, features.plot = c("NKG7","CD8A","CD4","GNLY","GZMB","PRF1","FOXP3","CTLA4","CCL4","PDCD1","CXCL13","CCR7","SELL","GZMK","MAP4K1","percent.ribo"), cols.use=c("grey90","blue"), nCol=4, no.legend=FALSE, reduction.use = "umap") 
+ggsave("UMAP_BRCA_Azizi_feature_D_2.jpg", width=20, height=15, dpi=600, plot= last_plot(), units="in")
+FeaturePlot(object=brca, features.plot = c("CD34","IL7R","CREM","SELL","NKG7", "TIGIT","ITGAE","BCL6"), cols.use=c("grey90","blue"), nCol=3, no.legend=FALSE, reduction.use = "umap") +
+ggsave("UMAP_BRCA_Azizi_feature_D_3.jpg", width=20, height=15, dpi=600, plot= last_plot(), units="in")
+FeaturePlot(object=brca, features.plot = c("MTRNR2L12","RPS10"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") +
+ggsave("UMAP_BRCA_MTRNR2L12_RPS10_C.jpg", width=10, height=4, dpi=

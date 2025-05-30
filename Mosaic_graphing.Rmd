@@ -1,0 +1,758 @@
+---
+title: "Mosaic_graphing.Rmd"
+author: "MX"
+date: "10/13/2020"
+output: html_document
+---
+
+Parse and graph FLX475 clinical biomarker data on CD8 and FOXP3 IHC stains from patient biopsy cores
+
+```{r}
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+library(readxl)
+theme_bw
+```
+
+Load Excel file
+```{r}
+#/Volumes/Picard/FLX/Mosaic/FLX004 FLX475-02 Raw Data_30Sep2020 RELEASE[1].xlsx
+CD8_FOXP3 <- readxl::read_xlsx("/Volumes/Picard/FLX/Mosaic/FLX004 FLX475-02 Raw Data_28Oct2020 RELEASE.xlsx", sheet="MOS487-RD FoxP3+CD8", skip=1,trim_ws = TRUE) %>% dfilter(!is.na(`Subject ID`)) %>% mutate_if(grepl("mm|Percent|Total|%",names(.)),as.numeric) # |Total|Percent|% 
+meta_data <- readxl::read_xlsx("/Volumes/Picard/FLX/Mosaic/FLX004 FLX475-02 Raw Data_28Oct2020 RELEASE.xlsx", sheet="Inventory") %>% dfilter(!is.na(`Subject ID`)) %>% mutate_if(grepl("mm|Percent|Total|%",names(.)),as.numeric) #Mosaic_ID
+HandE <- readxl::read_xlsx("/Volumes/Picard/FLX/Mosaic/FLX004 FLX475-02 Raw Data_28Oct2020 RELEASE.xlsx", sheet="H&E", skip=1) %>% dfilter(!is.na(`Subject ID`)) %>% mutate_if(grepl("mm|Percent|Total|%",names(.)),as.numeric)  #Mosaic_ID
+
+```
+
+
+
+```{r}
+meta_data
+HandE 
+```
+
+
+
+Merge data from Sheets into one
+```{r}
+library(readr)
+CD8_FOXP3 %>% left_join(meta_data %>% dselect("Mosaic ID","Collection Date","Tissue Site"), by=c("Mosaic ID")) %>% left_join(HandE %>% dselect("Mosaic ID","H&E Quality (P/F/L)","% Cancer Nuclei","% Cancer by Area","% Necrosis"), by="Mosaic ID") %>% write.table("FLX004 FLX475-02 Raw Data_28Oct2020 Merged.txt",sep="\t",quote=F,row.names = F)
+ihc <- CD8_FOXP3 %>% left_join(meta_data %>% dselect("Mosaic ID","Collection Date","Tissue Site"), by=c("Mosaic ID")) %>% left_join(HandE %>% dselect("Mosaic ID","H&E Quality (P/F/L)","% Cancer Nuclei","% Cancer by Area","% Necrosis"), by="Mosaic ID")
+#fix column header names
+param <- gsub(" / "," per ",colnames(ihc))
+param <- gsub(" |\\/","_",param)
+param <- gsub("\\^|\\+|\\(|\\)","",param)
+colnames(ihc) <- param
+```
+
+
+Calculate Total CD8 and FOXP3, and ratios
+Add 1 to everything to get real number ratios
+Parse the Visit into pre- post- and make into factor with levels
+```{r}
+ihc_1 <- ihc %>% mutate(Total_CD8_cells = Total_Cells*CD8_Percent_Positive*0.01+1, 
+               Total_FOXP3_cells = Total_Cells*FoxP3_Percent_Positive*0.01+1, 
+               CD8_FOXP3_ratio = Total_CD8_cells/Total_FOXP3_cells,
+               FOXP3_CD8_ratio = Total_FOXP3_cells/Total_CD8_cells,
+               CD8_FOXP3_log2 = log2(CD8_FOXP3_ratio),
+               FOXP3_CD8_log2 = log2(FOXP3_CD8_ratio)
+               ) %>% 
+                mutate(Visit_type = case_when(
+                grepl("Unscheduled",Visit) ~ "Follow_up",
+                grepl("Screen",Visit) ~ "Pre_treat",
+                grepl("C3D1",Visit) ~ "Follow_up"
+                )) %>% 
+                mutate(Visit_type = factor(Visit_type, levels=c("Pre_treat","Follow_up"))) %>%
+                mutate(Combo = case_when(
+                grepl(" 1a ",Visit) ~ "single_agent",
+                grepl(" 1b ",Visit) ~ "combo_agent",
+                grepl(" 2a ",Visit) ~ "single_agent",
+                grepl(" 2b ",Visit) ~ "combo_agent"
+                )) %>%
+                mutate(Phase = case_when(
+                grepl(" 1a ",Visit) ~ "1a",
+                grepl(" 1b ",Visit) ~ "1b",
+                grepl(" 2a ",Visit) ~ "2a",
+                grepl(" 2b ",Visit) ~ "2b"
+                )) %>%
+                arrange(Subject_ID) %>%
+                fill(Combo,.direction="down") %>%
+                fill(Phase,.direction="down") %>%
+                mutate(Combo=factor(Combo, levels=c("single_agent","combo_agent"))) %>%
+                dfilter(Anatomical_Location != "-") %>% arrange(Subject_ID)
+
+save(ihc,file="ihc_rdata")
+load("ihc_rdata")
+```
+
+Add in extra columns of mean log2 #, density, and percent cell data, and take their means for lines
+
+```{r}
+ihc_1 %<>% dfilter(!is.na(CD8_Percent_Positive)) %>%
+          mutate(CD8_FoxP3_percent_log2=log2((CD8_Percent_Positive+1)/(FoxP3_Percent_Positive+1)),
+                 CD8_FoxP3_density_log2=log2((CD8_Cells_per_mm2+1)/(FoxP3_Cells_per_mm2+1)) ) %>%
+          group_by(Subject_ID,Visit_type,Anatomical_Location) %>% 
+          mutate(CD8_FOXP3_log2_mean = mean(CD8_FOXP3_log2),
+                 CD8_FoxP3_percent_log2_mean = mean(CD8_FoxP3_percent_log2, na.rm=T),
+                 CD8_FoxP3_density_log2_mean = mean(CD8_FoxP3_density_log2, na.rm=T) ) %>%
+          mutate(CD8_density_mean = mean(CD8_Cells_per_mm2,na.rm=T),
+               FoxP3_density_mean = mean(FoxP3_Cells_per_mm2,na.rm=T),
+               CD8_percent_mean = mean(CD8_Percent_Positive,na.rm=T),
+               FoxP3_percent_mean = mean(FoxP3_Percent_Positive,na.rm=T) ) %>%
+          ungroup()
+```
+
+```{r}
+ihc_1 %>% dfilter(Subject_ID %in% tissue_matched) %>% dselect(Subject_ID,Tissue_Type) %>% unique
+```
+
+Examine data for matched samples
+
+Does sample have paired data?
+26 patients
+14 patients have matched pre-screen and post-treat
+12 patients have matched pre-screen and post-treat samples at the same tissue site
+
+0102-006 Phase 1b has post-treat data that failed, remove
+
+
+Matched tissues that don't match on word string
+Count these as the same site
+0104-002	Abdomen			
+0104-002	Abdominal
+
+0101-004	Abdomen			
+0101-004	Peritoneal Abdominal Wall
+```{r}
+#table of all patients by phase
+ihc_1 %>% dselect(Subject_ID,Phase) %>% unique %>% arrange(Subject_ID) %>% dselect(Phase) %>% table
+#unmatched and matched patients
+unmatch <- ihc_1 %>% dselect(Subject_ID,Visit_type) %>% unique %>% group_by(Subject_ID) %>% summarise(Num_sample=n()) %>% dfilter(Num_sample == 1) %>% pull(Subject_ID)
+matched <- ihc_1 %>% dselect(Subject_ID,Visit_type) %>% unique %>% group_by(Subject_ID) %>% summarise(Num_sample=n()) %>% dfilter(Num_sample > 1) %>% pull(Subject_ID)
+
+# table of total unmatched and matched patients
+ihc_1 %>% dselect(Subject_ID,Visit_type) %>% unique %>% group_by(Subject_ID) %>% summarise(Num_sample=n()) %>% dselect(Num_sample) %>% table
+#table of unmatched patients by phase and which Visit is missing
+ihc_1 %>% dselect(Subject_ID,Visit_type,Phase) %>% dfilter(Subject_ID %in% unmatch) %>% unique %>% dselect(Visit_type,Phase) %>% table
+ihc_1 %>% dselect(Subject_ID,Visit_type,Phase) %>% dfilter(Subject_ID %in% matched) %>% unique %>% dselect(Visit_type,Phase) %>% table
+
+tissue_matched <- ihc_1 %>% dselect(Subject_ID,Visit_type, Tissue_Site) %>% dfilter(Subject_ID %in% matched) %>% unique %>% group_by(Subject_ID,Tissue_Site) %>% summarise(Num_sample=n()) %>% dfilter(Num_sample == 2) %>% pull(Subject_ID)
+
+ihc %>% dselect(Subject_ID,Visit_type, Tissue_Site,Phase) %>% dfilter(Subject_ID %in% matched) %>% unique %>% group_by(Subject_ID,Tissue_Site,Phase) %>% summarise(Num_sample=n()) %>% ungroup %>% unique %>% dselect(-Tissue_Site,-Subject_ID) %>% table
+# 10 mathed exactly, 2 matched by meaning of words
+tissue_matched <- c(tissue_matched,"0104-002","0101-004")
+length(tissue_matched)
+```
+
+Add in column of Screening values to normalize to
+44 rows of tissue-matched screening data
+
+ihc_1 %<>% dfilter(!is.na(CD8_Percent_Positive)) %>%
+          mutate(CD8_FoxP3_percent_log2=log2((CD8_Percent_Positive+1)/(FoxP3_Percent_Positive+1)),
+                 CD8_FoxP3_density_log2=log2((CD8_Cells_per_mm2+1)/(FoxP3_Cells_per_mm2+1)) ) %>%
+          group_by(Subject_ID,Visit_type,Anatomical_Location) %>% 
+          mutate(CD8_FOXP3_log2_mean = mean(CD8_FOXP3_log2),
+                 CD8_FoxP3_percent_log2_mean = mean(CD8_FoxP3_percent_log2, na.rm=T),
+                 CD8_FoxP3_density_log2_mean = mean(CD8_FoxP3_density_log2, na.rm=T) ) %>%
+          mutate(CD8_density_mean = mean(CD8_Cells_per_mm2,na.rm=T),
+               FoxP3_density_mean = mean(FoxP3_Cells_per_mm2,na.rm=T),
+               CD8_percent_mean = mean(CD8_Percent_Positive,na.rm=T),
+               FoxP3_percent_mean = mean(FoxP3_Percent_Positive,na.rm=T) ) %>%
+          ungroup()
+          
+          
+```{r}
+count_screen <- ihc_1 %>% dfilter(Subject_ID %in% tissue_matched) %>% select(Subject_ID,Visit_type,Anatomical_Location,CD8_FOXP3_log2_mean,CD8_FoxP3_percent_log2_mean,CD8_FoxP3_density_log2_mean,CD8_density_mean,FoxP3_density_mean,CD8_percent_mean,FoxP3_percent_mean) %>% dfilter(Visit_type=="Pre_treat") %>% dselect(-Visit_type) %>% group_by(Subject_ID,Anatomical_Location) %>% 
+  mutate(CD8_FOXP3_log2_screen= CD8_FOXP3_log2_mean,
+         CD8_FoxP3_percent_screen= CD8_FoxP3_percent_log2_mean,
+         CD8_FoxP3_density_screen=CD8_FoxP3_density_log2_mean) %>% dselect(-CD8_FOXP3_log2_mean,-CD8_FoxP3_percent_log2_mean,-CD8_FoxP3_density_log2_mean) %>% mutate(CD8_density_screen=CD8_density_mean,
+         FoxP3_density_screen=FoxP3_density_mean,
+         CD8_percent_screen= CD8_percent_mean,
+         FoxP3_percent_screen=FoxP3_percent_mean
+         ) %>% 
+  dselect(-CD8_density_mean,-FoxP3_density_mean,-CD8_percent_mean,-FoxP3_percent_mean) %>% ungroup
+
+count_screen_all <- ihc_1 %>% select(Subject_ID,Visit_type,Anatomical_Location,CD8_FOXP3_log2_mean,CD8_FoxP3_percent_log2_mean,CD8_FoxP3_density_log2_mean,CD8_density_mean,FoxP3_density_mean,CD8_percent_mean,FoxP3_percent_mean) %>% dfilter(Visit_type=="Pre_treat") %>% dselect(-Visit_type) %>% group_by(Subject_ID,Anatomical_Location) %>% 
+  mutate(CD8_FOXP3_log2_screen= CD8_FOXP3_log2_mean,
+         CD8_FoxP3_percent_screen= CD8_FoxP3_percent_log2_mean,
+         CD8_FoxP3_density_screen=CD8_FoxP3_density_log2_mean) %>% dselect(-CD8_FOXP3_log2_mean,-CD8_FoxP3_percent_log2_mean,-CD8_FoxP3_density_log2_mean) %>% mutate(CD8_density_screen=CD8_density_mean,
+         FoxP3_density_screen=FoxP3_density_mean,
+         CD8_percent_screen= CD8_percent_mean,
+         FoxP3_percent_screen=FoxP3_percent_mean
+         ) %>% 
+  dselect(-CD8_density_mean,-FoxP3_density_mean,-CD8_percent_mean,-FoxP3_percent_mean) %>% ungroup
+
+ihc_1_ratio <- ihc_1 %>% dfilter(Subject_ID %in% tissue_matched) %>% left_join(count_screen, by=c("Subject_ID","Anatomical_Location")) %>% unique %>% 
+  mutate(CD8_FOXP3_log2_norm=CD8_FOXP3_log2_mean-CD8_FOXP3_log2_screen,
+CD8_FOXP3_percent_log2_norm=CD8_FoxP3_percent_log2_mean-CD8_FoxP3_percent_screen,
+CD8_FOXP3_density_log2_norm=CD8_FoxP3_density_log2_mean-CD8_FoxP3_density_screen) #%>% dfilter(Visit_type=="Follow_up")     # Only put in last term for Paul, to filter out the pre-screen 0s 
+
+save(ihc_1_ratio, file="ihc_1_ratio.rdata")
+load("ihc_1_ratio.rdata")
+```
+
+```{r}
+colnames(ihc_1_ratio)
+```
+
+Prism output
+```{r}
+Paul <- ihc_1_ratio %>% dfilter(Visit_type=="Follow_up") %>% mutate(CD8_FOXP3_ratio=2^(CD8_FOXP3_log2_norm),CD8_FOXP3_density_ratio=2^(CD8_FOXP3_density_log2_norm),CD8_FOXP3_percent_ratio=2^(CD8_FOXP3_percent_log2_norm) ) %>% dselect(Subject_ID, Tissue_Type, Phase,Combo, Anatomical_Location,CD8_FOXP3_log2_norm,CD8_FOXP3_density_log2_norm,CD8_FOXP3_percent_log2_norm,CD8_FOXP3_ratio,CD8_FOXP3_density_ratio,CD8_FOXP3_percent_ratio) %>% unique
+Paul %>% write.table(file="Mosaic_102820_Prism_all_TME.txt",sep="\t", quote=F, row.names = F)
+
+```
+
+
+Grouping parameters for graphing
+
+Phase: Part 1a, Part 1b, Part 2a
+Time: Screen, C3D1
+Site: Tumor, Stroma, All
+
+Data variables:
+Cell stain+ absolute number
+Cell stain+ percent
+Cell stain+ density
+
+Log2 Ratios for each of these
+Normalized Log2 Ratios for each (norm to Screen sample mean)
+
+Ways to deal with 0 values in Ratios:
++1
++0.1
+
+Plot FoxP3 per area,  paired by time, faceted by patients
+Plot FoxP3 percent,  paired by time, faceted by patients
+```{r fig.height=5, fig.width=12}
+ihc %>% dfilter(Subject_ID %in% tissue_matched) %>% 
+  ggplot(aes(x=Anatomical_Location,y=FoxP3_Cells_per_mm2, ymin=0, ymax=FoxP3_Cells_per_mm2, color=Visit_type, group=interaction(Visit_type,Anatomical_Location))) + 
+  geom_point(position=position_dodge2(width = 0.5)) +  # geom_jitter(width=0.3, height=0) + 
+  geom_linerange(position=position_dodge2(width = 0.5)) +
+  facet_wrap(~Subject_ID, scales="free_y", ncol=4) + 
+  scale_color_manual(values=c("#5B666F","#0A95A7")) + 
+  theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12))
+
+ihc %>% dfilter(Subject_ID %in% tissue_matched) %>% 
+  ggplot(aes(x=Anatomical_Location,y=FoxP3_Percent_Positive, ymin=0, ymax=FoxP3_Percent_Positive, color=Visit_type, group=interaction(Visit_type,Anatomical_Location))) + 
+  geom_point(position=position_dodge2(width = 0.5)) +  # geom_jitter(width=0.3, height=0) + 
+  geom_linerange(position=position_dodge2(width = 0.5)) +
+  facet_wrap(~Subject_ID, scales="free_y", ncol=4) + 
+  scale_color_manual(values=c("#5B666F","#0A95A7")) + 
+  theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12))
+
+```
+
+Plot CD8 per area, paired by time, grouped by Site, faceted by patient
+Plot CD8 percent positive, paired by time, grouped by Site, faceted by patient
+
+```{r fig.height=5, fig.width=12}
+ihc_1 %>% dfilter(Subject_ID %in% tissue_matched, Anatomical_Location=="ALL") %>% 
+  ggplot(aes(x=Anatomical_Location,y=CD8_Cells_per_mm2, ymin=0, ymax=CD8_Cells_per_mm2, color=Visit_type, group=interaction(Visit_type,Anatomical_Location))) + 
+  geom_point(position=position_dodge2(width = 0.5)) +  # geom_jitter(width=0.3, height=0) + 
+  geom_linerange(position=position_dodge2(width = 0.5)) +
+  facet_wrap(~Subject_ID, scales="free_y", ncol=4) + 
+  scale_color_manual(values=c("#5B666F","#0A95A7")) + 
+  theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12))
+
+ihc %>% dfilter(Subject_ID %in% tissue_matched) %>% 
+  ggplot(aes(x=Anatomical_Location,y=CD8_Percent_Positive, ymin=0, ymax=CD8_Percent_Positive, color=Visit_type, group=interaction(Visit_type,Anatomical_Location))) + 
+  geom_point(position=position_dodge2(width = 0.5)) +  # geom_jitter(width=0.3, height=0) + 
+  geom_linerange(position=position_dodge2(width = 0.5)) +
+  facet_wrap(~Subject_ID, scales="free_y", ncol=4) + 
+  scale_color_manual(values=c("#5B666F","#0A95A7")) + 
+  theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12))
+```
+############
+RATIOS
+#############
+
+The LOLLIPOP plots
+
+Plot CD8 to FoxP3 cell number ratio, paired by time, grouped by Site, faceted by patient
+ihc has ratios from + 0.1
+ihc_1 has ratios from + 1
+```{r fig.height=5, fig.width=10}
+#CD8/FoxP3
+library(scales)
+ihc_1 %>% dfilter(Subject_ID %in% tissue_matched) %>% 
+  ggplot(aes(x=Anatomical_Location,y=CD8_FOXP3_log2, ymin=0,ymax=CD8_FOXP3_log2,color=Visit_type, group=Visit_type)) + 
+  geom_point(aes(size=Total_CD8_cells), position=position_dodge2(width = 0.75)) + 
+  scale_size_continuous(breaks=c(0,10,100,500,1000,2000,4000)) +
+  geom_linerange(position=position_dodge2(width = 0.75)) +
+  geom_hline(yintercept=0) +
+  facet_wrap(~Subject_ID, ncol=4) + 
+  scale_color_manual(values=c("#5B666F","#0A95A7")) + 
+  theme_bw()
+
+ihc_1 %>% dfilter(Subject_ID %in% MatchedTissue_Subject_ID) %>% 
+  ggplot(aes(x=Anatomical_Location,y=CD8_FOXP3_log2, ymin=0,ymax=CD8_FOXP3_log2,color=Visit_type, group=Visit_type)) + 
+  geom_point(aes(size=Total_CD8_cells), position=position_dodge2(width = 0.75)) + 
+  geom_linerange(position=position_dodge2(width = 0.75)) +
+  geom_hline(yintercept=0) +
+  #facet_wrap(~Subject_ID, ncol=4) + 
+  scale_color_manual(values=c("#5B666F","#0A95A7")) + 
+  theme_bw()
+
+#FoxP3/CD8
+ihc %>% dfilter(Subject_ID %in% MatchedTissue_Subject_ID) %>% 
+  ggplot(aes(x=Anatomical_Location,y=FOXP3_CD8_log2, ymin=0,ymax=FOXP3_CD8_log2,color=Visit_type, group=Visit_type)) + 
+  geom_point(aes(size=Total_FOXP3_cells),position=position_dodge2(width = 0.75)) + 
+  geom_linerange(position=position_dodge2(width = 0.75)) +
+  geom_hline(yintercept=0) +
+  #facet_wrap(~Subject_ID, ncol=4) + 
+  scale_color_manual(values=c("#5B666F","#0A95A7")) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(size=12, vjust=1, hjust=1,strip.text=element_text(size=12)), 
+        axis.text.y =element_text(size=12))
+
+ihc_1 %>% dfilter(Subject_ID %in% MatchedTissue_Subject_ID) %>% 
+  ggplot(aes(x=Anatomical_Location,y=FOXP3_CD8_log2, ymin=0,ymax=FOXP3_CD8_log2,color=Visit_type, group=Visit_type)) + 
+  geom_point(aes(size=Total_FOXP3_cells),position=position_dodge2(width = 0.75)) + 
+  geom_linerange(position=position_dodge2(width = 0.75)) +
+  geom_hline(yintercept=0) +
+  #facet_wrap(~Subject_ID, ncol=4) + 
+  scale_color_manual(values=c("#5B666F","#0A95A7")) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(size=12, vjust=1, hjust=1,strip.text=element_text(size=12) ), 
+        axis.text.y = element_text(size=12))
+```
+
+
+Plot by total population CD8/FoxP3
+The UGLY criscross plots
+
+CD8_FOXP3_log2_mean 
+CD8_FoxP3_percent_log2_mean 
+CD8_FoxP3_density_log2_mean 
+```{r fig.height=4, fig.width=4}
+
+ihc_1 %>% dfilter(Subject_ID %in% tissue_matched) %>% 
+      ggplot(aes(x=Visit_type,y=CD8_FOXP3_log2)) + 
+      stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,geom = "crossbar", width = 0.5) +
+      geom_boxplot(aes()) + 
+      geom_point(aes(size=Total_CD8_cells)) + #aes(size=Total_CD8_cells, colour=Subject_ID)
+      geom_line(aes(x=Visit_type,y=CD8_FOXP3_log2_mean, group=Subject_ID, color=Phase,size=2)) +
+      #geom_line(aes(group=interaction(Subject_ID,Visit_type,Anatomical_Location), color=Subject_ID),linetype="dashed",size=1.5) +
+      facet_wrap(~Anatomical_Location) + 
+      scale_size_continuous(breaks = c(1,10,100, 1000)) + #this is the size of the points
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_color_manual(values=c("#0A95A7","#E5541B","#0A95A7",blue="#0A95A7", orange="#E5541B", gray="#5B666F", yellow="#FE9F33", green="#4DA167", blue="#0A95A7",orange="#E5541B",blue="#0A95A7")) +
+      theme_bw() 
+
+ihc_1 %>% dfilter(Subject_ID %in% tissue_matched) %>% 
+      ggplot(aes(x=Visit_type,y=CD8_FoxP3_percent_log2)) + 
+      stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,geom = "crossbar", width = 0.5) +
+      geom_boxplot(aes()) + 
+      geom_point(aes(size=Total_CD8_cells)) + #aes(size=Total_CD8_cells, colour=Subject_ID)
+      geom_line(aes(x=Visit_type,y=CD8_FoxP3_percent_log2_mean, group=Subject_ID, color=Phase,size=2)) +
+      #geom_line(aes(group=interaction(Subject_ID,Visit_type,Anatomical_Location), color=Subject_ID),linetype="dashed",size=1.5) +
+      facet_wrap(~Anatomical_Location) + 
+      scale_size_continuous(breaks = c(1,10,100, 1000)) + #this is the size of the points
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_color_manual(values=c("#0A95A7","#E5541B","#0A95A7",blue="#0A95A7", orange="#E5541B", gray="#5B666F", yellow="#FE9F33", green="#4DA167", blue="#0A95A7",orange="#E5541B",blue="#0A95A7")) +
+      theme_bw() 
+
+# Only plot the two samples that decrease
+ihc_1 %>% dfilter(Subject_ID %in% c("0111-002","1802-006","0104-002"), Anatomical_Location =="ALL" ) %>% 
+      ggplot(aes(x=Visit_type,y=CD8_FoxP3_percent_log2)) + 
+      #stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,geom = "crossbar", width = 0.5) +
+      #geom_boxplot(aes()) + 
+      geom_point(aes(size=Total_CD8_cells,color=Phase,alpha=0.2)) + #aes(size=Total_CD8_cells, colour=Subject_ID)
+      geom_line(aes(x=Visit_type,y=CD8_FoxP3_percent_log2_mean, group=Subject_ID, color=Phase),size=1.5) +
+      #geom_line(aes(group=interaction(Subject_ID,Visit_type,Anatomical_Location), color=Subject_ID),linetype="dashed",size=1.5) +
+      facet_wrap(~Anatomical_Location) + z
+      scale_size_continuous(breaks = c(1,10,100, 1000)) + #this is the size of the points
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_color_manual(values=c("#0A95A7","#E5541B","#0A95A7",blue="#0A95A7", orange="#E5541B", gray="#5B666F", yellow="#FE9F33", green="#4DA167", blue="#0A95A7",orange="#E5541B",blue="#0A95A7")) +
+      theme_bw() 
+
+ihc_1 %>% dfilter(Subject_ID %in% c("0111-002","1802-006"),Anatomical_Location=="ALL" ) %>% dselect(Subject_ID,Visit,Anatomical_Location,Total_CD8_cells, Total_FOXP3_cells) %>% mutate(Total_CD8_cells=as.integer(Total_CD8_cells),Total_FOXP3_cells=as.integer(Total_FOXP3_cells))
+
+ihc_1 %>% dfilter(Subject_ID %in% c("0104-002"),Anatomical_Location=="ALL" ) %>% dselect(Subject_ID,Visit,Anatomical_Location,Total_CD8_cells, Total_FOXP3_cells) %>% mutate(Total_CD8_cells=as.integer(Total_CD8_cells),Total_FOXP3_cells=as.integer(Total_FOXP3_cells))
+```
+
+
+Plot Absolute number Log ratios normalized to Screening Time
+
+THE NORMALIZED NICE PLOT
+
+```{r}
+ihc_1_ratio %>% dfilter(Subject_ID %in% tissue_matched) %>% left_join(best_response, by="Subject_ID") %>%
+      ggplot(aes(x=Visit_type,y=CD8_FOXP3_log2_norm)) + 
+      geom_point() +
+      #geom_label(aes(label=Subject_ID)) + #aes(size=Total_CD8_cells, colour=Subject_ID)
+      geom_line(aes(x=Visit_type,y=CD8_FOXP3_log2_norm, group=Subject_ID, color=Combo),size=1) +
+      facet_wrap(~Anatomical_Location) + #, scale="free_y"
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F","#FE9F33", "#4DA167", "#947EB0","#083D77","#356E46", "#69597D", "#052344")) +
+      theme_bw() #+
+      #expand_limits(y=c(-40,30))
+
+
+```
+
+
+Percent
+Fig scale breaks in the legend for point size
+```{r}
+ihc_1_ratio %>% dfilter(Subject_ID %in% tissue_matched) %>% 
+      ggplot(aes(x=Visit_type,y=CD8_FOXP3_percent_log2_norm)) + 
+      geom_point() +
+      geom_label(aes(label=Subject_ID, alpha=0.2)) + 
+      geom_line(aes(x=Visit_type,y=CD8_FOXP3_percent_log2_norm, group=Subject_ID,color=Combo),size=1) +
+      #geom_text(aes(label=Subject_ID)) +
+      facet_wrap(~Anatomical_Location) + 
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_size_continuous(breaks = c(1,10,100, 1000)) + #this is the size of the points
+      scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F","#FE9F33", "#4DA167", "#947EB0","#083D77","#356E46", "#69597D", "#052344")) +
+      theme_bw() #+
+      #expand_limits(y=c(-40,30))
+```
+
+Density
+
+```{r}
+ihc_1_ratio %>% dfilter(Subject_ID %in% tissue_matched) %>%
+      ggplot(aes(x=Visit_type,y=CD8_FOXP3_density_log2_norm)) + 
+      #stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,geom = "crossbar", width = 0.5) +
+      #geom_boxplot(aes(alpha=0.9)) + 
+      geom_point() + #aes(size=Total_CD8_cells, colour=Subject_ID)
+      geom_label(aes(label=Subject_ID, alpha=0.2)) + 
+      geom_line(aes(x=Visit_type,y=CD8_FOXP3_density_log2_norm, group=Subject_ID,color=Combo),size=1) +
+      #geom_text(aes(label=Subject_ID)) +
+      #geom_line(aes(group=interaction(Subject_ID,Visit_type,Anatomical_Location), color=Subject_ID),linetype="dashed",size=1.5) +
+      facet_wrap(~Anatomical_Location) + #, scale="free_y"
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F","#FE9F33", "#4DA167", "#947EB0","#083D77","#356E46", "#69597D", "#052344")) +
+      theme_bw() #+
+```
+
+Combined all measures at ALL site location
+```{r fig.height=4, fig.width=8}
+ihc_1_ratio %>% dfilter(Subject_ID %in% tissue_matched) %>% dselect(CD8_FOXP3_percent_log2_norm,CD8_FOXP3_density_log2_norm,CD8_FOXP3_log2_norm,Visit_type,Subject_ID,Combo,Anatomical_Location,Total_CD8_cells) %>% dfilter(Anatomical_Location=="ALL") %>% gather(measure_type,log2_norm,-Visit_type,-Subject_ID,-Combo,-Anatomical_Location,-Total_CD8_cells) %>% left_join(best_response, by="Subject_ID") %>% mutate(Resp_type= case_when(
+  Best_Response > 0.2 ~ "PD",
+  Best_Response < -0.3 ~ "R",
+  TRUE ~ "SD"
+)) %>% mutate(Resp_type= factor(Resp_type, levels=c("PD","SD","R"))) %>%
+      ggplot(aes(x=Visit_type,y=log2_norm)) + 
+      geom_point(aes(color=Resp_type,size=Total_CD8_cells)) +
+      #geom_label(aes(label=Subject_ID, alpha=0.2)) + 
+      geom_line(aes(x=Visit_type,y=log2_norm, group=Subject_ID,color=Resp_type),size=1) +
+      #geom_text(aes(label=Subject_ID)) +
+      facet_wrap(~measure_type) + 
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      #scale_size_continuous(breaks = c(1,10,100, 1000)) + #this is the size of the points
+      scale_color_manual(values=c("#E5541B","#5B666F","#0A95A7","#FE9F33", "#4DA167", "#947EB0","#083D77","#356E46", "#69597D", "#052344")) +
+      theme_bw() #+
+      #expand_limits(y=c(-40,30))
+```
+
+
+Waterfall plots
+```{r}
+ihc_1_ratio %>% dfilter(Subject_ID %in% tissue_matched, Visit_type=="Follow_up") %>% mutate(Subject_ID= fct_reorder(Subject_ID,-CD8_FOXP3_density_log2_norm)) %>%
+      ggplot(aes(x=Subject_ID,y=CD8_FOXP3_density_log2_norm, ymin=0, ymax=CD8_FOXP3_density_log2_norm, color=Combo)) + 
+      geom_point() + #aes(size=Total_CD8_cells, colour=Subject_ID)
+      geom_linerange() +
+      facet_wrap(~Anatomical_Location) + #, scale="free_y"
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F","#FE9F33", "#4DA167", "#947EB0","#083D77","#356E46", "#69597D", "#052344")) +
+      theme_bw() +
+      geom_hline(yintercept=0) +
+      theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) +
+      nolegend()
+
+ihc_1_ratio %>% dfilter(Subject_ID %in% tissue_matched, Visit_type=="Follow_up") %>% mutate(Subject_ID= fct_reorder(Subject_ID,-CD8_FOXP3_percent_log2_norm)) %>%
+      ggplot(aes(x=Subject_ID,y=CD8_FOXP3_percent_log2_norm, ymin=0, ymax=CD8_FOXP3_percent_log2_norm, color=Combo)) + 
+      geom_point() + #aes(size=Total_CD8_cells, colour=Subject_ID)
+      geom_linerange() +
+      facet_wrap(~Anatomical_Location) + #, scale="free_y"
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F","#FE9F33", "#4DA167", "#947EB0","#083D77","#356E46", "#69597D", "#052344")) +
+      theme_bw() +
+      geom_hline(yintercept=0) +
+      theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) +
+      nolegend()
+
+ihc_1_ratio %>% dfilter(Subject_ID %in% tissue_matched, Visit_type=="Follow_up") %>% mutate(Subject_ID= fct_reorder(Subject_ID,-CD8_FOXP3_log2_norm)) %>%
+      ggplot(aes(x=Subject_ID,y=CD8_FOXP3_log2_norm, ymin=0, ymax=CD8_FOXP3_log2_norm, color=Combo)) + 
+      geom_point() + #aes(size=Total_CD8_cells, colour=Subject_ID)
+      geom_linerange() +
+      facet_wrap(~Anatomical_Location) + #, scale="free_y"
+      scale_fill_manual(values=c("#0A95A7","#E5541B")) +
+      scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F","#FE9F33", "#4DA167", "#947EB0","#083D77","#356E46", "#69597D", "#052344")) +
+      theme_bw() +
+      geom_hline(yintercept=0) +
+      theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) +
+      nolegend()
+```
+
+
+
+Correlation
+```{r fig.height=4, fig.width=4.2}
+library(plotly)
+plot_ly(x=ihc_1_test$CD8_FOXP3_log2_norm, y=ihc_1_test$CD8_FOXP3_density_log2_norm, z=ihc_1_test$CD8_FOXP3_percent_log2_norm, type="scatter3d", mode="markers",height=300)
+
+ggplot(ihc_1_test %>% dselect(ends_with("_norm"),Subject_ID,Combo,Total_CD8_cells) %>% unique,aes(x=CD8_FOXP3_log2_norm, y=CD8_FOXP3_density_log2_norm, color=Combo)) + geom_point(aes(size=Total_CD8_cells)) + theme_bw()# geom_label(aes(label=Subject_ID,alpha=0.4),size=3) 
+
+ggplot(ihc_1_test %>% dselect(ends_with("_norm"),Subject_ID,Combo,Total_CD8_cells) %>% unique,aes(x=CD8_FOXP3_log2_norm, y=CD8_FOXP3_percent_log2_norm, color=Combo)) + geom_point(aes(size=Total_CD8_cells)) + theme_bw() + theme_bw() + nolegend()# geom_label(aes(label=Subject_ID,alpha=0.4),size=3) + theme_bw()
+
+ggplot(ihc_1_test %>% dselect(ends_with("_norm"),Subject_ID,Combo,Total_CD8_cells) %>% unique,aes(x=CD8_FOXP3_density_log2_norm, y=CD8_FOXP3_percent_log2_norm, color=Combo)) + geom_point(aes(size=Total_CD8_cells)) + theme_bw() + nolegend()# geom_label(aes(label=Subject_ID,alpha=0.4),size=3) + theme_bw()
+
+```
+Calculate R squared
+
+```{r}
+model <- lm(CD8_FOXP3_density_log2_norm ~ CD8_FOXP3_percent_log2_norm, ihc_1_test)
+model <- lm(CD8_FOXP3_log2_norm ~ CD8_FOXP3_percent_log2_norm, ihc_1_test)
+model <- lm(CD8_FOXP3_log2_norm ~ CD8_FOXP3_density_log2_norm, ihc_1_test)
+summary(model)
+```
+
+
+
+Correlate to Best_Response (CONFIDENTIAL)
+
+Response score (CONFIDENTIAL)
+```{r}
+best_response <- readxl::read_xlsx("/Volumes/Picard/FLX/Mosaic/20201029 Best response snapshot.xlsx") 
+colnames(best_response) <- c("Subject_ID","Best_Response")
+best_response %<>% mutate(Best_Response= as.numeric(Best_Response))
+
+```
+
+Merge and plot for samples with tissue matched data: looking at CD8/FOXP3 ratio normalized to Screening ratio
+
+```{r fig.height=3.5, fig.width=11}
+ihc_1_ratio %>% left_join(best_response, by="Subject_ID") %>% dfilter(Visit_type== "Follow_up") %>%
+  ggplot(aes(y=CD8_FOXP3_log2_norm, x=Best_Response, colour=Combo)) + 
+  geom_point(size=2.5) + #aes(size=Total_CD8_cells)
+  #geom_label(aes(label=Subject_ID),alpha=0.2) +
+  facet_wrap(~Anatomical_Location) +
+  scale_x_reverse() +
+  theme_bw()
+```
+Categorize
+```{r fig.height=3.5, fig.width=11}
+library(ggbeeswarm)
+ihc_1_ratio %>% left_join(best_response, by="Subject_ID") %>% dfilter(Visit_type== "Follow_up") %>% dfilter(!is.na(Best_Response)) %>% mutate(Resp_type= case_when(
+  Best_Response > 0.2 ~ "PD",
+  Best_Response < -0.3 ~ "R",
+  TRUE ~ "SD"
+)) %>% mutate(Resp_type= factor(Resp_type, levels=c("PD","SD","R"))) %>%
+  ggplot(aes(y=CD8_FOXP3_log2_norm, x=Resp_type)) + 
+  geom_boxplot(alpha=0.3, width=0.5) +
+  geom_beeswarm(aes(color=Combo),size=2.5) +
+  facet_wrap(~Anatomical_Location) +
+  theme_bw()
+```
+
+Merge and plot for all samples with screening data: looking at Screening CD8/FOXP3 ratio 
+
+
+```{r fig.height=3.5, fig.width=11}
+ihc_1 %>% left_join(best_response, by="Subject_ID") %>% dfilter(Visit_type== "Pre_treat", !is.na(Best_Response)) %>% mutate(Resp_type= case_when(
+  Best_Response > 0.2 ~ "PD",
+  Best_Response < -0.3 ~ "R",
+  TRUE ~ "SD"
+)) %>% mutate(Resp_type= factor(Resp_type, levels=c("PD","SD","R"))) %>% dselect(Subject_ID,Anatomical_Location,Resp_type,CD8_FoxP3_percent_log2_mean,Best_Response) %>% unique %>%
+  ggplot(aes(y=CD8_FoxP3_percent_log2_mean, x=Best_Response, colour=Resp_type)) + 
+  geom_point(size=2.5) + #aes(size=Total_CD8_cells)
+  #geom_label(aes(label=Subject_ID),alpha=0.2) +
+  facet_wrap(~Anatomical_Location) +
+  scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F")) +
+  scale_x_reverse() +
+  theme_bw()
+```
+
+```{r}
+colnames(ihc_1)
+```
+Correlation between On-treatment CD8/FoxP3 ratio change and Response
+
+```{r fig.height=4, fig.width=4}
+ihc_1_ratio %>% left_join(best_response, by="Subject_ID") %>% dfilter(Visit_type== "Follow_up") %>% dfilter(!is.na(Best_Response)) %>% mutate(Resp_type= case_when(
+  Best_Response > 0.2 ~ "PD",
+  Best_Response < -0.3 ~ "R",
+  TRUE ~ "SD"
+)) %>% mutate(Resp_type= factor(Resp_type, levels=c("PD","SD","R"))) %>% dfilter(Anatomical_Location=="ALL") %>%
+  ggplot(aes(x=CD8_FOXP3_log2_norm, y=Best_Response)) +
+  geom_point(aes(color=)) +
+  scale_y_reverse() +
+  theme_bw()
+
+CD8_FOXP3_percent_log2_norm
+CD8_FOXP3_density_log2_norm
+```
+
+
+
+Export to Table for Paul
+```{r}
+ihc_1 %>% left_join(best_response, by="Subject_ID") %>% dfilter(Visit_type== "Pre_treat", !is.na(Best_Response)) %>% mutate(Resp_type= case_when(
+  Best_Response > 0.2 ~ "PD",
+  Best_Response < -0.3 ~ "R",
+  TRUE ~ "SD"
+)) %>% mutate(Resp_type= factor(Resp_type, levels=c("PD","SD","R"))) %>% dselect(Subject_ID,Anatomical_Location,Tissue_Type,Visit,Best_Response,Resp_type,CD8_FOXP3_log2_mean,CD8_FoxP3_percent_log2_mean,CD8_FoxP3_density_log2_mean) %>% unique %>% write.table(file="Mosaic_102820_Response_Prism_all_TME.txt",sep="\t", quote=F, row.names = F)
+```
+
+
+
+Categorize
+```{r fig.height=3.5, fig.width=11}
+library(ggbeeswarm)
+
+ihc_1 %>% left_join(best_response, by="Subject_ID") %>% dfilter(Visit_type== "Pre_treat", !is.na(Best_Response)) %>% mutate(Resp_type= case_when(
+  Best_Response > 0.2 ~ "PD",
+  Best_Response < -0.3 ~ "R",
+  TRUE ~ "SD"
+)) %>% mutate(Resp_type= factor(Resp_type, levels=c("PD","SD","R"))) %>% dselect(Subject_ID,Anatomical_Location,Resp_type,CD8_FOXP3_log2_mean) %>% unique %>%
+  ggplot(aes(y=CD8_FOXP3_log2_mean, x=Resp_type)) + 
+  geom_boxplot(alpha=0.3, width=0.5) +
+  geom_beeswarm(aes(color=Resp_type),size=2,priority='density',cex=2.5) +
+  facet_wrap(~Anatomical_Location) +
+  scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F")) +
+  theme_bw()
+
+CD8_FOXP3_log2_mean
+```
+
+Categorize ALL
+
+```{r}
+colnames(ihc_1)
+```
+
+```{r fig.height=5, fig.width=10}
+
+ihc_1 %>% left_join(best_response, by="Subject_ID") %>% dfilter(Visit_type== "Pre_treat", !is.na(Best_Response)) %>% 
+dselect(CD8_FoxP3_percent_log2_mean,CD8_FoxP3_density_log2_mean,CD8_FOXP3_log2_mean,Visit_type,Subject_ID,Combo,Anatomical_Location,Total_CD8_cells) %>% dfilter(Anatomical_Location=="ALL") %>% gather(measure_type,log2_norm,-Visit_type,-Subject_ID,-Combo,-Anatomical_Location,-Total_CD8_cells) %>% left_join(best_response, by="Subject_ID") %>% mutate(Resp_type= case_when(
+  Best_Response > 0.2 ~ "PD",
+  Best_Response < -0.3 ~ "R",
+  TRUE ~ "SD"
+)) %>% mutate(Resp_type= factor(Resp_type, levels=c("PD","SD","R"))) %>% unique %>%
+  ggplot(aes(y=log2_norm, x=Resp_type)) + 
+  geom_boxplot(alpha=0.3, width=0.5) +
+  geom_beeswarm(aes(color=Resp_type),size=2,priority='density',cex=2.5) +
+  facet_wrap(~measure_type,scale="free_y") +
+  scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F")) +
+  theme_bw()
+
+ihc_1 %>% left_join(best_response, by="Subject_ID") %>% dfilter(Visit_type== "Pre_treat", !is.na(Best_Response)) %>% 
+dselect(CD8_FoxP3_percent_log2_mean,CD8_FoxP3_density_log2_mean,CD8_FOXP3_log2_mean,Visit_type,Subject_ID,Combo,Anatomical_Location,Total_CD8_cells,FoxP3_Cells_per_mm2) %>% dfilter(Anatomical_Location=="ALL") %>% gather(measure_type,log2_norm,-Visit_type,-Subject_ID,-Combo,-Anatomical_Location,-FoxP3_Cells_per_mm2) %>% left_join(best_response, by="Subject_ID") %>% mutate(Resp_type= case_when(
+  Best_Response > 0.2 ~ "PD",
+  Best_Response < -0.3 ~ "R",
+  TRUE ~ "SD"
+)) %>% mutate(Resp_type= factor(Resp_type, levels=c("PD","SD","R"))) %>% unique %>%
+  ggplot(aes(y=log2_norm, x=Best_Response)) + 
+  geom_point(aes(color=Resp_type,size=FoxP3_Cells_per_mm2) ) +
+  facet_wrap(~measure_type,scale="free_y") +
+  scale_size_continuous(breaks=c(1,10,100,500,1000)) +
+  scale_x_reverse() +
+  scale_color_manual(values=c("#0A95A7", "#E5541B","#5B666F")) +
+  theme_bw()
+```
+
+
+Correlate Screening values to ratio of ratios:
+Cell #, sensity, %, CD8/FoxP3 ratio by #, %, density
+X values:
+CD8_FOXP3_log2_screen
+CD8_FoxP3_percent_screen
+CD8_FoxP3_density_screen
+
+Y values:
+CD8_FOXP3_log2_norm
+CD8_FOXP3_percent_log2_norm
+CD8_FOXP3_density_log2_norm
+```{r fig.height=4, fig.width=4}
+ihc_1_ratio %>% dfilter(Visit_type=="Follow_up", Anatomical_Location=="ALL") %>% 
+  ggplot(aes(x=CD8_FOXP3_log2_screen,y=CD8_FOXP3_log2_norm)) +
+  geom_point(size=2, colour="#0A95A7") +
+  theme_bw()
+
+ihc_1_ratio %>% dfilter(Visit_type=="Follow_up", Anatomical_Location=="ALL") %>% 
+  ggplot(aes(x=CD8_FoxP3_percent_screen,y=CD8_FOXP3_percent_log2_norm)) +
+  geom_point(size=2, colour="#0A95A7") +
+  theme_bw()
+
+ihc_1_ratio %>% dfilter(Visit_type=="Follow_up", Anatomical_Location=="ALL") %>% 
+  ggplot(aes(x=CD8_FoxP3_density_screen,y=CD8_FOXP3_density_log2_norm)) +
+  geom_point(size=2, colour="#0A95A7") +
+  theme_bw()
+  #geom_smooth(method="glm", se=FALSE, aes(color="grey50"))
+  #scale_size_continuous(breaks=c(1,10,100,500,1000,2000))
+```
+
+```{r}
+ihc_1_ratio %>% dfilter(Visit_type=="Follow_up", Anatomical_Location=="ALL") %>% 
+  ggplot(aes(x=CD8_density_screen,y=CD8_FOXP3_log2_norm)) +
+  geom_point(aes(size=FoxP3_Cells_per_mm2)) +
+  scale_size_continuous(breaks=c(1,10,100,500,1000,2000))
+```
+
+
+Matrix of corr for paired samples
+```{r fig.height=8, fig.width=8}
+install.packages("GGally")
+library(GGally)
+install.packages("ggcorrplot")
+library(ggcorrplot)
+install.packages("rstatix")
+library(rstatix)
+
+#ihc_1_ratio %>% dfilter(Anatomical_Location=="ALL", Visit_type=="Follow_up") %>% dselect(ends_with("_screen"),ends_with("_norm")) %>% unique %>% ggpairs(progress=NULL, switch="both")
+
+#ihc_1_ratio %>% dfilter(Anatomical_Location=="ALL", Visit_type=="Follow_up") %>% dselect(ends_with("_screen"),ends_with("_norm")) %>% unique %>% ggcorr(hjust = 0.9, size = 4, color = "grey50",progress=NULL)
+
+#with Response
+for_corr <- ihc_1_ratio %>% dfilter(Anatomical_Location=="ALL", Visit_type=="Follow_up") %>% dselect(Subject_ID, ends_with("_screen"),ends_with("_norm")) %>% unique %>% left_join(best_response, by="Subject_ID") %>% mutate(Best_Response = -1*Best_Response) %>% dfilter(!is.na(Best_Response)) %>% dselect(-Subject_ID)
+
+#withour Response
+
+for_corr <- ihc_1_ratio %>% dfilter(Anatomical_Location=="ALL", Visit_type=="Follow_up") %>% dselect(Subject_ID, ends_with("_screen"),ends_with("_norm")) %>% unique 
+ihc_1_ratio %>% dfilter(Anatomical_Location=="ALL", Visit_type=="Follow_up") %>% dselect(Subject_ID, ends_with("_screen"),ends_with("_norm")) %>% unique %>% dselect(-Subject_ID)
+
+#export for Paul
+ihc_1_ratio %>% dfilter(Anatomical_Location=="ALL", Visit_type=="Follow_up") %>% dselect(Subject_ID, ends_with("_screen"),ends_with("_norm")) %>% unique %>% write.table(file="CD8_FoxP3_Ratio_vs_Screening_values.txt", sep="\t",row.names = FALSE, quote=FALSE)
+
+corr <- round(cor(for_corr),1)
+p.mat <- cor_pmat(for_corr) %>% tibble::column_to_rownames("rowname") %>% as.matrix
+dim(corr)
+dim(p.mat)
+
+ggcorrplot(corr, type="upper",show.diag=TRUE,p.mat = p.mat)
+ggcorrplot(corr)
+```
+
+Correlation metric for all samples and Response
+
+```{r}
+screen_corr <- ihc_1 %>% dfilter(Anatomical_Location=="ALL", Visit_type=="Pre_treat") %>% 
+   left_join(count_screen_all, by=c("Subject_ID","Anatomical_Location")) %>% unique %>% dselect(Subject_ID,ends_with("_screen")) %>%
+   left_join(best_response, by="Subject_ID") %>% unique %>% mutate(Best_Response = -1*Best_Response) %>% dfilter(!is.na(Best_Response)) %>% dselect(-Subject_ID)
+
+corr <- round(cor(screen_corr),1)
+p.mat <- cor_pmat(screen_corr) %>% tibble::column_to_rownames("rowname") %>% as.matrix
+dim(corr)
+dim(p.mat)
+
+ggcorrplot(corr, type="upper",show.diag=TRUE,p.mat = p.mat)
+ggcorrplot(corr)
+```
+
+
+
+
+
+
+```{r}
+colnames(ihc_1_ratio)
+colnames(ihc_1_ratio %>% dfilter(Anatomical_Location=="ALL", Visit_type=="Follow_up") %>% dselect(ends_with("_screen"),ends_with("_norm")))
+```
+

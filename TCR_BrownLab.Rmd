@@ -1,0 +1,71 @@
+---
+title: "TCR_activation_BrownLab.Rmd"
+author: "MX"
+date: "10/20/2020"
+output: html_document
+---
+
+
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(data.table)
+library(reshape2) #needed for the heatmap
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")
+```
+
+
+```{r}
+#read.table(file="/Volumes/Picard/FLX/Reference_tables/figure1.txt", sep="\t", header=T)
+data <- readxl::read_xlsx("/Volumes/Picard/FLX/Reference_tables/figure1_MX.xlsx")
+#data <- read_tsv(file="/Volumes/Picard/FLX/Reference_tables/figure1.txt",col_names = T)
+data %<>% dselect(-LUID, -GWEIGHT) %>% mutate(Gene= str_replace_all(NAME,"\\s+","_")) %>% dfilter(!grepl("Hs.",Gene), Gene != "Unknown",Gene != "Homo",!grepl("^KIAA",Gene), Gene!="|", !grepl("^[0:9]",Gene),!grepl("[@,\\,#,:]",Gene)) %>% dselect(-NAME) %>% dselect(Gene, everything())
+
+```
+
+Signatures
+
+```{r}
+TCR <- read.table(file="clipboard",header=TRUE,fill=T, sep="\t")
+
+T1 <- TCR %>% dfilter(!is.na(TCR_1h)) %>% pull(TCR_1h)
+T2 <- TCR %>% dfilter(!is.na(TCR_2h)) %>% pull(TCR_2h)
+T6 <- TCR %>% dfilter(!is.na(TCR_6h)) %>% pull(TCR_6h)
+T12 <- TCR %>% dfilter(!is.na(TCR_12h)) %>% pull(TCR_12h)
+T24 <- TCR %>% dfilter(!is.na(TCR_24h)) %>% pull(TCR_24h)
+T48 <- TCR %>% dfilter(!is.na(TCR_48h)) %>% pull(TCR_48h)
+```
+
+Scores
+
+```{r}
+T1_s <- data %>% dfilter(Gene %in% T1) %>% summarise_if(is.numeric,mean_mx)
+T2_s <- data %>% dfilter(Gene %in% T2) %>% summarise_if(is.numeric,mean_mx)
+T6_s <- data %>% dfilter(Gene %in% T6) %>% summarise_if(is.numeric,mean_mx)
+T12_s <- data %>% dfilter(Gene %in% T12) %>% summarise_if(is.numeric,mean_mx)
+T24_s <- data %>% dfilter(Gene %in% T24) %>% summarise_if(is.numeric,mean_mx)
+T48_s <- data %>% dfilter(Gene %in% T48) %>% summarise_if(is.numeric,mean_mx)
+
+```
+
+```{r fig.height=4, fig.width=9}
+Sigs <- rbind(T1_s,T2_s,T6_s,T12_s,T24_s,T48_s) %>% data.frame
+rownames(Sigs) <- c("T1","T2","T6","T12","T24","T48")
+
+pheatmap(Sigs, cluster_cols=F, cluster_rows=F)
+```
+
+```{r fig.height=6, fig.width=5}
+library(stringr)
+IFNG <- data %>% dfilter(Gene=="IFNG") %>% group_by(Gene) %>% summarise_if(is.numeric,sum) %>% tibble::column_to_rownames("Gene") %>% as.matrix
+pheatmap(IFNG, cluster_cols=F, cluster_rows=F)
+
+data %>% dfilter(Gene=="IFNG") %>% mutate(Rep=c("rep1","rep2")) %>% gather(Time, Signal,-Rep) %>% dfilter(grepl("CD3",Time)) %>% dfilter(grepl("CD28",Time))  %>% ggplot(aes(x=Time,y=Signal, group=Rep)) + geom_point() + geom_line() + theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=90,size=14,hjust=1))
+sed_it
+```
+

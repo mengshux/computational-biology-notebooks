@@ -1,0 +1,387 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r setup}
+library(tidyverse)
+library(msigdbr)
+library(immunedeconv)
+library(MCPcounter)
+library(parallel)
+library(org.Hs.eg.db)
+library(DBI)
+library(annotables)
+library(ggbeeswarm)
+
+select <- dplyr::select
+filter <- dplyr::filter
+btwn <- function(x,a,b) x >= a & x <= b
+
+```
+
+```{r}
+load("/extra/RAPT_Tumor_Normal_Expression_Database/20210323/RAPT_TumorNormal_Expression_Matrix.rdata")
+load("/extra/RAPT_Tumor_Normal_Expression_Database/20210323/annotation.rdata")
+```
+
+
+# Add DLBCL subtype annotation
+```{r}
+load("~/DLBCL_classification.rdata")
+
+sample_annotation <- left_join(sample_annotation, dlbcl_classification, by="Sample") %>% mutate(TumorDetail=if_else(!is.na(class), class, TumorDetail)) %>% select(-class)
+rm(dlbcl_classification)
+
+```
+
+
+
+#### #### #### #### #### ####
+## Calculate Charged
+```{r}
+goi <- c("FOXP3",'CCR4','CD8A','CD8B','CCL17','CCL22','IFNG','PRF1','GZMB', 'PDCD1', 'CD274','CD3E',"CD3D","CD3G")
+doi <- t(RTEX.tpm[rownames(RTEX.tpm) %in% goi,]) %>% as.data.table
+doi[, CCL1722 := CCL17 + CCL22 ]
+goi <- c(goi, "CCL1722")
+doi <- doi[, lapply(.SD, function(x) log10(truncRange(x, low=0)+1.0)), .SDcols=goi]
+doi[, Sample :=  colnames(RTEX.tpm) ]
+
+doi <- merge(doi, as.data.table(sample_annotation), by="Sample", all.x=TRUE)
+
+scal <- function(x, background=NULL, q1=0.01, q2=0.99) {
+	if (!is.null(background)) {
+		min_x <- quantile(x[background & x>0], q1)
+		max_x <- quantile(x[background & x>0], q2)
+		mean_x <- mean(btwn(x[background], min_x, max_x))
+		sd_x <- sd(btwn(x[background], min_x, max_x))
+	} else {
+		min_x <- quantile(x[x>0], q1)
+		max_x <- quantile(x[x>0], q2)
+		mean_x <- mean(btwn(x, min_x, max_x))
+		sd_x <- sd(btwn(x, min_x, max_x))
+	}
+	z <- (x - mean_x) / sd_x
+	# truncates at -2*SD to2*SD and adjusts to a range of 0 to 1
+	low_Z <- -2.0
+	high_Z <- 3.0
+	(truncRange( z, low=low_Z, high=high_Z ) - low_Z) / (high_Z - low_Z)
+}
+
+
+scalX <- function(x, background=NULL, q1=0.01, q2=0.99) {
+	if (!is.null(background)) {
+		bkgd <- sort(x[background])
+	} else {
+		bkgd <- sort(x)
+	}
+	n <- length(bkgd)
+	bkgd <- bkgd[ round(n * q1):round(n * q2) ]
+	mean_x <- mean(bkgd)
+	sd_x <- sd(bkgd)
+	n <- length(bkgd)
+	bkgd <- bkgd[ round(n * q1):round(n * q2) ]
+	mean_x <- mean(bkgd)
+	sd_x <- sd(bkgd)
+
+	z <- (x - mean_x) / sd_x
+	# truncates at -2*SD to2*SD and adjusts to a range of 0 to 1
+	low_Z <- -2.0
+	high_Z <- 2.0
+	z[z > high_Z] <- high_Z
+	z[z < low_Z] <- low_Z
+	z <- z - low_Z
+	z <- z / max(z)
+	z
+}
+
+doi_scaled <- copy(doi)
+nonhaem_tumor <- doi_scaled$SampleType %like% "Tumor"  & 
+	!is.na(doi_scaled$TissueCategory) & 
+	doi_scaled$TissueCategory %nin% c("Blood","Spleen","Thymus","Leukemia","Lymphoma","Myeloma")
+
+#for (gene in goi) set(doi_scaled, j=gene, value=scal(doi[[gene]], nonhaem_tumor, 0.02, 0.98))
+
+```
+
+
+
+```{r}
+for (gene in goi) set(doi_scaled, j=gene, value=scalX(doi[[gene]], nonhaem_tumor, 0.05, 0.95))
+
+doi_scaled[, hotness := geo.mean(c(CD8A, GZMB, PRF1, IFNG)), by=1:nrow(doi_scaled) ]
+doi_scaled[, hotness := scalX(hotness, nonhaem_tumor) ]
+doi_scaled[, charged := geo.mean(c(FOXP3, CCL1722, hotness)), by=1:nrow(doi_scaled) ]
+doi_scaled[, charged := scalX(charged, nonhaem_tumor) ]
+
+
+charged_stats <- summary(doi_scaled$charged[nonhaem_tumor])
+doi_scaled[, GROUP := if_else(Dataset=="FLX475",Sample,TumorAbr)]
+doi_scaled[TumorDetail %like% "^Treatment:", TumorDetail := NA]
+doi_scaled[GROUP == "NPCA", TumorDetail := NA]
+doi_scaled[GROUP == "FL", TumorDetail := NA]
+
+
+# Without body_site
+FracOver <- doi_scaled[SampleType %like% "Tumor", .(
+	Count = .N,
+	`Fraction charged` = sum(charged > charged_stats[["Mean"]])/.N,
+	`Mean charged score` = mean(charged),
+	FOXP3 = mean(FOXP3),
+	`CCL17+22` = mean(CCL1722),
+	hotness = mean(hotness),
+	CD8 = mean(CD8A),
+	CCR4 = mean(CCR4),
+	PD1 = mean(PDCD1),
+	PDL1 = mean(CD274),
+	TissueDetail = TissueDetail[[1]]
+	), by=c("GROUP", "TumorDetail")][order(`Fraction charged` , `Mean charged score`, decreasing = TRUE)]
+FracOver
+
+write.matrix(FracOver, file="~/charged_scoring.20210324.tsv")
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+{
+RAPT_signatures <- tribble(
+        ~hugo, ~type, ~EntrezID, ~name,
+		"CCL5", "Merck18", 6352, "C-C motif chemokine ligand 5",
+		"CD27", "Merck18", 939, "CD27 molecule",
+		"CD274", "Merck18", 29126, "CD274 molecule",
+		"CD276", "Merck18", 80381, "CD276 molecule",
+		"CD8A", "Merck18", 925, "CD8a molecule",
+		"CMKLR1", "Merck18", 1240, "chemerin chemokine-like receptor 1",
+		"CXCR6", "Merck18", 10663, "C-X-C motif chemokine receptor 6",
+		"HLA-DQA1", "Merck18", 3117, "major histocompatibility complex, class II, DQ alpha 1",
+		"HLA-DRB1", "Merck18", 3123, "major histocompatibility complex, class II, DR beta 1",
+		"HLA-E", "Merck18", 3133, "major histocompatibility complex, class I, E",
+		"IDO1", "Merck18", 3620, "indoleamine 2,3-dioxygenase 1",
+		"LAG3", "Merck18", 3902, "lymphocyte activating 3",
+		"NKG7", "Merck18", 4818, "natural killer cell granule protein 7",
+		"PDCD1LG2", "Merck18", 80380, "programmed cell death 1 ligand 2",
+		"PSMB10", "Merck18", 5699, "proteasome subunit beta 10",
+		"STAT1", "Merck18", 6772, "signal transducer and activator of transcription 1",
+		"TIGIT", "Merck18", 201633, "T-cell immunoreceptor with Ig and ITIM domains",
+		"CXCL9", "Merck18", 4283, "C-X-C motif chemokine ligand 9",
+
+		"FOXP3", "Treg", 50943, NA, 
+		"CTLA4", "Treg", 1493, NA, 
+		"IKZF2", "Treg", 29851, NA, 
+		"CCR8", "Treg", 1237, NA, 
+
+		"CXorf58", "CD4+", 254158, NA, 
+		"AKR1E2", "CD4+", 83592, NA, 
+		"FAM184A", "CD4+", 79632, NA, 
+		"EDAR", "CD4+", 10913, NA, 
+		"ANKRD55", "CD4+", 79722, NA, 
+		"NT5C1A", "CD4+", 84618, NA, 
+		"CACNA1I", "CD4+", 8911, NA, 
+		"PCED1B", "CD4+", 91523, NA, 
+		"RNF157", "CD4+", 114804, NA, 
+
+		"CD8A", "Hot", 925, "CD8a molecule",
+		"GZMB", "Hot", 3002, "granzyme B",
+		"IFNG", "Hot", 3458, "interferon gamma",
+		"PRF1", "Hot", 5551, "perforin 1",
+
+		"SMAD7", "TGFB", 4092, "SMAD family member 7",
+		"AXIN1", "TGFB", 8312, "axin 1",
+		"PDPK1", "TGFB", 5170, "3-phosphoinositide dependent protein ki",
+		"MAP3K7", "TGFB", 6885, "mitogen-activated protein kinase kinase",
+		"PPP1R15A", "TGFB", 23645, "protein phosphatase 1 regulatory subuni",
+		"ZFYVE9", "TGFB", 9372, "zinc finger FYVE-type containing 9",
+		"TGFB1", "TGFB", 7040, "transforming growth factor beta 1",
+		"TGFB3", "TGFB", 7043, "transforming growth factor beta 3",
+		"SKIL", "TGFB", 6498, "SKI like proto-oncogene",
+		"RPS6KB1", "TGFB", 6198, "ribosomal protein S6 kinase B1",
+		"CTGF", "TGFB", 1490, "cellular communication network factor 2", # CCN2
+		"SHC1", "TGFB", 6464, "SHC adaptor protein 1",
+		"PML", "TGFB", 5371, "promyelocytic leukemia",
+		"ARRB2", "TGFB", 409, "arrestin beta 2",
+		"CTNNB1", "TGFB", 1499, "catenin beta 1",
+		"TGFBR1", "TGFB", 7046, "transforming growth factor beta recepto",
+		"TGFBR2", "TGFB", 7048, "transforming growth factor beta recepto",
+		"YAP1", "TGFB", 10413, "Yes associated protein 1",
+		"RHOA", "TGFB", 387, "ras homolog family member A",
+		"TGFB2", "TGFB", 7042, "transforming growth factor beta 2",
+		"PPP1CA", "TGFB", 5499, "protein phosphatase 1 catalytic subunit",
+		"YWHAE", "TGFB", 7531, "tyrosine 3-monooxygenase/tryptophan 5-m",
+		"PPP2CB", "TGFB", 5516, "protein phosphatase 2 catalytic subunit",
+		"FKBP1A", "TGFB", 2280, "FKBP prolyl isomerase 1A",
+		"GRB2", "TGFB", 2885, "growth factor receptor bound protein 2 ",
+		"PPP2R2A", "TGFB", 5520, "protein phosphatase 2 regulatory subuni",
+		"PPP2CA", "TGFB", 5515, "protein phosphatase 2 catalytic subunit",
+		"SMAD3", "TGFB", 4088, "SMAD family member 3",
+		"DAB2", "TGFB", 1601, "DAB adaptor protein 2",
+		"XIAP", "TGFB", 331, "X-linked inhibitor of apoptosis",
+		"SPTBN1", "TGFB", 6711, "spectrin beta, non-erythrocytic 1",
+		"CAV1", "TGFB", 857, "caveolin 1",
+		"TGFBR3", "TGFB", 7049, "transforming growth factor beta recepto",
+		"SOS1", "TGFB", 6654, "SOS Ras/Rac guanine nucleotide exchange",
+		"BAMBI", "TGFB", 25805, "BMP and activin membrane bound inhibito",
+		"SMAD4", "TGFB", 4089, "SMAD family member 4",
+		"TAB1", "TGFB", 10454, "TGF-beta activated kinase 1 (MAP3K7) bi",
+		"SMAD2", "TGFB", 4087, "SMAD family member 2",
+		"OCLN", "TGFB", 100506658, "occludin",
+		"DACT2", "TGFB", 168002, "dishevelled binding antagonist of beta ",
+		"RNF111", "TGFB", 54778, "ring finger protein 111",
+		"ZFYVE16", "TGFB", 9765, "zinc finger FYVE-type containing 16",
+		"ITCH", "TGFB", 83737, "itchy E3 ubiquitin protein ligase",
+		"NEDD4L", "TGFB", 23327, "NEDD4 like E3 ubiquitin protein ligase ",
+		"EIF2A", "TGFB", 83939, "eukaryotic translation initiation facto",
+		"WWP1", "TGFB", 11059, "WW domain containing E3 ubiquitin prote",
+		"SMURF2", "TGFB", 64750, "SMAD specific E3 ubiquitin protein liga",
+		"SMURF1", "TGFB", 57154, "SMAD specific E3 ubiquitin protein liga",
+		"DYNLRB1", "TGFB", 83658, "dynein light chain roadblock-type 1",
+		"PARD6A", "TGFB", 50855, "par-6 family cell polarity regulator al",
+		"TAB2", "TGFB", 23118, "TGF-beta activated kinase 1 (MAP3K7) bi",
+		"DAXX", "TGFB", 1616, "death domain associated protein",
+		"CAMK2A", "TGFB", 815, "calcium/calmodulin dependent protein ki",
+		"STRAP", "TGFB", 11171, "serine/threonine kinase receptor associ",
+
+
+		"PDCD1", "Exhaustion_Core", NA, NA, # PD-1
+		"HAVCR2", "Exhaustion_Core", NA, NA,  # Tim-3
+		"ENTPD1", "Exhaustion_Core", NA, NA, # CD39
+		"LAG3", "Exhaustion_Core", NA, NA,
+
+		"PDCD1", "Exhaustion_Long", NA, NA, # PD-1
+		"HAVCR2", "Exhaustion_Long", NA, NA,  # Tim-3
+		"ENTPD1", "Exhaustion_Long", NA, NA, # CD39
+		"LAG3", "Exhaustion_Long", NA, NA,
+		"BATF", "Exhaustion_Long", NA, NA,
+		"CD200R1", "Exhaustion_Long", NA, NA,
+		"CTLA4", "Exhaustion_Long", NA, NA,
+		"EOMES", "Exhaustion_Long", NA, NA,
+		"FBXO9", "Exhaustion_Long", NA, NA,
+		"GZMA", "Exhaustion_Long", NA, NA,
+		"GZMB", "Exhaustion_Long", NA, NA,
+		"ID2", "Exhaustion_Long", NA, NA,
+		"IFNGR1", "Exhaustion_Long", NA, NA,
+		"IFNGR2", "Exhaustion_Long", NA, NA,
+		"IL2RB", "Exhaustion_Long", NA, NA,
+		"IL12RB2", "Exhaustion_Long", NA, NA,
+		"IL15RA", "Exhaustion_Long", NA, NA,
+		"IL21R", "Exhaustion_Long", NA, NA,
+		"IRF4", "Exhaustion_Long", NA, NA,
+		"KLRG1", "Exhaustion_Long", NA, NA,
+		"LAG3", "Exhaustion_Long", NA, NA,
+		"NFATC1", "Exhaustion_Long", NA, NA,
+		"PPARA", "Exhaustion_Long", NA, NA,
+		"PRDM1", "Exhaustion_Long", NA, NA, # BLIMP-1
+		"PRF1", "Exhaustion_Long", NA, NA,
+		"RUNX3", "Exhaustion_Long", NA, NA,
+		"SIPA1", "Exhaustion_Long", NA, NA,
+		"TBX21", "Exhaustion_Long", NA, NA,  # T-Bet
+		"TIGIT", "Exhaustion_Long", NA, NA,
+		"ZEB2", "Exhaustion_Long", NA, NA,
+
+		"TCF7", "Proliferative", NA, NA,   # TCF-1
+		"BACH2", "Proliferative", NA, NA,
+		"BCL6", "Proliferative", NA, NA,
+		"CXCR5", "Proliferative", NA, NA,
+		"TCF3", "Proliferative", NA, NA,
+		"EGR2", "Proliferative", NA, NA,
+		"EGR3", "Proliferative", NA, NA,
+		"EZH2", "Proliferative", NA, NA,
+		"FOS", "Proliferative", NA, NA,
+		"FOXO1", "Proliferative", NA, NA,
+		"HIF1A", "Proliferative", NA, NA,
+		"ID3", "Proliferative", NA, NA,
+		"JUN", "Proliferative", NA, NA,
+		"MYC", "Proliferative", NA, NA,
+		"NFKB1", "Proliferative", NA, NA,
+		"NR4A1", "Proliferative", NA, NA,
+	)
+}
+RAPT_signatures <- left_join(RAPT_signatures %>% select(hugo, type), grch38 %>% select(hugo=symbol, EntrezID=entrez, description))
+RAPT_signatures <- RAPT_signatures %>% distinct %>% mutate(description = str_replace(description, " \\[Source.*]",""))
+RAPT_signatures
+```
+
+
+
+
+```{r}
+doi_scaled[, hotness := geo.mean(c(CD8A, GZMB, PRF1, IFNG)), by=1:nrow(doi_scaled) ]
+doi_scaled[, hotness := scal(hotness, nonhaem_tumor) ]
+doi_scaled[, charged := geo.mean(c(FOXP3, CCL1722, hotness)), by=1:nrow(doi_scaled) ]
+doi_scaled[, charged := scal(charged, nonhaem_tumor) ]
+
+
+charged_stats <- summary(doi_scaled$charged)
+doi_scaled[, GROUP := if_else(Dataset=="FLX475",Sample,TumorAbr)]
+doi_scaled[TumorDetail %like% "^Treatment:", TumorDetail := NA]
+doi_scaled[GROUP == "NPCA", TumorDetail := NA]
+doi_scaled[GROUP == "FL", TumorDetail := NA]
+
+FracOver <- doi_scaled[SampleType %like% "Tumor", .(
+	n = .N,
+	Over.Mean = sum(charged > charged_stats[["Mean"]])/.N,
+	Mean.charged = mean(charged),
+	Q25.charged = quantile(charged, 0.25),
+	Q75.charged = quantile(charged, 0.75),
+	FOXP3 = mean(FOXP3),
+	`CCL17+22` = mean(CCL1722),
+	CCR4 = mean(CCR4),  
+	hotness = mean(hotness),
+	TissueDetail = TissueDetail[[1]]
+	), by=c("GROUP", "TumorDetail")][order(Over.Mean, Mean.charged, decreasing = TRUE)]
+FracOver
+
+```
+
+# charged scoring, with lymphomas in b/t-cell and adult/childhood groups
+```{r}
+doi_scaled[, Childhood := Dataset %in% c("TARGET", "TreeHouseUCSC") ]
+doi_scaled[!is.na(Age) & Age < 18, Childhood := TRUE ]
+doi_scaled[ TumorAbr=="DLBCL", TumorAbr := "DLBC" ]
+doi_scaled[, TumorAbr2 := case_when(
+			TumorAbr == "DLBC" & ! Childhood ~ "Adult/DLBCL",
+			TumorAbr == "ALL" & Childhood ~ "Childhood/ALL",
+#			TumorAbr %in% c("AITL","ALCL","ATLL","HSTL","MFSS","NKTL","PTCL") & ! Childhood ~ "Adult/T-Cell Lymphoma",
+			TumorAbr == "AML" & ! Childhood ~ "Adult/AML",
+			TumorAbr == "AML" & Childhood ~ "Childhood/AML",
+			TumorAbr == "BRCA" & TumorDetail == "TNBC+"  ~ "BRCA/TNBC",
+			TumorAbr == "BRCA" & TumorDetail == "TNBC_UNKNOWN" ~ "#DROP#",
+			TumorAbr == "STAD" & TumorDetail == "EBV+" ~ "STAD/EBV+",
+			TumorAbr == "STAD" & TumorDetail == "EBV-" ~ "STAD/EBV-",
+			TumorAbr == "STAD" & TumorDetail == "EBV_UNKNOWN" ~ "STAD/EBV???",
+			Dataset == "FLX475" ~ Sample,
+			TRUE ~ TumorAbr	
+		)
+]
+
+
+FracOver <- doi_scaled[SampleType %like% "Tumor" & TumorAbr2 != "#DROP#", .(
+	Count = .N,
+	`Fraction charged` = sum(charged > charged_stats[["Mean"]])/.N,
+	`Mean charged score` = mean(charged),
+	FOXP3 = mean(FOXP3),
+	`CCL17+22` = mean(CCL1722),
+	CCR4 = mean(CCR4),
+	Hotness = mean(hotness),
+	TissueDetail = TissueDetail[[1]]
+	), by=c("TumorAbr2", "TumorDetail","TissueCategory")][order(`Fraction charged` , `Mean charged score`, decreasing = TRUE)]
+FracOver
+
+
+
+```
+
+
+```{r}
+ggplot(FracOver, aes(x=Over.Mean, y=Merck.Over.Mean)) + geom_point()
+```
+

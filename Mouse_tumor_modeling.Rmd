@@ -1,0 +1,202 @@
+---
+title: "Mouse tumor growth modeling"
+author: "Mengshu"
+date: "10/25/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(ggplot2)
+source("R_functions.r")
+
+```
+
+## R Markdown
+
+There have been inconsistency of mouse tumor growth recently, with CT26 cells in BalbC mice. There are several possible factors that could influence growth:
+1. Number of cells injected: 0.25M or 1M
+2. Implantor: the person who does the implantation
+3. Mouse vendor: Jax, the default, and also Charles river and Envigo mice were tested
+4. CT26 cell batch: We have 3 batches of C26 cells that were tested
+The most influential factor is suspected to be implantor
+Do linear modeling to determine which factors are statistically relevant
+
+Load data
+
+```{r}
+mouse <- read_tsv("Mouse_data_Oct25.txt", col_names=TRUE, na="")
+mouse %<>% mutate(ID=c(seq(from=1, to=120, by=1))) %>% rename(Implanter=Implantor)
+mouse_gather <- mouse %>% gather(Day, Volume, c("6","7","9","13","16","20","23","26","27","30","34","37")) %>% filter(!is.na(Volume), Volume != 0)
+mouse_gather %<>% mutate(Day=as.numeric(Day), CT26_batch= factor(CT26_batch), ID=as.character(ID), Implanter=factor(Implanter), cell_number=factor(cell_number),mouse_vendor=factor(mouse_vendor))
+
+mouse_slope <- mouse %>% dselect(ID,Implanter,cell_number,mouse_vendor,CT26_batch,log2_slope) %>% mutate(CT26_batch= factor(CT26_batch), ID=as.character(ID), Implanter=factor(Implanter), cell_number=factor(cell_number),mouse_vendor=factor(mouse_vendor))
+
+mouse_slope %<>% mutate(Grew=ifelse(log2_slope >= 0.25,TRUE,FALSE))
+str(mouse_slope)
+
+mouse_stdev <- mouse %>% group_by(Cage) %>% summarize(mean_slope=mean(log2_slope),stdev=sd(log2_slope)) 
+
+mouse_sd <- mouse %>% dselect(ID,Implanter,cell_number,mouse_vendor,CT26_batch,Cage) %>% distinct(Implanter,cell_number,mouse_vendor,CT26_batch,Cage)
+mouse_sd <- left_join(mouse_sd,mouse_stdev,by="Cage")
+mouse_sd %<>% mutate(outcome=ifelse(stdev <= 0.08,TRUE,FALSE))
+
+install.packages("sp")
+install.packages("rgeos")
+library(sp)
+library(rgeos)
+
+mouse_sp <- mouse %>% dselect(ID,"6","7","9","13","16","20","23","26","27","30","34","37")
+SL1 <- SpatialLines(list(Lines(Line(mouse_sp))))
+thresh <- SpatialLines(list(Lines(Line(cbind(range(6:37), 500)), "B")))
+```
+
+
+
+```{r}
+ggplot(mouse_gather, aes(Day, Volume, color=Implanter, group=ID)) +
+  geom_line() +
+  facet_wrap(~Implanter,ncol=2) +
+ggsave("By_Implanter_facet.jpg",dpi=300, width= 15, height=8, plot= last_plot(), units = "cm")
+
+ggplot(mouse_gather, aes(Day, Volume, color=mouse_vendor, group=ID)) +
+  geom_line() +
+  facet_wrap(~mouse_vendor,ncol=3) + 
+ggsave("By_Vendor_facet.jpg",dpi=300, width= 20, height=8, plot= last_plot(), units = "cm")
+
+ggplot(mouse_gather, aes(Day, Volume, color=cell_number, group=ID)) +
+  geom_line() +
+  facet_wrap(~cell_number,ncol=2) + 
+ggsave("By_CellNum_facet.jpg",dpi=300, width= 20, height=8, plot= last_plot(), units = "cm")
+
+ggplot(mouse_gather, aes(Day, Volume, color=CT26_batch, group=ID)) +
+  geom_line() +
+  facet_wrap(~CT26_batch,ncol=3) + 
+ggsave("By_CellBatch_facet.jpg",dpi=300, width= 20, height=8, plot= last_plot(), units = "cm")
+
+ggplot(mouse_gather, aes(Day, log2(Volume), color=Implanter, group=ID)) +
+geom_line() +
+ggsave("Growth_log.jpg",dpi=300, width= 10, height=8, plot= last_plot(), units = "in")
+
+ggplot(mouse_gather, aes(Day, Volume, color=log2_slope, group=ID)) +
+  scale_colour_gradientn(colours=rainbow(20)) +
+  geom_line() +
+ggsave("Growth by log2 slope.jpg",dpi=300, width= 10, height=8, plot= last_plot(), units = "in")
+
+ggplot(mouse_gather, aes(Day, Volume, color=day13slope, group=ID)) +
+  scale_colour_gradientn(colours=rainbow(20)) +
+  geom_line() +
+ggsave("Growth by day13 log2 slope.jpg",dpi=300, width= 10, height=8, plot= last_plot(), units = "in")
+
+ggplot(mouse_gather, aes(Day, Volume, color=CT26_batch, group=ID)) +
+  geom_line() +
+  facet_wrap(~Cage, ncol=6) +
+  ggsave("Per cage.jpg",dpi=300, width= 12, height=8, plot= last_plot(), units = "in")
+
+ggplot(mouse_gather, aes(Day, log2(Volume), color=Implanter, group=ID)) +
+  geom_line() +
+  facet_wrap(~Cage, ncol=6) +
+  ggsave("Per cage log2.jpg",dpi=300, width= 12, height=8, plot= last_plot(), units = "in")
+```
+What proportion of mice would be eliminated if a 0.3 cutoff is used for Day 13?
+
+```{r}
+mouse_gather %>% group_by(ID) %>% dfilter(day13slope < 0.3, Day==13, log2_slope >= 0.3)
+```
+
+Log transform the Volume data for linear modelling
+Graph to check that it's looking more linear after log transform: Log2 transform gives a pretty straight line
+```{r}
+mouse_gather %<>% mutate(Log2Volume=log2(Volume))
+ggplot(mouse_gather, aes(Day, Log2Volume, color=Implanter, group=ID)) +
+  geom_line() +
+ggsave("log2_growth.jpg",dpi=300, width= 8, height=6, plot= last_plot(), units = "cm")
+```
+Calculate the AUC for the linear and the log2 transformed data
+The histogram for the linear AUCs look better for resolving differences between the median and the outliers
+Use auc_linear for modeling
+
+Try the log2 slope of growth. > The histogram more clearly shows a shoulder of lower slopes for growth
+
+```{r}
+mouse_AUC <- mouse_gather %>% group_by(ID) %>% summarize(auc_linear=AUC.trapezoid(Volume,x=seq(6,Day)) auc_log=AUC.trapezoid(Log2Volume,Day)) 
+mouse_gather <- merge(mouse_gather,mouse_AUC)
+mouse_summary <- mouse_gather %>% dselect(ID,Implanter,cell_number,mouse_vendor,CT26_batch,auc_linear,auc_log) %>% distinct(mouse_gather,ID,Implanter,cell_number,mouse_vendor,CT26_batch,auc_linear,auc_log)
+
+
+ggplot(mouse_slope, aes(log2_slope)) +
+  geom_histogram()+
+  ggtitle("Histogram of Log2 growth slopes") + 
+ggsave("Histogram of Log2 growth slopes.jpg")
+
+ggplot(mouse_summary, aes(auc_log)) +
+  geom_histogram()+
+  ggtitle("Histogram of AUC of Log2 growth curves") +
+ggsave("Histogram of AUC of Log2 growth curves.jpg")
+
+ggplot(mouse_summary, aes(auc_linear)) +
+  geom_histogram()+
+  ggtitle("Histogram of AUC of linear growth curves") +
+ggsave("Histogram of AUC of linear growth curves.jpg")
+
+ggplot(mouse_sd, aes(stdev)) +
+  geom_histogram()+
+  ggtitle("Histogram of stdev of linear growth curves") +
+ggsave("Histogram of stdev of linear growth curves.jpg")
+```
+
+AUC is not a good method for measuring the output. Slope of the log2 line might be better
+
+Start Linear modeling
+
+No variable is sig if all are incorporated into modeling:
+
+```{r}
+#mouse_gather %<>% filter(!is.na(Volume), Volume != 0)
+
+l0 <- lm(auc_linear ~ Implanter + mouse_vendor + CT26_batch + cell_number, data=mouse_summary)
+l1 <- lm(auc_linear ~ Implanter + mouse_vendor + cell_number, data=mouse_summary)
+l2 <- lm(auc_linear ~ Implanter + cell_number, data=mouse_summary)
+l3 <- lm(auc_linear ~ Implanter, data=mouse_summary)
+l4 <- lm(auc_linear ~ cell_number, data=mouse_summary)
+
+l0 <- lm(log2_slope ~ Implanter + mouse_vendor + CT26_batch + cell_number, data=mouse_slope)
+l1 <- lm(log2_slope ~ Implanter + mouse_vendor + cell_number, data=mouse_slope)
+l2 <- lm(log2_slope ~ Implanter + cell_number, data=mouse_slope)
+l3 <- lm(log2_slope ~ Implanter, data=mouse_slope)
+l4 <- lm(log2_slope ~ cell_number, data=mouse_slope)
+
+l0 <- lm(Grew ~ Implanter + mouse_vendor + CT26_batch + cell_number, data=mouse_slope)
+l1 <- lm(Grew ~ Implanter + mouse_vendor + cell_number, data=mouse_slope)
+l2 <- lm(Grew ~ Implanter + cell_number, data=mouse_slope)
+l3 <- lm(Grew ~ Implanter, data=mouse_slope)
+l4 <- lm(Grew ~ cell_number, data=mouse_slope)
+
+l0 <- lm(stdev ~ Implanter + mouse_vendor + CT26_batch + cell_number, data=mouse_sd)
+
+l0 <- lm(outcome ~ Implanter + mouse_vendor + CT26_batch + cell_number, data=mouse_sd)
+
+AIC(l0,l1,l2,l3,l4)
+
+summary(l0)
+summary(l1)
+summary(l2)
+summary(l3)
+summary(l4)
+
+
+
+#
+
+```
+
+Correlations between early growth and final tumor
+
+```{r}
+cor.test(mouse_gather$log2_slope,mouse_gather$day13slope)
+```
+

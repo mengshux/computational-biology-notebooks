@@ -1,0 +1,88 @@
+---
+title: "JHU_RNA_kallisto"
+author: "MX"
+date: "2/5/2020"
+output: html_document
+---
+
+Packages
+```{r}
+library(limma)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+#BiocManager::install("DESeq2")
+library(DESeq2)
+#BiocManager::install("edgeR")
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+source("d:/FLX/Files_from_Gene/R_functions.r")
+
+```
+
+
+
+Load the data
+Select the tpm for this table
+Merge the data, rename the columns, and tranlate the ENCODE genes to symbols
+
+```{r}
+
+files <- base::list.files("/Volumes/Enterprise/FLX/JHU/kallisto/")
+files <- base::list.files("d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/kallisto", pattern="^[0-9]")
+#data_files <- lapply(files, function(i){read.table(paste0("d:/FLX/Atopic_Dermatitis/bulkRNA_Nov2019/kallisto/",i),header=TRUE)})
+data_files <- lapply(files, function(i){read.table(paste0("/Volumes/Enterprise/FLX/JHU/kallisto/",i),header=TRUE)})
+JHU_counts <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+#colnames(AD_counts) <- c("Vehicle_ETOH_UTR","Vehicle_ETOH","Vehicle_FITC_UTR","Vehicle_FITC","DEX_ETOH_UTR","DEX_ETOH","DEX_FITC_UTR","DEX_FITC","RPT193_ETOH_UTR","RPT193_ETOH","RPT193_FITC_UTR","RPT193_FITC")
+colnames(JHU_counts) <- files %>% data.frame %>% rename(File=.data$.) %>% separate(File,into= c(Name,NA), sep=".kallisto") %>% .[,1]
+rownames(JHU_counts) <- data_files[[1]]$target_id
+load("/Volumes/Enterprise/FLX/Reference_tables/mouse_human_gene.rdata")
+mouseAnnot
+JHU_counts %>% tibble::rownames_to_column("Gene") %>% left_join(gencode_symbol, by="Gene") %>% dselect(-Gene,Symbol,everything()) %>% group_by(Symbol) %>% summarise_if(is.numeric,sum) %>% ungroup %>% unique %>% mutate(mysum= rowSums(.[2:31])) %>% dfilter(mysum > 0.01) %>% dselect(-mysum) 
+
+JHU_counts %>% tibble::rownames_to_column("Gene") %>% left_join(gencode_symbol, by="Gene") %>% dselect(-Gene,Symbol,everything()) %>% group_by(Symbol) %>% summarise_if(is.numeric,sum) %>% ungroup %>% unique %>% mutate(mysum= rowSums(.[2:31])) %>% dfilter(mysum > 0.05) %>% dselect(-mysum) %>% dfilter(!grepl("Rik+",Symbol)) %>% dfilter(!grepl("AC[0-9]",Symbol)) %>% write.table(file="JHU_KPC_RNAseq.txt", sep="\t", quote=FALSE, row.names = FALSE)
+
+JHU <- JHU_counts %>% tibble::rownames_to_column("Gene") %>% left_join(gencode_symbol, by="Gene") %>% dselect(-Gene,Symbol,everything()) %>% group_by(Symbol) %>% summarise_if(is.numeric,sum) %>% ungroup %>% unique %>% mutate(mysum= rowSums(.[2:31])) %>% dfilter(mysum > 0.05) %>% dselect(-mysum) %>% dfilter(!grepl("Rik+",Symbol)) %>% dfilter(!grepl("AC[0-9]",Symbol))
+
+JHU %>% gather(Sample,Value,-Symbol) %>% dfilter(Value > 0) %>% ggplot(aes(x=Sample,y=Value)) + geom_boxplot() + geom_point() + coord_trans(y='log2') 
+
+AD_counts %<>% mutate(Gene = Genes) %>% dselect(Gene, everything())
+AD_counts <- left_join(AD_counts, gencode_symbol, by="Gene") %>% dselect(Symbol,Gene, everything()) + coord_trans(y='log10')
+
+save(JHU,file="/Volumes/Enterprise/FLX/JHU/kallisto/JHU_kallisto_TPM.rdata")
+``` 
+
+Get "Raw" counts with tximport
+Create DESeq2 Object
+This isn't actual raw counts because there are some decimals, but tximport back calculates the values that DESeq accepts
+```{r}
+library(tximport)
+my_files <- base::list.files("/Volumes/Enterprise/FLX/JHU/kallisto/", full.names=TRUE)
+all(file.exists(my_files)) # TRUE
+# A tx2gene file has to be created
+
+gencode_symbol <- read.table("/Volumes/Enterprise/FLX/Atopic_Dermatitis/bulk_RNAseq_Pilot/GRCm38_GENCODE2SYMBOL.txt", header=FALSE)
+colnames(gencode_symbol) <- c("Gene","Symbol")
+
+JHU_raw <- tximport(my_files, type="kallisto", tx2gene=gencode_symbol)
+JHU_raw$counts
+
+colnames(JHU_raw$counts) <- files %>% separate(Files,into= c(Name,NA), sep=".kallisto") %>% .[,1]
+files %<>% data.frame
+colnames(files) <- c("Files")
+write.table(JHU_raw$counts, file="JHU_raw_tximport.txt", sep="\t", row.names= FALSE)
+save(JHU_raw, file(JHU_tximport_output.rdata))
+
+JHU_raw %>% mutate(mysum= rowSums(.[2:30])) %>% dfilter(mysum > 0.05) %>% dselect(-mysum) %>% dfilter(!grepl("Rik+",Symbol)) %>% dfilter(!grepl("AC[0-9]",Symbol))
+
+coldata <- files %>% separate(Files,into= c(Name,NA), sep=".kallisto") 
+colnames(coldata) <- "condition"
+
+ddsTxi <- DESeqDataSetFromTximport(JHU_raw,
+                                   colData = coldata,
+                                   design = ~ condition)
+ddsTxi
+save(ddsTxi, file="JHU_DEseq2.rdata")
+```
+

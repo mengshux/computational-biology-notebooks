@@ -1,0 +1,518 @@
+---
+title: "GCN2_survival_analysis_Gene"
+author: "Gene_MX"
+date: "1/30/2020"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+# survival analysis package
+library(icenReg)
+#package for regression models for interval censored data
+install.packages("icenReg")
+```
+
+##################################################
+#######
+Datasets
+
+```{r}
+19
+CT26_004 <- read.table(file="/Volumes/Enterprise/FLX/GCN2/In_vivo_data/19-CT26-004.txt", header=TRUE, sep="\t")
+CT26_021 <- read.table(file="/Volumes/Enterprise/FLX/GCN2/In_vivo_data/19-CT26-021.txt", header=TRUE, sep="\t")
+CT26_028 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/19-CT26-028_28d.txt", header=TRUE, sep="\t")
+Renca_05 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/19-Renca-005.txt", header=TRUE, sep="\t")
+Renca_08 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/19-Renca-008_29d.txt", header=TRUE, sep="\t")
+Crown_LL2 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/Crown_LL2.txt", header=TRUE, sep="\t")
+Crown_Pan02 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/Crown_Pan02_Comp.txt", header=TRUE, sep="\t")
+RENCA_001_20 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/20_RENCA_001.txt", header=TRUE, sep="\t")
+Crown_01_20 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/20_Crown_LL2.txt", header=TRUE, sep="\t")
+RENCA_004_21 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/21-Renca-004.txt", header=TRUE, sep="\t")
+CT26_005 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/19-CT26-005.txt", header=TRUE, sep="\t")
+
+CT26_004 <- CT26_004 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) %>% 
+	filter(complete.cases(.))
+
+CT26_021 <- CT26_021 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) %>% 
+	filter(complete.cases(.))
+
+CT26_028 <- CT26_028 %>% gather("day","size", -Group, -animal) %>% 
+	rename(treatment=Group) %>%
+	mutate(day=as.numeric(sub("X","",day))) #%>% 
+	filter(complete.cases(.))
+
+Renca_05 <- Renca_05 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) %>% 
+	filter(complete.cases(.))
+
+Renca_08 <- Renca_08 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) #%>% 
+	filter(complete.cases(.))
+
+Crown_LL2 <- Crown_LL2 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) %>% 
+	filter(complete.cases(.))
+
+Crown_Pan02 <- Crown_Pan02 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) 
+
+RENCA_001_20 <- RENCA_001_20 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) #
+	
+Crown_01_20 <- Crown_01_20 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) %>% dfilter(!is.na(animal)) %>% dfilter(treatment %in% c("Anti_VEGFR","F019282_50_mpk_Anti_VEGFR","Vehicle","F019282_50_mpk"))
+
+Crown_01_20 %<>% dfilter(treatment %in% c("Anti_VEGFR","F019282_50_mpk_Anti_VEGFR","Vehicle","F019282_50_mpk"))
+
+RENCA_004_21 <- RENCA_004_21 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day)))
+
+CT26_005 <- CT26_005 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) 
+
+ggplot(CT26_004, aes(x=day, y=size, color=treatment, group=interaction(treatment, animal))) + geom_line()
+ggplot(CT26_021, aes(x=day, y=size, color=treatment, group=interaction(treatment, animal))) + geom_line()
+ggplot(CT26_028, aes(x=day, y=size, color=treatment, group=interaction(treatment, animal))) + geom_line()
+ggplot(Renca_05, aes(x=day, y=size, color=treatment, group=interaction(treatment, animal))) + geom_line()
+ggplot(Renca_08, aes(x=day, y=size, color=treatment, group=interaction(treatment, animal))) + geom_line()
+#ggplot(MM1S.vol, aes(x=day, y=size, color=treatment, group=animal)) + geom_line() + facet_wrap(~treatment)
+```
+
+
+
+Load Prism file: Apparently the Excel file for 21-RENCA-004 is wrong
+```{r}
+#install.packages("pzfx")
+library(pzfx)
+RENCA_004_21 <- read_pzfx("/Volumes/Picard/FLX/GCN2/In_vivo_data/21-Renca-004.pzfx") %>% data.frame %>% dfilter(!is.na(Days.Post.Inoculation)) %>% tibble::column_to_rownames("Days.Post.Inoculation") %>% t %>% data.frame %>% mutate(treatment=c(rep("Vehicle",10),rep("Anti-PD1",10),rep("F019282_15mpk",10),rep("F019282_15mpk_PDL1",10))) %>% dselect(treatment,everything()) %>% gather(day, size,-treatment) %>% mutate(day=as.numeric(sub("X","",day)))
+```
+
+
+Find the tumor size that half the tumors reach, to set as threshold
+CT26-004 threshold 1000, reached by 31/48 samples: 65%
+CT26-021 threshold 1000, reached by 15/15 samples: 100%
+CT26-028 threshold 1000, reached by 25/40 samples: 62.5%
+RENCA-08 threshold 1000, reached by 26/69 samples: 38%
+```{r}
+CT26_004 %>% group_by(treatment,animal) %>% dplyr::filter(day==max(day)) %>% dplyr::filter(.data$size>=1000)
+
+CT26_021 %>% group_by(treatment,animal) %>% dplyr::filter(day==max(day)) %>% dplyr::filter(.data$size>=1000)
+
+CT26_028 %>% group_by(treatment,animal) %>% dplyr::filter(day==max(day)) %>% dplyr::filter(.data$size>=2000)
+
+Renca_08 %>% group_by(treatment,animal) %>% dplyr::filter(day==max(day)) %>% dplyr::filter(.data$size>=1000)
+
+RENCA_001_20 %>% group_by(treatment,animal) %>% dplyr::filter(day==max(day)) %>% dplyr::filter(.data$size>=1000)
+```
+
+
+
+
+
+```{r, width=7, height=4}
+
+ggplot(CT26_004, aes(x=day, y=size, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE, aes(color=treatment)) +
+	facet_wrap(~treatment) + geom_hline(aes(yintercept=1500, color="grey80")) + theme(legend.position="none") + ggsave("CT26_04_facet.jpg", width=5, height=3, dpi=150, plot= last_plot(), units = "in")
+
+ggplot(CT26_021, aes(x=day, y=size, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE, aes(color=treatment)) +
+	facet_wrap(~treatment) + geom_hline(aes(yintercept=1000, color="grey80")) + theme(legend.position="none") + ggsave("CT26_21_facet.jpg", width=5, height=3, dpi=150, plot= last_plot(), units = "in")
+
+ggplot(CT26_028, aes(x=day, y=size, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE, aes(color=treatment)) +
+	facet_wrap(~treatment) + geom_vline(aes(xintercept=24, color="grey80")) + theme(legend.position="none") # + ggsave("CT26_28_facet.jpg", width=5, height=3, dpi=150, plot= last_plot(), units = "in")
+
+
+ggplot(Renca_05, aes(x=day, y=size, color=treatment, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE) +
+	facet_wrap(~treatment) + geom_hline(aes(yintercept=1000, color="grey80")) + theme(legend.position="none") + ggsave("Renca_05_facet.jpg", width=5, height=3, dpi=150, plot= last_plot(), units = "in")
+
+ggplot(Renca_08, aes(x=day, y=size, color=treatment, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE) +
+	facet_wrap(~treatment) + geom_hline(aes(yintercept=500, color="grey80")) + theme(legend.position="none") + ggsave("Renca_08_facet.jpg", width=5, height=3, dpi=150, plot= last_plot(), units = "in")
+
+ggplot(Crown_LL2, aes(x=day, y=size, color=treatment, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE) +
+	facet_wrap(~treatment) + geom_hline(aes(yintercept=2000, color="grey80")) + theme(legend.position="none") + ggsave("Crown_LL2_facet.jpg", width=5, height=3, dpi=150, plot= last_plot(), units = "in")
+
+ggplot(Crown_Pan02, aes(x=day, y=size, color=treatment, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE) +
+	facet_wrap(~treatment) + geom_vline(aes(xintercept=32, color="grey80")) + theme(legend.position="none") + ggsave("Crown_Pan02_facet.jpg", width=5, height=3, dpi=150, plot= last_plot(), units = "in")
+
+ggplot(RENCA_001_20, aes(x=day, y=size, color=treatment, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE) +
+	facet_wrap(~treatment) + geom_hline(aes(yintercept=500, color="grey80")) + theme(legend.position="none") 
+
+ggplot(Crown_01_20, aes(x=day, y=size, color=treatment, group=interaction(treatment,animal))) + geom_line(show.legend = FALSE) +
+	facet_wrap(~treatment) + geom_hline(aes(yintercept=1000, color="grey80")) + theme(legend.position="none") 
+```
+
+# make survival data functions
+```{r}
+# create a data.frame that is ready to go into survival analysis
+# cutoff = size cutoff for suvival
+# this returns the "death" days as left and right censored
+make_survival_data <- function(x, cutoff=2000) {
+	x %>% group_by(treatment, animal) %>% arrange(day) %>% summarize(
+		which.cutoff = as.integer(min(which(size >= cutoff))), # the actual cutoff day
+		reaches.cutoff = is.finite(which.cutoff),   # boolean on whehther it ever reaches 1000
+		left = if_else(reaches.cutoff, day[which.cutoff-1], max(day)), # left bound: -1 day when it reaches
+		right = if_else(reaches.cutoff, day[which.cutoff], Inf)   # right bound, the day it reaches, or infinity if never reaches
+	) %>% ungroup %>% select(-which.cutoff, -reaches.cutoff)
+}
+
+# left = interval before survival event
+# right = interval after survival event
+# make a data.frame that is ready to plot as a survival curve
+make_surv_curve_data <- function(x, cutoff=2000) {
+	x %>% group_by(treatment) %>% mutate(n.day1=sum(day==min(day))) %>%
+		group_by(treatment, day) %>% summarize(frac_alive = sum(size < cutoff)/n.day1[1])
+}
+
+```
+Make survival data input
+
+```{r}
+current_data <- CT26_004 %>% make_survival_data(cutoff=1500)
+current_data <- CT26_021 %>% make_survival_data(cutoff=1000)
+current_data <- CT26_028 %>% make_survival_data(cutoff=2000)
+current_data <- Renca_05 %>% make_survival_data(cutoff=1000)
+current_data <- Renca_08 %>% make_survival_data(cutoff=500)
+current_data <- Crown_Pan02 %>% make_survival_data(cutoff=1500)
+current_data <- Crown_LL2 %>% make_survival_data(cutoff=1000)
+current_data <- RENCA_001_20 %>% make_survival_data(cutoff=500)
+current_data <- Crown_01_20 %>% make_survival_data(cutoff=2000) #1000 not sig
+
+current_data <- current_data %>% mutate(treatment=fct_relevel(factor(treatment), "19282_15_mpk"))
+```
+
+```{r fig.height=4, fig.width=7}
+plot.data <- Crown_Pan02  %>% make_surv_curve_data
+plot.data <- CT26_004  %>% make_surv_curve_data
+plot.data <- CT26_021  %>% make_surv_curve_data
+plot.data <- CT26_028  %>% make_surv_curve_data
+plot.data <- Renca_05  %>% make_surv_curve_data
+plot.data <- Renca_08  %>% make_surv_curve_data(cutoff=500)
+plot.data <- Crown_Pan02  %>% make_surv_curve_data(cutoff=1500)
+plot.data <- Crown_LL2  %>% make_surv_curve_data
+plot.data <- RENCA_001_20 %>% make_surv_curve_data
+plot.data <- Crown_01_20 %>% make_surv_curve_data
+ggplot(plot.data, aes(x=day, y=frac_alive, color=treatment)) + geom_step(size=2) # ggsave("Crown_Pan02_survival.jpg", width=7, height=4, dpi=150, plot= last_plot(), units = "in")
+
+```
+
+# test different fit models for survival
+```{r}
+#tmp <- MM1S.surv_data %>% filter(treatment %in% c("18797.50mpkBID","Vehicle"))
+#s <- Surv(tmp$left, tmp$right, type = "interval2")
+
+#non_para <- ic_np(cbind(left,right) ~ treatment, data=MM1S.surv_data)
+ph <- ic_sp(cbind(left,right) ~ treatment, model='ph', bs_samples=100, data=current_data) 
+#po <- ic_sp(cbind(left,right) ~ treatment, model='po', bs_samples=100, data=MM1S.surv_data)
+#par <- ic_par(cbind(left,right) ~ treatment, model='ph', dist="gamma", data=MM1S.surv_data)
+#par.ph_weib <- ic_par(cbind(left,right) ~ treatment, model='ph', dist="weibull", data=MM1S.surv_data)
+
+#non_para %>% plot(.,  xlab="Time", ylab="Surv", main="non parametric")
+ph %>% plot(.,  xlab="Time", ylab="Surv", main="cox ph")
+#po  %>% plot(., xlab="Time", ylab="Surv", main="prop odds")
+#par  %>% plot(., xlab="Time", ylab="Surv", main="parametric cox ph")
+#par.ph_weib  %>% plot(., xlab="Time", ylab="Surv", main="parametric cox ph - Weibull")
+
+summary(ph)
+
+```
+
+ANOVA for PAN02 and CT26
+Check conditions for ANOVA with Levene test: Not met for Pan02 and CT26_028
+
+```{r}
+#check normality assumption of ANOVA
+plot(res.aov,2)
+
+# check homogeneity of variance assumptions
+plot(res.aov, 1)
+
+# there are some outliers, Levene's test for homogeneity of variance
+#results show there is indeed significance differences in variance, so assumptions for ANOVA are not met
+#In this case, run the Kruskal-Wallis rank sum test
+
+library(car)
+leveneTest(size ~ treatment, data=Crown_Pan02)
+leveneTest(size ~ treatment, data=CT26_028)
+
+``` 
+
+
+```{r}
+Crown_Pan02 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/Crown_Pan02_Comp.txt", header=TRUE, sep="\t")
+Crown_Pan02 <- Crown_Pan02 %>% gather("day","size", -Treatment, -animal) %>% 
+	rename(treatment=Treatment) %>%
+	mutate(day=as.numeric(sub("X","",day))) %>% mutate(treatment=factor(treatment, levels=c("Group_01", "Group_08")))
+
+levels(Crown_Pan02$treatment)
+
+#Crown_Pan02 on Day 32
+#compute variance
+res.aov <- aov(size~ treatment, data=Crown_Pan02 %>% dplyr::filter(day==32))
+summary(res.aov)
+
+#ANOVA CT26 Day 24
+CT26_028 <- read.table(file="/Volumes/Picard/FLX/GCN2/In_vivo_data/19-CT26-028_28d.txt", header=TRUE, sep="\t")
+
+CT26_028 <- CT26_028 %>% gather("day","size", -Group, -animal) %>% 
+	rename(treatment=Group) %>%
+	mutate(day=as.numeric(sub("X","",day))) %>%
+  mutate(treatment=factor(treatment, levels=c("Vehicle","F019282_15mpk ","Anti-VEGFR", "Combo")))
+
+res.aov <- aov(size~ treatment, data=CT26_028 %>% dplyr::filter(day==24))
+summary(res.aov)
+levels(CT26_028$treatment)
+
+# Tukey's HSD honest significant differences
+TukeyHSD(res.aov)
+
+
+#two-sample T test
+control <- Crown_Pan02 %>% dplyr::filter(day==32) %>% dplyr::filter(treatment=="Group_01") %>% pull(size)
+treated <- Crown_Pan02 %>% dplyr::filter(day==32) %>% dplyr::filter(treatment=="Group_08") %>% pull(size)
+t.test(control,treated,alternaitive="two.sided", var.equal=FALSE)
+```
+
+
+Kruskal-Wallis rank sum test
+Wilcoxon rank sum for 2 groups
+
+```{r}
+unique(Crown_Pan02$day) # 4  7 11 14 18 21 25 28 32
+attach(Crown_Pan02)
+my_day <- day==28
+my_veh <- treatment=="Group_01"
+my_treat <- treatment=="Group_08"
+wilcox.test(Crown_Pan02[my_day&my_veh,]$size, Crown_Pan02[my_day&my_treat,]$size, alternative = "two.sided")
+
+Day 4: not sig
+Day 7: 0.0089
+11: 0.0007
+14: 0.0004
+18: 0.0007
+21: 0.002
+25  0.005
+32: 0.005
+kruskal.test(size ~ treatment, data = Crown_Pan02) # 10-5
+
+```
+
+CROWN LL2
+Crown_LL2 is the one in the paper
+```{r}
+#unique(Crown_01_20$day) # 0  2  5  9 12 16 19 23 26 28
+unique(Crown_LL2$day)  # 12 14 18 21 25 28
+unique(Crown_LL2$treatment) # "Group_01" "Group_08"
+attach(Crown_LL2)
+my_day <- day==28
+my_veh <- treatment=="Group_01"
+my_treat <- treatment=="Group_08"
+wilcox.test(Crown_LL2[my_day&my_veh,]$size, Crown_LL2[my_day&my_treat,]$size, alternative = "two.sided")
+12: NS
+14: NS
+18: NS
+21: 0.0001
+25: 0.0001
+28: 0.002
+
+```
+
+19-RENCA_005
+```{r}
+unique(Renca_05$day) # 6 10 13 17 20 24 27
+attach(Renca_05)
+my_day <- day==13
+my_veh <- treatment=="Vehicle"
+my_treat <- treatment=="F019282_15mpk"
+wilcox.test(Renca_05[my_day&my_veh,]$size, Renca_05[my_day&my_treat,]$size, alternative = "two.sided")
+6: 0.002
+10: 0.012
+13: 0.003
+17: 0.0007
+20: 0.0004
+24: 1-5
+27: 0.003
+
+kruskal.test(size ~ treatment, data = Renca_05 %>% dplyr::filter(day==6)) #0.0015
+kruskal.test(size ~ treatment, data = Renca_05 %>% dplyr::filter(day==24)) #0.0001
+kruskal.test(size ~ treatment, data = Renca_05 %>% dplyr::filter(day==27)) #0.005
+pairwise.wilcox.test(Renca_05 %>% dplyr::filter(day==6) %>% dselect(day), Crown_Pan02$treatment %>% dplyr::filter(day==6),
+                 p.adjust.method = "BH")
+```
+19-RENCA_008
+```{r}
+unique(Renca_08$day) #  6  9 12 16 19 23 25 27 29
+unique(Renca_08$treatment) "19282_15mpk_CD8"  "19282_15mpk_PDL1"
+attach(Renca_08)
+
+kruskal.test(size ~ treatment, data = Renca_08 %>% dplyr::filter(day==12)) #NS
+6: NS
+9: NS
+12: 0.22
+16: 0.01
+19: 0.003
+23: 0.0004
+25: 0.0003
+27: 0.0001
+
+my_day <- day==29
+my_veh <- treatment=="19282_15mpk_CD8"
+my_treat <- treatment=="19282_15mpk_PDL1"
+wilcox.test(Renca_08[my_day&my_veh,]$size, Renca_08[my_day&my_treat,]$size, alternative = "two.sided")
+
+19: NS
+23: NS
+25: NS
+27: 0.04
+
+282 vs. Combo
+27: 0.06
+29: 0.05
+```
+
+19-CT26-028
+
+```{r}
+unique(CT26_028$day) #  6 10 13 17 19 24 26 28
+unique(CT26_028$treatment) # "Vehicle"        "F019282_15mpk " "Anti-VEGFR"     "Combo"      
+attach(CT26_028)
+
+kruskal.test(size ~ treatment, data = CT26_028 %>% dplyr::filter(day==28)) #NS
+6: NS
+9: NS
+13: 0.199
+17: 0.13
+19: 0.01
+24: 0.001
+26: 0.025
+27: 0.0235
+
+my_day <- day==24
+my_veh <- treatment=="Vehicle"
+my_treat <- treatment== "Combo"
+wilcox.test(CT26_028[my_day&my_veh,]$size, CT26_028[my_day&my_treat,]$size, alternative = "two.sided")
+```
+
+20-RENCA-001
+```{r}
+RENCA_001_20 
+
+unique(RENCA_001_20$day) #  6 10 13 17 20 24
+unique(RENCA_001_20$treatment) # ""Vehicle" "F019282_30_mpk" "Anti_VEGFR" "F019282_30_mpk_VEGFR" "Anti-PDL1" "F019282_30_mpk_PDL1" 
+attach(RENCA_001_20)
+kruskal.test(size ~ treatment, data = RENCA_001_20 %>% dplyr::filter(day==13)) #NS
+6: NS
+9: NS
+13: 0.0006
+17: 4 -12
+20:  5 -15
+24: 0.001
+26: 0.025
+27: 0.0235
+
+my_day <- day==17
+my_veh <- treatment=="F019282_30_mpk"
+my_treat <- treatment== "F019282_30_mpk_VEGFR"
+wilcox.test(RENCA_001_20[my_day&my_veh,]$size, RENCA_001_20[my_day&my_treat,]$size, alternative = "two.sided")
+```
+
+LL2
+```{r}
+Crown_01_20
+unique(Crown_01_20$day) #   0  2  5  9 12 16 19 23 26 28
+unique(Crown_01_20$treatment) # "Vehicle"    "F019282_50_mpk"  "Anti_VEGFR"    "F019282_50_mpk_Anti_VEGFR"
+attach(Crown_01_20)
+kruskal.test(size ~ treatment, data = Crown_01_20 %>% dplyr::filter(day==5)) #NS
+2: NS
+5: 0.02
+9: 3 -5
+12: 2 -7
+16: 3 -8
+19: 4 -8
+23: 7 -7
+26: 3 -7
+
+my_day <- day==19
+my_veh <- treatment=="F019282_50_mpk"
+my_treat <- treatment== "F019282_50_mpk_Anti_VEGFR"
+wilcox.test(Crown_01_20[my_day&my_veh,]$size, Crown_01_20[my_day&my_treat,]$size, alternative = "two.sided")
+```
+
+21_RENCA_004
+
+```{r}
+RENCA_004_21
+unique(RENCA_004_21$day) # 0  9 13 15 19 22 26
+unique(RENCA_004_21$treatment) # "Vehicle"            "Anti-PD1"           "F019282_15mpk"      "F019282_15mpk_PDL1"
+attach(RENCA_004_21)
+kruskal.test(size ~ treatment, data = RENCA_004_21 %>% dplyr::filter(day==0)) #NS
+0, 4, 5, 10, 13: NS
+17: 0.009898 # **
+20: 0.02966 # *
+
+my_day <- day== 22
+my_veh <- treatment=="Vehicle"
+my_treat <- treatment== "F019282_15mpk_PDL1"
+wilcox.test(RENCA_004_21[my_day&my_veh,]$size, RENCA_004_21[my_day&my_treat,]$size, alternative = "two.sided")
+
+21_RENCA_004
+DAy 22 19282 vs vehicle : NS
+DAy 22 combo vs vehicle : 0.02
+DAy 26 19282 vs vehicle : NS
+DAy 26 combo vs vehicle : 0.002
+```
+
+19-CT26-005
+```{r}
+CT26_005
+unique(CT26_005$day) # 7 11 14 17 19 21 24
+unique(CT26_005$treatment) # "Vehicle"       "F019282_15mpk"
+attach(CT26_005)
+
+14: NS
+17: 0.04
+19: NS
+21: NS
+24: 0.1 NS
+my_day <- day==14
+my_veh <- treatment=="Vehicle"
+my_treat <- treatment== "F019282_15mpk"
+wilcox.test(CT26_005[my_day&my_veh,]$size, CT26_005[my_day&my_treat,]$size, alternative = "two.sided")
+```
+
+```{r}
+library(pzfx)
+pzfx_tables("/Volumes/Picard/FLX/GCN2/In_vivo_data/19-CT26-004.pzfx") # look at what tabs are available
+ct26_004 <- read_pzfx("/Volumes/Picard/FLX/GCN2/In_vivo_data/19-CT26-004.pzfx", table="Tumor Volumes")
+
+ct26_004 %<>% dselect("Days Post Inoculation",starts_with("Vehicle "), starts_with("F019282 30mpk BID")) %>% dfilter(!is.na(`Days Post Inoculation`)) %>% gather(Sample,size,-`Days Post Inoculation`) %>% mutate(treatment=case_when(
+  grepl("Vehicle",Sample) ~ "Vehicle",
+  grepl("F019282",Sample) ~ "F019282_30mpk"
+)) %>% dselect(-Sample) %>% dfilter(!is.na(size)) %>% rename(day = `Days Post Inoculation`) 
+
+unique(ct26_004$day) # 0  6  9 12 14 16 19 21
+unique(ct26_004$treatment) # "Vehicle"       "F019282_30mpk"
+attach(ct26_004)
+9: 0.2 NS
+12: 0.01
+14: 0.01
+16: 0.01
+19: 0.03
+21: 0.01
+my_day <- day==9
+my_veh <- treatment=="Vehicle"
+my_treat <- treatment== "F019282_30mpk"
+wilcox.test(ct26_004[my_day&my_veh,]$size, ct26_004[my_day&my_treat,]$size, alternative = "two.sided")
+```
+

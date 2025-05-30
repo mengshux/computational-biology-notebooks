@@ -1,0 +1,338 @@
+---
+title: "Deconvolution_scRNA_evaluation.Rmd"
+author: "MX"
+date: "4/7/2021"
+output: html_document
+---
+
+```{r}
+library(Seurat)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+```
+
+Data objects for this analysis:
+```{r}
+Actual_cell_percents # cell types by donor
+pseudobulk_m # pseudo-bulk data for 8 donors, in matrix format for immunedeconv 
+as.matrix(pseudobulk)
+```
+
+
+
+
+Install Deconvolution software
+
+https://icbi-lab.github.io/immunedeconv/
+install.packages("remotes")
+remotes::install_github("icbi-lab/immunedeconv")
+
+Load scRNA datasets, calculate cell types per sample
+```{r}
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4B.Robj")
+```
+
+
+Make a table of immune cell content by donor
+
+```{r}
+cluster_ident2 <- data.frame(Ident.ident=as.factor(c(0:27)), Cell_type=c("CD4 T", "CD4 T", "Neutrophil","Neutrophil","CD8 T","Neutrophil Apoptotic","NK","Monocyte","Neutrophil","Apoptotic Lymphoid","Apoptotic monocyte","Monocyte","mMDSC","Neutrophil Apoptotic","Platelets","Monocyte","Apoptotic NK","B cell","CD8 T","CD8 T","gMDSC","Neutrophil","DC","B cell","NK","Monocyte","CD4 T","DC"))
+
+cbind(Ident=FetchData(batch4B, vars= c("ident", "orig.ident"))) %>% data.frame %>% left_join(cluster_ident2, by="Ident.ident") %>% dselect(-Ident.ident) %>% table
+```
+
+Count T regs by Foxp3 expression alone
+There are only 105 CD4+ FOXP3+ cells in the entire dataset. Leave T regs out of the analysis. We know the decovonvolution software are terrible at predicting them anyway
+Gene defined CTLA4, IKZF2, CCR8 and FOXP3, but CCR8 is not detected, IKZF2 is non-specific, and CTLA4 looks similar to FOXP3
+```{r fig.height=10, fig.width=10}
+FeaturePlot(batch4B,reduction="umap",slot ="data",cols=c("grey90","red"),features = c( "CTLA4","IKZF2","CCR8","FOXP3","LAG3"), ncol=2, max.cutoff = 1) 
+# Fetch cells with FOXP3 expression that are not in the CD8 cluster
+Treg <- FetchData(batch4B, vars= c("FOXP3","ident", "orig.ident"), slot = "data") %>% dfilter(FOXP3>0, ident != c(1,0,26)) %>% rownames#%>% count(orig.ident) 
+```
+
+Merge Treg counts into the rest of the cells by replacing by cell IDS
+
+```{r fig.height=3, fig.width=10}
+cell_type_counts <- cbind(Ident=FetchData(batch4B, vars= c("ident", "orig.ident"))) %>% data.frame %>% rownames_to_column("Cell") %>% left_join(cluster_ident2, by="Ident.ident") %>% mutate(Cell_type= if_else(Cell %in% Treg,"Treg",Cell_type)) %>% dfilter(!is.na(Cell_type)) %>% dselect(-Ident.ident) %>% count(Ident.orig.ident,Cell_type, .drop=FALSE) # group_by(Ident.orig.ident,Cell_type) %>% summarise(n=n()) 
+#this skips B cell in aml1 because there are none
+
+cell_type_counts$Cell_type %>% unique
+cell_order <- rev(c("Neutrophil","Neutrophil Apoptotic","CD4 T","Treg","Monocyte","CD8 T","mMDSC","Platelets","NK","B cell","gMDSC","DC"))
+cell_type_counts %>% mutate(Cell_type= factor(Cell_type, levels=cell_order)) %>% group_by(Ident.orig.ident) %>% mutate(Total_cells=sum(n)) %>% ungroup %>% mutate(Immune_cell_percent= round((n/Total_cells)*100,digits=1)) %>% ggplot(aes(x=Ident.orig.ident, fill=Cell_type,y=Immune_cell_percent)) + 
+  geom_bar(position="stack",stat="identity") + coord_flip() + 
+  theme(text = element_text(size=18)) +
+scale_fill_manual(values=rev(c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920","#083D77"))) #,"#356E46","#69597D","#052344"
+
+#Cell proportions per donor data
+Actual_cell_percents <- cell_type_counts %>% group_by(Ident.orig.ident) %>% mutate(Total_cells=sum(n)) %>% ungroup %>% mutate(Immune_cell_percent= round((n/Total_cells)*100,digits=1))
+```
+
+Pool mRNA counts per donor into pseudo-bulk data
+
+pull RNA counts out and transpose, pull orig.idents out
+Merge into a data.frame of cells in rows and genes in columns
+Use data.table to group sum counts by donor
+transpose back into genes in rows and samples in columns
+```{r}
+raw_counts <- as.matrix(batch4B@assays$RNA@counts) %>% t
+raw_counts_dt[1:5,1:5]
+#This is too much for data.frame
+pseudo_bulk <- raw_counts %>% t %>% data.frame %>% tibble::rownames_to_column("donor") %>% group_by(donor) %>% summarise_all(sum)
+library(data.table)
+# cbind changes the numbers in raw_counts into characters, apparently this is default of cbind, so join using data.frame, then convert to data.table
+raw_counts_dt <- data.frame(donor=batch4B$orig.ident,raw_counts) %>% data.table
+
+pseudo_bulk <- raw_counts_dt[,lapply(.SD,sum),by=donor] #.SD is like the summarise_all function, it contains all columns except the column specified in by=
+pseudobulk <- pseudo_bulk[1:8,] %>% tibble::column_to_rownames("donor") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+save(pseudobulk, file="batch4B_pseudobulk_RNAseq.rdata")
+save(pseudobulk_m, file="batch4B_pseudobulk_RNAseq_m.rdata")
+pseudobulk_m <- pseudobulk %>% tibble::column_to_rownames("Gene") %>% as.matrix
+```
+
+
+```{r}
+UMAPPlot(batch4B, label=TRUE)
+c("CD4 T", "CD4 T", "Neutrophil","Neutrophil","CD8 T","Neutrophil Apoptotic","NK","Monocyte","Neutrophil","Apoptotic Lymphoid","Apoptotic monocyte","Monocyte","mMDSC","Neutrophil Apoptotic","Platelets","Monocyte","Apoptotic NK","B cell","CD8 T","CD8 T","gMDSC","Neutrophil","DC","B cell","NK","Monocyte","CD4 T","DC")
+```
+
+Deconvolute with  library(immunedeconv)
+
+"quantiseq" : percent content that is comparable intra-sample and inter-sample
+"mcp_counter" : arbitrary number unit estimate that is comparable inter-sample
+"xcell" : produces enrichment scores that are comparable inter-sample, not intra-sample
+ "epic" 
+ "timer"
+
+"cibersort"  "cibersort_abs"         
+!Cibersort requires a commercial license so skip that one
+
+ pbmc1  pbmc2    pdac1    pdac2     aml1  pbmc3 aml3
+
+```{r}
+library(immunedeconv)
+res_Quantiseq <- deconvolute(pseudobulk_m,"quantiseq",tumor=FALSE) # Signature genes found in data set: 148/153 (96.73%)
+res_mcp <- deconvolute(pseudobulk_m,"mcp_counter") 
+res_epic <- deconvolute_epic(pseudobulk_m, scale_mrna = TRUE,tumor= FALSE)
+res_xcell <- deconvolute_xcell(pseudobulk_m,array=FALSE) # cell.types.use can't find options for this anywhere on the original xcell code
+res_timer <- deconvolute_timer(pseudobulk_m, indications=c("UVM","UVM","PAAD","PAAD","ACC","UVM","PAAD","ACC"))  #needs the cancer type for each case, which is stupid. say UVM uveal melanoma for healthy since it's a cold tumor type?
+
+```
+QuantiSeq evaluate
+Predictions for Macrophage M1 = 0 for all, which is correct!
+```{r fig.height=3, fig.width=11}
+
+cell_order_qt <- rev(c("Neutrophil","T cell CD4+ (non-regulatory)","T cell regulatory (Tregs)","Monocyte","T cell CD8+","Macrophage M2","Macrophage M1","NK cell","B cell","uncharacterized cell","Myeloid dendritic cell"))
+res_Quantiseq %>% gather(Donor,Prediction_percent, -cell_type) %>% mutate(cell_type= factor(cell_type, levels=cell_order_qt)) %>% 
+  ggplot(aes(x=Donor, fill=cell_type,y=Prediction_percent)) + 
+  geom_bar(position="stack",stat="identity") + 
+  coord_flip() + 
+  theme(text = element_text(size=18)) +
+  scale_fill_manual(values=rev(c("#0A95A7","#E5541B","#5B666F","#FE9F33","#4DA167","#947EB0","#083D77","#444D54","#06707E","#AC3F12","#D07920","#083D77")))
+
+
+```
+Compare relative estimates
+```{r}
+res_Quantiseq_groom <- res_Quantiseq %>% gather(Donor,Prediction_percent, -cell_type) %>% mutate(cell_type =case_when(
+  grepl(cell_type  "T cell CD4+ (non-regulatory)") ~ "CD4 T",
+  cell_type == "T cell regulatory (Tregs)" ~ "Treg",
+  cell_type == "T cell CD8+" ~ "CD8 T",
+  cell_type == "Macrophage M2" ~ "mMDSC",
+  cell_type == "NK cell" ~ "NK",
+  cell_type == "Myeloid dendritic cell" ~ "DC",
+  TRUE ~ cell_type
+  ))
+
+res_mcp_groom <- res_mcp %>% gather(Donor,Enrichment_score, -cell_type) %>% mutate(cell_type =case_when(
+  cell_type == "T cell CD8+" ~ "CD8 T",
+  cell_type == "NK cell" ~ "NK",
+  cell_type == "Myeloid dendritic cell" ~ "DC",
+  TRUE ~ cell_type
+  ))
+
+res_epic_groom <- res_epic %>% data.frame %>% tibble::rownames_to_column("cell_type") %>% gather(Donor,Enrichment_score, -cell_type) %>% mutate(cell_type =case_when(
+  cell_type == "CD4_Tcells" ~ "CD4 T",
+  cell_type == "CD8_Tcells" ~ "CD8 T",
+  cell_type == "Monocytes" ~ "Monocyte",
+  cell_type == "NKcells" ~ "NK",
+  cell_type == "Neutrophils" ~ "Neutrophil",
+  cell_type == "Bcells" ~ "B cell",
+  TRUE ~ cell_type
+  ))
+
+res_xcell_groom <- res_xcell %>% data.frame %>% tibble::rownames_to_column("cell_type") %>% gather(Donor,Enrichment_score, -cell_type) %>% mutate(cell_type =case_when(
+  grepl("CD4+",cell_type) ~ "CD4 T",
+  grepl("CD8+",cell_type) ~ "CD8 T",
+  cell_type == "Tregs" ~ "Treg",
+  cell_type == "Monocytes" ~ "Monocyte",
+  cell_type == "Macrophages M2" ~ "mMDSC",
+  cell_type == "NK cells" ~ "NK",
+  grepl("DC", cell_type) ~ "DC",
+  cell_type == "Neutrophils" ~ "Neutrophil",
+  grepl("B-cells",cell_type) ~ "B cell",
+  TRUE ~ cell_type
+  )) %>% group_by(cell_type, Donor) %>% summarise_if(is.numeric,sum) %>% ungroup %>% unique
+
+res_timer_groom <- res_timer %>% data.frame %>% tibble::rownames_to_column("cell_type") %>% gather(Donor,Enrichment_score, -cell_type) %>% mutate(cell_type =case_when(
+  grepl("T_cell.CD4",cell_type) ~ "CD4 T",
+  grepl("T_cell.CD8",cell_type) ~ "CD8 T",
+  cell_type == "Macrophage" ~ "Monocyte",
+  grepl("B_cell",cell_type) ~ "B cell",
+  TRUE ~ cell_type
+  ))
+```
+```{r}
+Actual_cell_percents %<>% mutate(Donor = Ident.orig.ident, cell_type=Cell_type, Cell_percent= Immune_cell_percent/100) %>% dselect(Donor,cell_type,Cell_percent)
+```
+
+Correlate QunatiSeq results
+
+```{r fig.height=6, fig.width=6}
+library(ggpubr)
+#log
+res_Quantiseq_groom %>% left_join(Actual_cell_percents, by=c("Donor","cell_type")) %>% dfilter(cell_type %nin% c("Macrophage M1","uncharacterized cell")) %>%
+  ggplot(aes(Cell_percent,Prediction_percent)) + 
+  geom_point()  +
+  geom_abline(slope=1) + 
+  scale_x_log10() +
+  scale_y_log10() +
+  facet_wrap(~cell_type, scale="fixed", ncol=3) +
+  stat_cor(label.y = -0.3) # +
+  stat_regline_equation(label.y = 3.5)
+#linear
+res_Quantiseq_groom %>% left_join(Actual_cell_percents, by=c("Donor","cell_type")) %>% dfilter(cell_type %nin% c("Macrophage M1","uncharacterized cell")) %>%
+  ggplot(aes(Cell_percent,Prediction_percent)) + 
+  geom_point()  +
+  geom_abline(slope=1) + 
+  facet_wrap(~cell_type, scale="fixed", ncol=3) +
+  stat_cor(label.y = 0.5) # +
+  stat_regline_equation(label.y = 3.5)
+
+```
+
+Correlate MCP
+
+```{r fig.height=6, fig.width=9}
+library(ggpubr)
+#log
+res_mcp_groom %>% left_join(Actual_cell_percents, by=c("Donor","cell_type")) %>% dfilter(!is.na(Cell_percent)) %>%
+  ggplot(aes(Cell_percent,Enrichment_score)) + 
+  geom_point()  +
+  scale_x_log10() +
+  scale_y_log10() +
+  facet_wrap(~cell_type, scale="fixed", ncol=3) +
+  stat_cor(label.y = 1) # +
+  stat_regline_equation(label.y = 1.5)
+#linear
+res_mcp_groom %>% left_join(Actual_cell_percents, by=c("Donor","cell_type")) %>% dfilter(cell_type %nin% c("Macrophage M1","uncharacterized cell")) %>%
+  ggplot(aes(Cell_percent,Enrichment_score)) + 
+  geom_point()  +
+  geom_abline(slope=1) + 
+  facet_wrap(~cell_type, scale="fixed", ncol=3) +
+  stat_cor(label.y = 0.5) # +
+  stat_regline_equation(label.y = 3.5)
+
+```
+
+Correlate EPIC
+
+```{r fig.height=6, fig.width=9}
+res_epic_groom %>% left_join(Actual_cell_percents, by=c("Donor","cell_type")) %>% dfilter(!is.na(Cell_percent)) %>%
+  ggplot(aes(Cell_percent,Enrichment_score)) + 
+  geom_point()  +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_abline(slope=1) + 
+  facet_wrap(~cell_type, scale="fixed", ncol=3) +
+  stat_cor(label.y = 1) # +
+  stat_regline_equation(label.y = 1.5)
+
+#linear
+res_epic_groom %>% left_join(Actual_cell_percents, by=c("Donor","cell_type")) %>% dfilter(!is.na(Cell_percent)) %>%
+  ggplot(aes(Cell_percent,Enrichment_score)) + 
+  geom_point()  +
+  geom_abline(slope=1) + 
+  facet_wrap(~cell_type, scale="fixed", ncol=3) +
+  stat_cor(label.y = 0.7) # +
+  stat_regline_equation(label.y = 3.5)
+```
+
+xcell correlate 
+
+```{r fig.height=8, fig.width=12}
+res_xcell_groom %>% left_join(Actual_cell_percents, by=c("Donor","cell_type")) %>% dfilter(!is.na(Cell_percent)) %>% mutate(if_else(Enrichment_score==0, 0.0001,Enrichment_score)) %>%
+  ggplot(aes(Cell_percent,Enrichment_score)) + 
+  geom_point()  +
+  scale_x_log10() +
+  scale_y_log10() +
+  #geom_abline(slope=1) + 
+  facet_wrap(~cell_type, scale="free", ncol=4) +
+  stat_cor(label.y = 1, method="pearson") # +
+  stat_regline_equation(label.y = 1.5)
+
+```
+TIMER
+
+```{r fig.height=6, fig.width=9}
+res_timer_groom %>% left_join(Actual_cell_percents, by=c("Donor","cell_type")) %>% dfilter(!is.na(Cell_percent)) %>% mutate(if_else(Enrichment_score==0, 0.0001,Enrichment_score)) %>%
+  ggplot(aes(Cell_percent,Enrichment_score)) + 
+  geom_point()  +
+  scale_x_log10() +
+  scale_y_log10() +
+  #geom_abline(slope=1) + 
+  facet_wrap(~cell_type, scale="fixed", ncol=3) +
+  stat_cor(label.y = 1, method="pearson") # +
+  stat_regline_equation(label.y = 1.5)
+```
+
+Signatures
+Treg
+```{r fig.height=4, fig.width=12}
+library(limma)
+
+pseudobulk_m_norm <- normalizeBetweenArrays(pseudobulk_m)
+boxplot(pseudobulk_m_norm)
+pseudobulk_z <- t(apply(pseudobulk_m_norm,1,mx_zscore2)) #the middle term 1 means rows, and 2 means columns, the apply() will transpose the matrix because it has to do that before applying calculations by column, the second t is to flip it back
+boxplot(pseudobulk_z)
+
+Treg_sig_score <- pseudobulk_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("FOXP3","CTLA4")) %>% summarise_if(is.numeric, mean) %>% t %>% data.frame(Treg_score_FOXP3_CTLA4 = .) %>% tibble::rownames_to_column("Donor")
+Treg_sig_scor2 <- pseudobulk_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("CTLA4","IKZF2","FOXP3")) %>% summarise_if(is.numeric, mean) %>% t %>% data.frame(Treg_score2_FOXP_CTLA_IKZ = .) %>% tibble::rownames_to_column("Donor")
+
+FOXP3_z_score <- pseudobulk_z %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("FOXP3")) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame(FOXP3_score = .) %>% tibble::rownames_to_column("Donor")
+
+t_reg <- Actual_cell_percents$cell_type == "Treg"
+
+Actual_cell_percents[t_reg,] %>% left_join(Treg_sig_score, by="Donor") %>% left_join(FOXP3_z_score, by="Donor") %>% left_join(Treg_sig_scor2, by="Donor")
+  
+Actual_cell_percents[t_reg,] %>% left_join(Treg_sig_score, by="Donor") %>% left_join(FOXP3_z_score, by="Donor") %>% left_join(Treg_sig_scor2, by="Donor") %>% dselect(-Donor,-cell_type) %>% gather(Signature,Scores, -Cell_percent) %>%
+  ggplot(aes(Cell_percent,Scores)) + 
+  geom_point()  +
+  scale_x_log10() +
+  #geom_abline(slope=100) +
+  facet_wrap(~Signature, ncol=3, scale="fixed") +
+  stat_cor(label.y = 2) # +
+  stat_regline_equation(label.y = 1.5)
+
+```
+
+Merge All tools results
+
+```{r}
+library(brewer)
+res_Quantiseq_groom %<>% mutate(Tool ="QuantiSeq")
+res_Quantiseq_groom %<>% rename("Enrichment_score"=Prediction_percent)
+res_mcp_groom %<>% mutate(Tool= "MCP")
+res_epic_groom %<>% mutate(Tool= "Epic")
+res_xcell_groom %<>% mutate(Tool= "xCell")
+res_timer_groom %<>% mutate(Tool= "TIMER")
+colnames(res_Quantiseq_groom) == colnames(res_mcp_groom)
+all_dc <- rbind(res_Quantiseq_groom,res_mcp_groom,res_epic_groom,res_xcell_groom,res_timer_groom,match.names=F)
+
+all_dc %>% dfilter(cell_type %in% c("Neutrophil","CD4 T","Treg","Monocyte","CD8 T","mMDSC","Platelets","NK","B cell","gMDSC","DC")) %>% left_join(Actual_cell_percents, by=c("cell_type","Donor")) %>% mutate(Cell_percent= if_else(is.na(Cell_percent),0,Cell_percent)) %>% dselect(-Donor) %>% group_by(cell_type,Tool) %>% summarise(Cor = cor(Enrichment_score,Cell_percent, method="spearman")) %>% ungroup %>% mutate(Tool=factor(Tool, levels=rev(c("QuantiSeq","xCell","Epic","MCP","TIMER")))) %>% mutate(cell_type=factor(cell_type, levels=c("Neutrophil","B cell","CD4 T","CD8 T","Treg","NK","Monocyte","DC","mMDSC","Platelets"))) %>%
+  ggplot(aes(x=cell_type, y=Tool, fill=Cor)) + geom_tile() + scale_fill_distiller(limits=c(0,1), palette="RdBu")
+```
+

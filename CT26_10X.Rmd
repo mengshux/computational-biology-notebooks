@@ -1,0 +1,700 @@
+---
+title: "Methods 10X"
+author: "Mengshu"
+date: "12/3/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(SAVER)
+library(dplyr)
+library(ggplot2)
+library(magrittr)
+Mac
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+Windows
+source("D:/FLX/Files_from_Gene/R_functions.r")
+```
+Check Markers
+
+```{r fig.height=10, fig.width=15}
+DFM <- readRDS("C26_10X_Seurat_2.rds")
+FeaturePlot(object=DFM, features.plot = c("Ikbke","Tbk1"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") 
+VlnPlot(object=DFM, features.plot = c("Ikbke","Tbk1"),use.raw=TRUE, x.lab.rot = TRUE, nCol=2) 
+ggsave("CT26_actual_CT26cells.jpg", width= 12, height=8, dpi=600, plot=last_plot(), units = "in")
+```
+
+
+
+
+
+Load data into table
+```{r}
+
+M1 <- Read10X_h5("M1_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 
+M2 <- Read10X_h5("M2_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 
+M3 <- Read10X_h5("M3_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 
+
+F1 <- Read10X_h5("F1_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 288 cells, 2 min 
+F2 <- Read10X_h5("F2_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 273 cells
+F3 <- Read10X_h5("F3_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 252 cells
+
+D1 <- Read10X_h5("D1_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 188 cells, 2 min 
+D2 <- Read10X_h5("D2_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 287 cells
+D3 <- Read10X_h5("D3_filtered_gene_bc_matrices_h5.h5", ensg.names = FALSE) # 358 cells
+dim(F1)
+```
+Add back experiment labels to a new Seurat Object, and don't Impute:
+```{r}
+all <- as.matrix("M1","M2","M3","F1","F2","F3","D1","D2","D3")
+
+New_DFM <- CreateSeuratObject(M1,normalization.method = NULL, do.scale = FALSE, do.center = FALSE,
+  names.field = 1,display.progress = TRUE, min.genes = 50,project= "M1")
+New_DFM <- AddSamples(object = New_DFM, new.data = M2, add.cell.id = "M2")
+New_DFM <- AddSamples(object = New_DFM, new.data = M3, add.cell.id = "M3")
+New_DFM <- AddSamples(object = New_DFM, new.data = F1, add.cell.id = "F1")
+New_DFM <- AddSamples(object = New_DFM, new.data = F2, add.cell.id = "F2")
+New_DFM <- AddSamples(object = New_DFM, new.data = F3, add.cell.id = "F3")
+New_DFM <- AddSamples(object = New_DFM, new.data = D1, add.cell.id = "D1")
+New_DFM <- AddSamples(object = New_DFM, new.data = D2, add.cell.id = "D2")
+New_DFM <- AddSamples(object = New_DFM, new.data = D3, add.cell.id = "D3")
+#Check the three replicates
+table(New_DFM@meta.data$orig.ident)
+head(New_DFM@meta.data$orig.ident)
+saveRDS(New_DFM, "CT26_10X_Raw_Seurat.rds")
+
+### Add back, not the same number of cells, can't add back
+DFM@meta.data$orig.ident <- New_DFM@meta.data$orig.ident
+table(DFM@meta.data$orig.ident)
+
+##Add the experiment replicate as metadata so I can plot it
+Experiment.info <- New_DFM@meta.data$orig.ident
+DFM<- AddMetaData(object=DFM, metadata = Experiment.info, col.name= "exp.info")
+#gathers the values for all MT rows
+mito.genes <- grep(pattern="^mt-", x= rownames(x=New_DFM@data), value=TRUE)
+percent.mito <- Matrix::colSums(New_DFM@raw.data[mito.genes,])/Matrix::colSums(New_DFM@raw.data)
+New_DFM<- AddMetaData(object=New_DFM, metadata = percent.mito, col.name= "percent.mito")
+
+#gathers the values for all Rp rows
+ribo.genes <- grep(pattern="^Rpl|^Rps", x= rownames(x=New_DFM@data), value=TRUE)
+percent.ribo <- Matrix::colSums(New_DFM@raw.data[ribo.genes,])/Matrix::colSums(New_DFM@raw.data)
+New_DFM<- AddMetaData(object=New_DFM, metadata = percent.ribo, col.name= "percent.ribo")
+```
+####################
+Assess sampling depth and low-abundance gene expression
+######################
+```{r fig.height=15, fig.width=10}
+
+VlnPlot(object=New_DFM, features.plot = c("Ccr4","Gata3","Cd4", "Rps10"),use.raw=TRUE, x.lab.rot = TRUE, nCol=2, group.by="orig.ident") 
+ggsave("10X_gene_UMI_sampling_CT26.jpg", plot= last_plot(), dpi=600, width=10, height=15, units="in")
+
+VlnPlot(object=New_DFM, features.plot=c("nGene"),y.log=TRUE, point.size.use= 0.1, group.by="orig.ident")
+VlnPlot(object=New_DFM, features.plot=c("nUMI"), point.size.use= 0.1, y.max = 20000, group.by="orig.ident")
+hist(New_DFM@meta.data$nUMI,reaks =seq(0,140000, by=1000), xlim=c(0,140000)) # b
+hist(New_DFM@meta.data$nGene, breaks =seq(0,80000, by=250), xlim=c(0,5000))
+
+GenePlot(New_DFM,"nUMI","nGene", cell.ids = NULL, use.raw= TRUE) #, col.use=c("red","orange","yellow","green","blue","purple","black"))
+GenePlot(New_DFM, "nUMI","Ccr4",  cell.ids = NULL, use.raw= TRUE, group.by="orig.ident") 
+GenePlot(New_DFM, "nUMI","Cd4",  cell.ids = NULL, use.raw= TRUE, group.by="orig.ident")
+GenePlot(New_DFM, "nUMI", "Gata3", cell.ids = NULL, use.raw= TRUE)
+GenePlot(New_DFM, "nUMI","Rps10",  cell.ids = NULL, use.raw= TRUE)
+
+GenePlot(DFM,"nUMI","nGene", cell.ids = NULL, use.raw= TRUE, group.by="orig.ident") #, col.use=c("red","orange","yellow","green","blue","purple","black"))
+GenePlot(DFM, "nUMI","Ccr4", group.by="orig.ident") 
+GenePlot(DFM, "nUMI","Cd4",  cell.ids = NULL, use.raw= TRUE, group.by="orig.ident")
+GenePlot(DFM, "nUMI", "Gata3", cell.ids = NULL, use.raw= TRUE)
+GenePlot(DFM, "nUMI","Rps10",  cell.ids = NULL, use.raw= TRUE)
+
+table(DFM@meta.data$orig.ident)
+subset <- SubsetData(DFM, orig.ident.use=c("M1","M2","M3","F1","F2","F3","D1"))
+SubsetDat
+```
+############
+Look at per group nUMI and nGenes
+```{r}
+umis <- as.data.frame(DFM@meta.data$nUMI)
+idents <- DFM@meta.data$orig.ident
+umis %<>% dplyr::rename(nUMI=`DFM@meta.data$nUMI`) %>% mutate(orig.ident=idents)
+head(umis)
+umis %>% group_by(orig.ident) %>% summarize(ave_umi=median(nUMI), max_umi=max(nUMI))
+genes <-  as.data.frame(New_DFM@meta.data$nGene) # this is the raw unimpouted data
+ori.ident <- New_DFM@meta.data$orig.ident
+genes %<>% dplyr::rename(nGene=`New_DFM@meta.data$nGene`) %>% mutate(orig.ident=ori.ident)
+head(genes)
+genes %>% group_by(orig.ident) %>% summarize(ave_gene=median(nGene), max_gene=max(nGene))
+```
+
+
+####################
+Experiment Replicates
+######################
+```{r fig.height=10, fig.width=15}
+
+DimPlot(object =DFM, group.by="orig.ident", do.label = TRUE, reduction.use = 'umap', pt.size = 2, label.size = 6) 
+DimPlot(object = DFM, cols.use = c("grey90","grey90","grey90","grey90","grey90","grey90","grey90","grey90","red"), group.by="orig.ident", reduction.use = 'umap', pt.size = 1, label.size = 6) 
+ggsave("CT26_D3.jpg", width= 8, height=6, dpi=600, plot=last_plot(), units = "in")
+table(DFM@meta.data$orig.ident)
+
+New_DFM<- FilterCells(object=New_DFM, subset.names=c("nUMI"), low.thresholds =c(0), high.thresholds=c(50000))
+
+#Plots on the Imputed data
+VlnPlot(object=DFM, group.by="orig.ident", features.plot=c("nGene", "nUMI", "percent.mito"),  point.size.use = 0.1) 
+ggsave("CT26_10X_nGene_nUMI_Mito.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+#Plots on the raw data
+VlnPlot(object=New_DFM, group.by="orig.ident", features.plot=c("nGene", "nUMI", "percent.mito","percent.ribo"),nCol=2,point.size.use = 0.1) + 
+ggsave("CT26_10X_replicate_Vln_plot.jpg", width= 15, height= 10, dpi=600, plot= last_plot(), units = "in")
+```
+
+
+Merge M Replicates together, with labels
+AddSamples adds raw matrix data onto existing Seurat object. The alternative is to MergeSeurat, but it only works for 2 samples
+"project"" saves in M@meta.data$orig.ident 
+```{r}
+M <- CreateSeuratObject(M1,normalization.method = NULL, do.scale = FALSE, do.center = FALSE,
+  names.field = 1,display.progress = TRUE, project="M1")
+M <- AddSamples(object = M, new.data = M2, add.cell.id = "M2")
+M <- AddSamples(object = M, new.data = M3, add.cell.id = "M3")
+#Check the three replicates
+table(M@meta.data$orig.ident)
+```
+
+Merge F Replicates together
+```{r}
+F <- CreateSeuratObject(F1,normalization.method = NULL, do.scale = FALSE, do.center = FALSE,
+  names.field = 1,display.progress = TRUE, project="F1")
+F <- AddSamples(object = F, new.data = F2, add.cell.id = "F2")
+F <- AddSamples(object = F, new.data = F3, add.cell.id = "F3")
+#Check the three replicates
+table(F@meta.data$orig.ident)
+```
+
+Merge D Replicates together
+```{r}
+D <- CreateSeuratObject(D1, normalization.method = NULL, do.scale = FALSE, do.center = FALSE,
+  names.field = 1,display.progress = TRUE, project="D1")
+D <- AddSamples(object = D, new.data = D2, add.cell.id = "D2")
+D <- AddSamples(object = D, new.data = D3e, add.cell.id = "D3")
+#Check the three replicates
+table(D@meta.data$orig.ident)
+```
+
+Merge All three methods together
+```{r}
+DF <- MergeSeurat(object1 = D, object2 = F)
+DFM <- MergeSeurat(object1 = DF, object2 = M)
+table(DFM@meta.data$orig.ident)
+```
+
+Impute
+$estimate contains the imputed values
+Save imputed object to rds
+BRCA.impute$estimate contains the data
+```{r}
+DFM_raw <- DFM@raw.data
+imputed <- saver(DFM_raw,ncores=10) #35 minute run
+saveRDS(imputed, file="CT26_10X_all_imputed.rds")
+imputed <- readRDS("CT26_10X_all_imputed.rds")
+
+```
+
+
+Put the imputed data back into the raw.data slot of DFM
+```{r}
+DFM2 <- CreateSeuratObject(imputed$estimate, normalization.method = NULL, do.scale = FALSE, do.center = FALSE,
+  names.field = 1,display.progress = TRUE)
+#DFM@raw.data <- imputed$estimate
+```
+
+Mitochondrial genes: 
+Calculate the percent of mitochondrial genes expressed in each cell, as an indicator of apoptosis
+It looks like > 0.1 percent.mito should be filtered out
+```{r fig.height=6, fig.width=16}
+#gathers the values for all MT rows
+mito.genes <- grep(pattern="^mt-", x= rownames(x=DFM@data), value=TRUE)
+percent.mito <- Matrix::colSums(DFM@raw.data[mito.genes,])/Matrix::colSums(DFM@raw.data)
+#add this information into pbmc_mitounder metadata
+DFM<- AddMetaData(object=DFM, metadata = percent.mito, col.name= "percent.mito")
+
+VlnPlot(object=DFM, features.plot=c("nGene", "nUMI", "percent.mito"), nCol=3,  point.size.use = 0.1, group.by="orig.ident") 
+
+ggsave("CT26_10X_nGene_nUMI_Mito.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+GenePlot(object =DFM, gene1 = "nUMI", gene2 = "nGene") +
+ggsave("CT26_10X_nGene_vs_nUMI.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+GenePlot(object =DFM, gene1 = "percent.mito", gene2 = "nUMI")
+
+DFM<- FilterCells(object=DFM, subset.names=c("nGene","nUMI"), low.thresholds =c(200,500), high.thresholds=c(Inf,50000))
+```
+
+Normalize data
+LogNormalize: normalize each cell by total expression, multiply by scale factor 10000, and log2 transform
+```{r}
+DFM <- NormalizeData(object=DFM, normalization.method="LogNormalize", scale.factor=10000)
+```
+This step identifies variable genes for downstream analysis
+Cutoff for high average expression, which should exclude the RPL genes, which are not very informative)
+```{r fig.height=15, fig.width=20}
+DFM <- FindVariableGenes(DFM, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0, x.high.cutoff = 6, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+```
+Gene to regress out:
+mt-
+Rpl*
+Rps*
+
+```{r fig.height=6, fig.width=16}
+#gathers the values for all Rp rows
+ribo.genes <- grep(pattern="^Rpl|^Rps", x= rownames(x=DFM@data), value=TRUE)
+ #calculate percent of genes that are MITO for each cell. Summing total expression for each cell, sumMITO/sumALL
+percent.ribo <- Matrix::colSums(DFM@raw.data[ribo.genes,])/Matrix::colSums(DFM@raw.data)
+#add this information into pbmc_mitounder metadata
+DFM<- AddMetaData(object=DFM, metadata = percent.ribo, col.name= "percent.ribo")
+
+VlnPlot(object=DFM, features.plot=c("nGene", "nUMI", "percent.mito","percent.ribo"), nCol=4,  point.size.use = 0.1, x.lab.rot = TRUE)
+
+```
+
+ScaleData and Regress out RPs and Mito genes
+```{r}
+DFM <- ScaleData(object=DFM, vars.to.regress=c("percent.ribo","percent.mito"), display.progress = TRUE, assay.type = "RNA", check.for.norm = TRUE)
+```
+
+
+```{r}
+length(x=DFM@var.genes)
+```
+
+PCA
+```{r}
+DFM<- RunPCA(object = DFM, pc.genes = DFM@var.genes, pcs.compute = 30, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5)
+
+PrintPCA(object = DFM, pcs.print = 1, genes.print = 30, use.full = FALSE)
+```
+
+Determine statistically significant components
+A resampling test inspired by the JackStraw procedure. Randomly permutate a subset of data (1% default) and rerun PCA, looking for PCs that are enriched for genes that change PC grouping when changed. 
+This step takes a long time
+```{r fig.height=20, fig.width=20}
+#this process can take a long time
+DFM<- JackStraw(object = DFM, num.replicate = 100, display.progress = FALSE, num.pc = 20)
+JackStrawPlot(object = DFM, PCs = 1:20) 
+ggsave("JackstrawPlot of PCs.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+```
+
+The PCE elbow plot is a more ad hoc way of determining a cut-off. 
+Here it looks like the cutoff is around 15, but from the JackStraw and heatmaps, all PCs are significant. PCs beyond 15 probably have minimal impact on clustering. Use 20 clusters. 
+```{r}
+PCElbowPlot(object = DFM)
+#Elbow looks like it's at PC 14
+```
+Examine PCA results visually
+```{r fig.height=20, fig.width=20}
+PCHeatmap(object=DFM, pc.use=1:20, cells.use = 1000, do.balanced= TRUE, label.columns= FALSE)
+# All clusters look pretty distinctive
+```
+#############################
+#############################
+
+          CLUSTERING
+
+#############################
+#############################
+
+Cluster cells into groups. Using graph-cased clustering. The method embeds cells in a graph structure, like a K-nearest neighbour graph, and then refines the edges. The cells are grouped iteratively. 
+```{r}
+DFM <- FindClusters(DFM,reduction.type = "pca",
+  dims.use = 1:20, k.param = 6, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = TRUE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 0.4, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+
+PrintFindClustersParams(object=DFM)
+```
+
+############
+Heatmaps of PCs
+############
+```{r}
+DoHeatmap(object = SubsetData(object = DFM, max.cells.per.ident = 100), genes.use = features.plot, 
+    slim.col.label = TRUE, group.label.rot = TRUE)
+```
+
+###################
+Run t-SNE to cluster cells for visualization
+#####################
+```{r}
+DFM <- RunTSNE(object = DFM, reduction.use = "pca", cells.use = NULL, dims.use = 1:20,
+  genes.use = NULL, seed.use = 1, tsne.method = "Rtsne", add.iter = 0,
+  dim.embed = 2, distance.matrix = NULL, reduction.name = "tsne",
+  reduction.key = "tSNE_", perplexity = 50)
+
+```
+
+##################
+Run UMAP for visualization as comparison
+###################
+Seurat has a UMAP function, install the python version of umap on the local machine first, Seurat will call the python code from R
+In Terminal> sudo pip install umap-learn, then restart the R session
+n_neighbors = 30L   determines preservation of global structures (larger numbers). Typical range 5-50.
+```{r}
+DFM<- RunUMAP(DFM, cells.use = NULL, dims.use = 1:20, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 5L,
+  min_dist = 0.7, metric = "correlation", seed.use = 42)
+```
+
+
+Graph Clustering Results
+Plot tSNE and UMAP graphs
+
+```{r fig.height=6, fig.width=8}
+TSNEPlot(object = DFM, do.label = TRUE, pt.size = 1, label.size = 4, do.identify= TRUE) 
+
+DimPlot(object = DFM, do.label = TRUE, reduction.use = 'umap', pt.size = 1, label.size = 6, do.identify= TRUE) 
+
+D3_cells <- DimPlot(object = DFM, do.label = TRUE, reduction.use = 'umap', pt.size = 1, label.size = 6, do.identify= TRUE) 
+ggsave("UMAP_CT26_10X.jpg", width=8, height=6, dpi=600, plot= last_plot(), units="in")
+
+table(DFM@ident)
+
+```
+
+#################################################
+#################################################
+
+    CALCULATE AVERAGE EXPRESSION PER CLUSTER
+
+#################################################
+#################################################
+
+```{r}
+cluster.averages <- AverageExpression(object = DFM, return.seurat = TRUE)
+```
+
+
+Examine PCs to find the major clusters
+```{r}
+DoHeatmap(object = cluster.averages, genes.use = PCTopGenes(object = DFM, pc.use = 5, do.balanced = TRUE, num.genes= 40), group.label.rot = TRUE, group.cex = 0)
+ggsave("Heatmap_PC20_Trm.jpg", width= 9, height=7, dpi=600, plot= hi, units = "in")
+```
+PC1 UP: MHCII class Antigen presentation, which is B cell
+PC1 Very UP: Same
+PC2: LCK, ZAP70, GZMB. CD2 T cell
+PC2: DOWN IL4RA/CD124
+```{r}
+ PrintPCA(object=DFM, pcs.print=1, genes.print = 50, use.full = FALSE)
+```
+```{r fig.height=8, fig.width=15}
+#T&NK cells
+FeaturePlot(object=DFM, features.plot = c("Cd3d","Cd8a","Cd4","Gzma","Prf1","Nkg7","Foxp3","Mki67"), nCol=4, cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") +
+ggsave("CT26_T_NK_Features.jpg", width= 16, height=8, dpi=600, plot=last_plot(), units = "in")
+#,"Gzmb","Cd28"
+#Potential CT26 antigens
+FeaturePlot(object=DFM, features.plot = c("Map2k1","Kras","Vegfa","Top2a","Sox2","Atad2","Ptprc","Xist","Col1a2"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") +
+ggsave("CT26_CT26_Features.jpg", width= 15, height=10, dpi=600, plot=last_plot(), units = "in")
+
+FeaturePlot(object=DFM, cells.plot = c("F1","F2"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") 
+
+FeaturePlot(object=DFM, features.plot = c("Gzma","Atad2"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap")
+
+
+VlnPlot(object=DFM, features.plot=c("Gzma","Ptprc"),point.size.use = 0.1, x.lab.rot = TRUE)
+# Myeloid cells
+FeaturePlot(object=DFM, features.plot = c("Cd14","Lyz2","Ccl7","Ido1","Eif2ak4","H2-Eb1","Ly6c1","Itgam"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") +
+ggsave("CT26_Myeloid_Features.jpg", width= 15, height=10, dpi=600, plot=last_plot(), units = "in")
+#CD45
+FeaturePlot(object=DFM, features.plot = c("Ptprc"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap")
+#CD8 T cells
+FeaturePlot(object=DFM, features.plot = c("Cd8a","Pdcd1","Mki67","Gzmb"), cols.use=c("grey","blue"), no.legend=FALSE, reduction.use = "umap")
+Overlay
+FeaturePlot(object=DFM, features.plot = c("Cd8a","Pdcd1"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap") +
+ggsave("CT26_CD8_Pd1.jpg", width= 15, height=10, dpi=600, plot=last_plot(), units = "in")
+
+MDSC
+gMDSCs
+FeaturePlot(object=DFM, features.plot = c("Itgam","Ly6c1"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE) 
+ggsave("CT26_mMDSC.jpg", width= 8, height=5, dpi=600, plot=last_plot(), units = "in")
+
+FeaturePlot(object=DFM, features.plot = c("Itgam","Ly6g","Ly6c1"), cols.use=c("grey90","blue"),no.legend=FALSE, reduction.use = "umap")
+#CT26 markers
+#Fibroblast markers Thy1 is CD90, fibroblast marker, Collagen is connective tissue in general
+#Sox2 is a stem cell marker, CT26 are undifferentiated 
+FeaturePlot(object=DFM, features.plot = c("Col1a2","Xist","Sox2","Ptprc"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") +
+ggsave("CT26_actual_CT26cells.jpg", width= 12, height=8, dpi=600, plot=last_plot(), units = "in")
+```
+##############
+Save Seurat Object
+################
+```{r}
+saveRDS(DFM,file="C26_10X_Seurat_2.rds")
+DFM <- readRDS("C26_10X_Seurat_2.rds")
+```
+
+#################################################
+#################################################
+
+               DIFFERENTIAL ANALYSIS
+
+#################################################
+#################################################
+Cluster Biomarkers: Find differentially expressed genes
+Seurat can perform differential expression analysis. It compares each group against all other groups, or only certain groups to each other
+First, identify cell types by running group against all
+```{r}
+all.markers <- FindAllMarkers(object=DFM, min.pct=0.5, logfc.threshold = 0.5)
+#min.pct is the minimum proportion of cells expression the marker in either group. 
+all.markers %>% arrange(desc(avg_logFC)) %>% group_by(cluster)  %>% top_n(100, avg_logFC) %>% dfilter(cluster==8)
+
+```
+Export list to file
+```{r}
+all.markers %>% dfilter(cluster==8) %>% arrange(desc(avg_logFC))
+cluster <- all.markers %>% dfilter(cluster==15) %>% arrange(desc(avg_logFC)) %>% dselect(gene) 
+write.table(cluster, file= "cluster15_CT26.txt", row.names= FALSE, quote= FALSE)
+```
+
+################
+Cluster 6 and 7 are non CD45+, fibrablast cells, determine which one is Balb-C and which is CT26
+#################
+```{r}
+Tcells_6vs7 <- FindMarkers(object=DFM, ident.1=6, ident.2 =c(7), min.pct=0.5, logfc.threshold = 0.3)
+Tcells_6vs7 %>% mutate(gene=rownames(Tcells_6vs7)) %>% arrange(avg_logFC)
+Cluster6vs7 <- Tcells_6vs7 %>% mutate(gene=rownames(Tcells_6vs7)) %>% arrange(avg_logFC)
+write.table(Cluster6vs7, file= "cluster6vs7_CT26.txt", row.names= FALSE, quote= FALSE)
+
+#NK cells
+Tcells_1vs11 <- FindMarkers(object=DFM, ident.1=1, ident.2 =11, min.pct=0.5, logfc.threshold = 0.3)
+Tcells_1vs11 %>% mutate(gene=rownames(Tcells_1vs11)) %>% arrange(desc(avg_logFC))
+
+VlnPlot(object=DFM, features.plot=c("Ptprc","Xist"),point.size.use = 0.1, x.lab.rot = TRUE)
+```
+
+##############
+Differential Analysis of the D3 group cells
+Clusters: 4, 5, 9, 12
+###############
+```{r}
+cells_D3vsAll <- FindMarkers(object=DFM, ident.1=c(4,5,12,9), ident.2 =c(0:3,7:8,10:11,13:19), min.pct=0.5, logfc.threshold = 0.3)
+out <- cells_D3vsAll %>% mutate(gene=rownames(cells_D3vsAll)) %>% arrange(desc(avg_logFC))
+write.table(out, file= "cells_D3vsAll.txt", row.names= FALSE, quote= FALSE)
+
+cells_9vsD3 <- FindMarkers(object=DFM, ident.1=9, ident.2 =c(4,5,12), min.pct=0.5, logfc.threshold = 0.3)
+out <- cells_9vsD3 %>% mutate(gene=rownames(cells_9vsD3)) %>% arrange(desc(avg_logFC))
+write.table(out, file= "cells_9vsD3.txt", row.names= FALSE, quote= FALSE)
+
+
+cells_9vsD3 <- FindMarkers(object=DFM, ident.1=c("D1"), ident.2 =c("F1","F2","F3"), min.pct=0.5, logfc.threshold = 0.3)
+```
+
+##################
+Heatmap of PCs to detemine what sets the D3 clusters apart
+##################
+
+```{r}
+cluster.averages <- AverageExpression(object = DFM, return.seurat = TRUE)
+DoHeatmap(object = cluster.averages, genes.use = PCTopGenes(object = DFM, pc.use = 1, do.balanced = TRUE), group.label.rot = TRUE, group.cex = 0) +
+ggsave("Heatmap_PC1_D3vsAll.jpg", width= 9, height=7, dpi=600, plot= last_plot(), units = "in")
+```
+
+################
+Label Clusters
+#################
+```{r}
+DFM@ident <- plyr::mapvalues(x = DFM@ident, from = current.cluster.ids, to = new.cluster.ids)
+levels(DFM@ident)
+current.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+
+new.cluster.ids <- c("0. Monocyte", "1. NK cell","2. Macrophage", "3. T cell","4. stress","5. stress","6. Balb-C fibroblast","7. CT26","8. DC", "5. stress", "10. Apoptotic", "11. NK cells", "12. stress", "13. DC", "14. DC", "15. Macrophage", "16. DC", "17. Th1", "18. DC", "19. B cells")
+
+current.cluster.ids <- c("0. Naive CD8 T","1. Active CD4 T", "2. Active Monocyte", "3. Naive CD4 T", "4. B cell precursor","5. Monocyte","6. Naive CD4 T","7. T EM","8. B cells","9. NK cell","10. NKT cell","11. Immature Monocyte","12. FCGR3A+ DC4", "13. DC2", "14. T effector", "15. T & DC high Mito","16. T RM","17. CD3+ B","18. DC1","19. Megakaryocyte","20. NK precursor" )
+current.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+
+DFM2@ident <- DFM@ident
+```
+
+#############
+HPK1
+############
+```{r fig.height=6, fig.width=6}
+
+
+
+# Can I create a Seurat object of just the NK cells and B cells?
+broad.subset <- SubsetData(object = DFM, ident.remove = c("4. stress" ,"5. stress", "12. stress","10. Apoptotic","6. Balb-C fibroblast"))
+levels(broad.subset@ident)
+current.broad.cluster.ids <- c("0. Monocyte", 
+                               "1. NK cell",
+                               "2. Macrophage",
+                               "3. T cell",
+                               "7. CT26",
+                               "8. DC",
+                               "11. NK cells",
+                               "13. DC",
+                               "14. DC",
+                               "15. Macrophage",
+                               "16. DC",
+                               "17. Th1",
+                               "18. DC",
+                               "19. B cells")
+new.broad.cluster.ids <- c("Monocyte",
+                           "NK cell",
+                           "Macrophage",
+                           "T cell",
+                           "CT26",
+                           "DC",
+                           "NK cell",
+                           "DC",
+                           "DC",
+                           "Macrophage",
+                           "DC",
+                           "Th1",
+                           "DC",
+                           "B cells")
+broad.subset@ident <- plyr::mapvalues(x = broad.subset@ident, from = current.broad.cluster.ids, to = new.broad.cluster.ids)
+
+broad.subset@ident <-factor(broad.subset@ident, levels=c("DC","T cell","Th1","B cells","NK cell","Monocyte","Macrophage","CT26"))
+VlnPlot(object=broad.subset, features.plot = c("Map4k1"), x.lab.rot = TRUE)
+ggsave("ViolinPlot_HPK1_broad_ordered.jpg", width= 10, height=7, dpi=600, plot= last_plot(), units = "in")
+
+current.broad.cluster.ids <- c("0. Monocyte", "1. NK cell","2. Macrophage","3. T cell","7. CT26","8. DC","11. NK cells", "13. DC", "14. DC", "15. Macrophage", "16. DC", "17. Th1", "18. DC", "19. B cells")
+new.broad.cluster.ids <- c("Monocyte", "NK cell","Macrophage", "T cell","CT26","DC","NK cell","DC", "DC", "Macrophage", "DC", "Th1", "DC", "B cells")
+
+VlnPlot(object=DFM2, features.plot = c("Map4k1"), x.lab.rot = TRUE)
+```
+
+####################
+####################
+Subset T cells into smaller groups
+####################
+####################
+
+
+```{r}
+# Can I create a Seurat object of just the NK cells and B cells?
+levels(DFM@ident)
+T.subset <- SubsetData(object = DFM, ident.use = c("3. T cell","17. Th1"))
+```
+
+This step identifies variable genes for downstream analysis
+Cutoff for high average expression, which should exclude the RPL genes, which are not very informative)
+```{r fig.height=15, fig.width=20}
+T.subset <- FindVariableGenes(T.subset, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0, x.high.cutoff = 3, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+length(T.subset@var.genes) #1612
+```
+
+PCA
+```{r}
+T.subset <- RunPCA(object = T.subset, pc.genes = T.subset@var.genes, pcs.compute = 20, do.print = TRUE, pcs.print = 1:20, 
+    genes.print = 10)
+
+PrintPCA(object = T.subset, pcs.print = 1:20, genes.print = 10, use.full = FALSE)
+```
+
+Determine statistically significant components
+A resampling test inspired by the JackStraw procedure. Randomly permutate a subset of data (1% default) and rerun PCA, looking for PCs that are enriched for genes that change PC grouping when changed. 
+This step takes a long time
+( PCs look sig)
+```{r fig.height=20, fig.width=20}
+#this process can take a long time
+T.subset <- JackStraw(object = T.subset, num.replicate = 100, display.progress = FALSE, num.pc = 20)
+JackStrawPlot(object = T.subset, PCs = 1:20) 
+ggsave("JackstrawPlot of T cell subset.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+```
+
+The PCE elbow plot is a more ad hoc way of determining a cut-off. 
+First 11 PCs look good, in agreement with JackStraw plot
+```{r}
+PCElbowPlot(object = T.subset)
+#Elbow looks like it's at PC 14
+```
+
+Cluster cells into groups. Using graph-cased clustering. The method embeds cells in a graph structure, like a K-nearest neighbour graph, and then refines the edges. The cells are grouped iteratively. 
+```{r}
+T.subset <- FindClusters(T.subset,reduction.type = "pca",
+  dims.use = 1:20, k.param = 6, plot.SNN = TRUE, prune.SNN = 1/15,
+  print.output = FALSE, distance.matrix = NULL, save.SNN = TRUE,
+  reuse.SNN = FALSE, force.recalc = TRUE, nn.eps = 0,
+  modularity.fxn = 1, resolution = 0.3, algorithm = 1, n.start = 100,
+  n.iter = 10, random.seed = 0, temp.file.location = NULL,
+  edge.file.name = NULL)
+
+PrintFindClustersParams(object=T.subset)
+```
+
+
+##################
+Run UMAP for visualization as comparison
+###################
+Seurat has a UMAP function, install the python version of umap on the local machine first, Seurat will call the python code from R
+In Terminal> sudo pip install umap-learn, then restart the R session
+n_neighbors = 30L   determines preservation of global structures (larger numbers). Typical range 5-50.
+```{r}
+T.subset <- RunUMAP(T.subset,dims.use = 1:20, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 5L,
+  min_dist = 0.7, metric = "correlation", seed.use = 42)
+```
+
+###################
+Run t-SNE to cluster cells for visualization
+#####################
+```{r}
+T.subset<- RunTSNE(object = T.subset, reduction.use = "pca", cells.use = NULL, dims.use = 1:9,
+  genes.use = NULL, seed.use = 1, tsne.method = "Rtsne", add.iter = 0,
+  dim.embed = 2, distance.matrix = NULL, reduction.name = "tsne",
+  reduction.key = "tSNE_", perplexity = 50)
+
+```
+
+Graph Clustering Results
+Plot tSNE and UMAP graphs
+
+```{r fig.height=12, fig.width=20}
+DimPlot(object = T.subset, do.label = TRUE, reduction.use = 'umap', pt.size = 2, label.size = 6) 
+ggsave("UMAP_CT26_Tcells.jpg", width=8, height=6, dpi=600, plot= last_plot(), units="in")
+
+FeaturePlot(object=T.subset, features.plot = c("Cd3d","Cd8a","Cd4","Gzmk","Prf1","Nkg7","Foxp3","Mki67", "Cd28","Cd38","Ccr5","Ccr3","Ccr4","Ccr6","Cxcr3"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") 
+ggsave("Tcells_featureplot11.jpg", width= 12, height=8, dpi=600, plot=last_plot(), units = "in")
+
+FeaturePlot(object=T.subset, features.plot = c("Cd3d","Cd8a","Cd4","Gzmk","Prf1","Foxp3","Mki67", "Cd28","Cd38","Ccr5","Ccr3","Ccr4","Cxcl13","Cxcr3","Tbx21","Ptgdr2","Gata3"), cols.use=c("grey90","blue"), no.legend=FALSE, reduction.use = "umap") 
+ggsave("Tcells_featureplot.jpg", width= 12, height=8, dpi=600, plot=last_plot(), units = "in")
+
+table(T.subset@ident)
+
+```
+```{r fig.height=10, fig.width=10}
+DoHeatmap(object = T.subset, genes.use = PCTopGenes(object = T.subset, pc.use = 3, 
+    do.balanced = TRUE), group.label.rot = TRUE, group.cex = 0) #, group.by=T.subset@ident
+```
+Overlay
+```{r}
+Th1
+FeaturePlot(object=T.subset, features.plot = c("Cxcr3","Ccr5"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE) FeaturePlot(object=T.subset, features.plot = c("Tbx21","Cxcr3","Ccr5"), cols.use=c("grey90","blue"),no.legend=FALSE, reduction.use = "umap")
+Th17 none
+FeaturePlot(object=T.subset, features.plot = c("Ccr6","Ccr4"), cols.use=c("grey","red","blue","green"), overlay= TRUE,no.legend=FALSE, reduction.use = "umap", do.hover= TRUE)
+ggsave("CT26_mMDSC.jpg", width= 8, height=5, dpi=600, plot=last_plot(), units = "in")
+```
+
+Differential Analysis
+```{r}
+DA <- FindAllMarkers(T.subset)
+DA %>% dfilter(cluster==2) %>% arrange(-avg_logFC)
+c2 <- DA %>% dfilter(cluster==2) %>% arrange(-avg_logFC) %>% dselect(gene)
+c2
+```
+

@@ -1,0 +1,176 @@
+---
+title: "ESTIMATE_TIMER_TOILisoforms"
+author: "Mengshu"
+date: "10/3/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(magrittr) # %<>%
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+
+```{r}
+load("HPK1_immune.rdata")
+View(HPK1_immune)
+HPK1_immune %>% .$Type %>% table
+HPK1_immune %>% dfilter(is.na(Code)) # Check that all entries have a Code assigned to it. Fixed on Oct 9 2018
+#Lookup patient in cBioportal: http://www.cbioportal.org/patient?studyId=ucec_tcga&caseId=TCGA-BG-A0M9
+```
+
+## Graphing
+
+```{r fig.height=5, fig.width=14}
+library(ggplot2)
+
+HPK1_immune$Code <- factor(HPK1_immune$Code, levels=sort(unique(HPK1_immune$Code)))
+HPK1_immune <- within(HPK1_immune <- factor(HPK1_001, levels=sort(HPK1_001, decreasing=TRUE)))
+#sort(unique(Immune_HPK1$Code))
+levels=c("AML","ACC","BLCA","BRCA","CESC","COAD","ESCA","GBM","HNSC","KICH","KIRC","KIRP","LGG" ,"LIHC","LUAD","LUSC","OV","PAAD", "PCPG","PRAD","SKCM","STAD","THCA","UCEC", "UCS" ) #UCEC does not have toil data
+?reorder()
+#reorder(Code, HPK1_immune %>% group_by(Code) %>% dselect(HPK1_001), median(na.rm=TRUE)), log2(HPK1_001)
+HPK1_immune %>% group_by(Code) %>% summarize(median1=median(HPK1_001,na.rm=TRUE))
+ggplot(HPK1_immune, aes(Code, log2(HPK1_003), fill= Code)) + # %>% dfilter(HPK1_001 >= 0.01)
+  geom_violin(outlier.shape = NA, show.legend=FALSE, colour="grey51") + #outlier.shape = NA
+  geom_jitter(height=0, width=0.15, size=1, alpha=0.4, colour="grey31", show.legend=FALSE) +
+  theme(axis.text.x = element_text(angle=90, size=14), 
+        axis.text.y=element_text(size=14),
+        axis.title = element_text(size=14)) +
+        ylab("HPK1-003 isoform log2(Count)") +
+ggsave("HPK1-003_TCGA.jpg",width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+ggplot(HPK1_immune, aes(Code, log2(HPK1_006), fill= Code, show.legend=FALSE)) + #%>% dfilter(HPK1_006 >= 0.01)
+  geom_violin(outlier.shape = NA, show.legend=FALSE, colour="grey51") + #outlier.shape = NA
+  geom_jitter(height=0, width=0.15, size=1, alpha=0.4, colour="grey31", show.legend=FALSE) +
+  theme(axis.text.x = element_text(angle=90, size=14), 
+        axis.text.y=element_text(size=14),
+        axis.title = element_text(size=14)) +
+        ylab("HPK1-006 isoform log2(Count)") 
+ggsave("HPK1-006_TCGA.jpg",width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+#### To plot two series side by side, must first melt data into one single column with factors
+library(reshape2)
+isoforms <- melt(HPK1_immune, id.vars=c("Patient","Code"), measure.vars=c("HPK1_001","HPK1_003","HPK1_006"))
+isoforms$variable <- factor(isoforms$variable, levels=c("HPK1_001","HPK1_003","HPK1_006"))
+
+ggplot(isoforms, aes(Code, y=log2(value), colour=variable, show.legend=TRUE)) + # %>% dfilter(value > 0.01)
+  scale_colour_brewer(palette="Set1") + #scale_fill_brewer is an alternative, but here the colour comes from outlines, not fills
+  geom_violin(position=position_dodge(width =0.8)) + #aes(x=Code, y=log2(value), color=variable, alpha= 0.5, show.legend=TRUE),
+  geom_point(size=0.5, alpha=0.4, position=position_jitterdodge(dodge.width=0.8)) +
+  theme(axis.text.x = element_text(angle=90, size=14), 
+        axis.text.y=element_text(size=14),
+        axis.title = element_text(size=14)) +
+        ylab("HPK1 isoforms log2(TPM)") +
+  ylim(-10,10) +
+  
+ggsave("HPK1 isoforms TCGA.jpg", width= 14, height= 5, dpi=500, plot= last_plot(), units = "in")
+
+##There is no TOIL data for UCEC, only for very few samples. 
+```
+
+#There a lot of samples without a Code for the cancer type, because they were not present in the ESTIMATE dataset, 
+
+```{r}
+HPK1_immune %>% dfilter(!is.na(HPK1_FPKM), !is.na(Immune_score)) %>% .$Code %>% table
+###
+HPK1_immune %>% dfilter(is.na(Code)) %>% dselect("Patient", "Type") %>% .$Type %>% table
+write.csv(HPK1_immune %>% dselect("Patient"), file="Patients_Code.txt", row.names= FALSE, quote= FALSE)
+# Cancer codes were downloaded from the GDC Data portal by imputting the Patient ID list. Add in the missing data in the ESTIMATE.Rmd script, upstream. 
+```
+
+
+## Graph median HPK1-full to HPK1-006 expression, per cancer type
+
+```{r}
+
+ggplot(HPK1_immune %>% group_by(Code) %>% dfilter(Code!="LAML") %>% summarize(median001=median(HPK1_001,na.rm=TRUE),median003=median(HPK1_003,na.rm=TRUE),medianFull=median(HPK1_full,na.rm=TRUE),median006=median(HPK1_006,na.rm=TRUE),medianMAP4K1=median(MAP4K1_TPM_toil,na.rm=TRUE),medianImmune=median(Immune_score,na.rm=TRUE)), aes(log2(medianFull),medianImmune, fill= Code, label = Code)) +
+  geom_point(show.legend=FALSE) +
+  theme(axis.text.x = element_text(angle=90, size=14), 
+        axis.text.y=element_text(size=14),
+        axis.title = element_text(size=14)) +
+  ylab("Median Immune Infiltrate score") +
+  xlab("HPK1 full length median log2(TPM)") +
+  geom_label(size= 2, show.legend=FALSE) +
+  
+ggsave("HPK1 vs Immune score per cancer.jpg", width=20, height=15,dpi=500, plot= last_plot(), units = "cm")
+
+ggplot(HPK1_immune %>% dfilter(Code!="LAML") %>% group_by(Code) %>% summarize(medianFull=median(HPK1_full,na.rm=TRUE),medianImmune=median(Immune_score,na.rm=TRUE)), aes(log2(medianFull),medianImmune, fill= Code, label = Code)) +
+  geom_point(show.legend=TRUE, alpha=0) +
+  theme(axis.text.x = element_text(angle=90, size=14), 
+        axis.text.y=element_text(size=14),
+        axis.title = element_text(size=14)) +
+  ylab("Median Immune Infiltrate score") +
+  xlab("HPK1 full length median log2(TPM)") +
+  xlim(-1,2) +
+  ylim(-1200,1200) +
+  geom_label(size= 3, alpha=0.8, show.legend=TRUE) +
+ggsave("HPK1 vs Immune score per cancer.jpg", width=20, height=15,dpi=500, plot= last_plot(), units = "cm")
+
+ggplot(HPK1_immune %>% dfilter(Code!="LAML") %>% group_by(Code) %>% summarize(medianHPK1=median(HPK1_FPKM,na.rm=TRUE), medianImmune=median(Immune_score,na.rm=TRUE)),aes(log2(medianHPK1),medianImmune, fill= Code, label = Code)) +
+  geom_point(show.legend=TRUE, alpha=0) +
+  theme(axis.text.x = element_text(angle=90, size=14), 
+        axis.text.y=element_text(size=14),
+        axis.title = element_text(size=14)) +
+  ylab("Median Immune Infiltrate score") +
+  xlab("HPK1 full length median log2(TPM)") +
+  xlim(-1,2) +
+  ylim(-1200,1200) +
+  geom_label(size= 3, alpha=0.8, show.legend=TRUE) +
+ggsave("HPK1 vs Immune score per cancer legend.jpg", width=20, height=15,dpi=500, plot= last_plot(), units = "cm")
+```
+
+### Plot HPK1-006 against Immunescore
+
+```{r}
+ggplot(HPK1_immune, aes(x=Immune_score, y=log2(HPK1_full), colour=Code, show.legend = FALSE)) +
+  geom_point(height=0, width=0.1, size=1, alpha=0.4, show.legend = FALSE) + 
+  geom_abline(intercept = 0, slope = 0.0015,linetype="dashed", show.legend = FALSE) +
+  #facet_wrap( ~ Code, ncol=6) +
+  xlab("Immune Score") +
+  ylab("HPK1 full length log2(Count)") +
+  #scale_y_log10(limits=c(1,10)) +
+  theme(axis.text.x=element_text(size=14, angle = 90), 
+        axis.text.y=element_text(size=14),
+        axis.title =element_text(size=14),
+        aspect.ratio = 1) +
+  ylim(-8,8) +
+
+ggsave("HPK1 full-length vs Immune score facet.jpg", height = 10, width = 10, dpi=500, plot= last_plot(), units = "in")
+
+ggplot(HPK1_immune, aes(x=Immune_score, y=log2(MAP4K1_TPM), colour=Code, show.legend = FALSE)) +
+  geom_point(height=0, width=0.1, size=1, alpha=0.4, show.legend = FALSE) + 
+  #geom_abline(intercept = 0, slope = 0.0015,linetype="dashed", show.legend = FALSE) +
+  #facet_wrap( ~ Code, ncol=6) +
+  xlab("Immune Score") +
+  ylab("HPK1-TPM log2(Count)") +
+  scale_y_log10(limits=c(1,10)) +
+  theme(axis.text.x=element_text(size=14, angle = 90), 
+        axis.text.y=element_text(size=14),
+        axis.title =element_text(size=14),
+        aspect.ratio = 1) +
+  ylim(-8,8) +
+
+ggsave("HPK1-TPM vs Immune_score.jpg", height = 15, width = 15, dpi=500, plot= last_plot(), units = "cm")
+```
+
+## Calculate Correlation statistics
+```{r}
+cor.test(HPK1_immune$Immune_score, log2(HPK1_immune$HPK1_006), method="pearson")
+cor.test(HPK1_immune$Immune_score, log2(HPK1_immune$HPK1_001), method="pearson")
+cor.test(HPK1_immune$Immune_score, log2(HPK1_immune$HPK1_003), method="pearson")
+cor.test(HPK1_immune$Immune_score, log2(HPK1_immune$HPK1_full), method="pearson")
+cor.test(HPK1_immune$Immune_score, log2(HPK1_immune$MAP4K1_TPM), method="pearson")
+
+cor.test((HPK1_immune$T_cell.CD4), log2(HPK1_immune$HPK1_006), method="pearson")
+cor.test((HPK1_immune$T_cell.CD8), log2(HPK1_immune$HPK1_006), method="pearson")
+cor.test((HPK1_immune$B_cell), log2(HPK1_immune$HPK1_006), method="pearson")
+cor.test((HPK1_immune$DC), log2(HPK1_immune$HPK1_006), method="pearson")
+cor.test((HPK1_immune$Neutrophil), log2(HPK1_immune$HPK1_006), method="pearson")
+```
+
+

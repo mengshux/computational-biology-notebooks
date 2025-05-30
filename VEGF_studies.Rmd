@@ -1,0 +1,388 @@
+---
+title: "VEGF_studies"
+author: "Mengshu"
+date: "8/22/2019"
+output: html_document
+---
+
+```{r}
+library(data.table) #%like% function
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+library(tidyr)
+#source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+source("D:/FLX/Files_from_Gene/R_functions.r")
+library(ggbeeswarm)
+library(rlang)
+library(broom)
+library(DESeq2)
+```
+
+Masiero Mouse xenograft human GBM tumor treated with Beva
+
+Load datasets, parse out data and meta data and save
+Human and mouse datasets have difference probes. Analyse them separately
+
+
+Final human data here
+```{r}
+load("human_all_data_n_unique.rdata")
+h_all_data_n_unique
+load("D:/FLX/GCN2/VEGF/Human_zscore.rdata")
+
+```
+
+
+
+```{r}
+human_chr <- read.table("GSE37956_series_matrix.txt", sep="\t", skip=58,nrows=(54735-58-2), header=TRUE)
+human_chr_meta  <- data.frame(rbind(Sample=colnames(human_chr)[2:ncol(human_chr)], Treatment=c(rep("ctrl",3),rep("beva",3))))
+save(human_chr,file="human_chronic.rdata")
+save(human_chr_meta,file="human_chronic_meta.rdata")
+mouse_chr <- read.table("GSE39221_series_matrix.txt", sep="\t", skip=57,nrows=(45160-57-2), header=TRUE)
+mouse_chr_meta  <- data.frame(rbind(Sample=colnames(mouse_chr)[2:ncol(mouse_chr)], Treatment=c(rep("ctrl",3),rep("beva",3))))
+save(mouse_chr,file="mouse_chronic.rdata")
+save(mouse_chr_meta,file="mouse_chronic_meta.rdata")
+human_act <- read.table("GSE39223_series_matrix.txt", sep="\t", skip=58,nrows=(54735-58-2), header=TRUE)
+human_act_meta  <- data.frame(rbind(Sample=colnames(human_act)[2:ncol(human_act)], Treatment=c(rep("ctrl",3),rep("dib",3),rep("beva",3))))
+save(human_act,file="human_acute.rdata")
+save(human_act_meta,file="human_acute_meta.rdata")
+mouse_act <- read.table("GSE39413_series_matrix.txt", sep="\t", skip=59,nrows=(45162-59-2), header=TRUE)
+mouse_act_meta  <- data.frame(rbind(Sample=colnames(mouse_act)[2:ncol(mouse_act)], Treatment=c(rep("ctrl",5),rep("dib",5),rep("beva",4))))
+save(mouse_act,file="mouse_acute.rdata")
+save(mouse_act_meta,file="mouse_acute_meta.rdata")
+
+h_all_data <- left_join(human_chr,human_act,by="ID_REF")
+h_all_meta <- do.call(cbind,c(human_act_meta,human_chr_meta))
+h_all_meta <- rbind(h_all_meta, batch= c(rep("human_act",9),rep("human_chr",6)))
+rownames(h_all_meta) <- c("Sample","Treatment","Batch") 
+save(h_all_data, file="human_all_data.rdata")
+load("/Volumes/Picard/FLX/GCN2/VEGF/human_all_data.rdata")
+save(h_all_meta, file="human_all_meta.rdata")
+load("/Volumes/Picard/FLX/GCN2/VEGF/human_all_meta.rdata")
+
+m_all_data <- left_join(mouse_act,mouse_chr, by="ID_REF")
+m_all_meta <- do.call(cbind,c(mouse_act_meta,mouse_chr_meta))
+m_all_meta <- rbind(m_all_meta, batch= c(rep("mouse_act",14),rep("mouse_chr",6)))
+rownames(m_all_meta) <- c("Sample","Treatment","Batch")
+save(m_all_data, file="mouse_all_data.rdata")
+load("mouse_all_data.rdata")
+load(file="mouse_all_meta.rdata")
+```
+Check normalization
+All datasets are normalized, but not to each other
+```{r}
+boxplot(human_chr[,2:ncol(human_chr)])
+boxplot(human_act[,2:ncol(human_act)])
+boxplot(mouse_chr[,2:ncol(human_chr)])
+boxplot(mouse_act[,2:ncol(mouse_act)])
+boxplot(c(human_chr[,2:ncol(human_chr)],human_act[,2:ncol(human_act)],mouse_chr[,2:ncol(human_chr)],mouse_act[,2:ncol(mouse_act)]))
+```
+
+Normalize between batches 
+```{r}
+library(limma)
+h_all_data_n <- normalizeBetweenArrays(h_all_data[,2:ncol(h_all_data)]) 
+boxplot(h_all_data_n)
+
+h_all_data_n %<>% data.frame %>% mutate(Genes=h_all_data$ID_REF) %>% dselect(Genes, everything())
+#h_all_data <- left_join(h_all_data,data.frame(t(h_all_meta)),by="Sample")
+save(h_all_data_n, file="h_all_data_normalized.rdata")
+load("h_all_data_normalized.rdata")
+
+m_all_data_n <- normalizeBetweenArrays(m_all_data[,2:ncol(m_all_data)]) 
+boxplot(m_all_data_n)
+m_all_data_n %<>% data.frame %>% mutate(Genes=m_all_data$ID_REF) %>% dselect(Genes, everything())
+save(m_all_data_n, file="m_all_data_normalized.rdata")
+load("m_all_data_normalized.rdata")
+```
+
+Translate to HUGO names
+```{r}
+load("/Volumes/Enterprise/FLX/Atopic_Dermatitis/Guttman_data/AffyHG_U133_Plus2_2_HUGO.rdata")
+load("D:/FLX/Atopic_Dermatitis/Guttman_data/AffyHG_U133_Plus2_2_HUGO.rdata")
+annotLookup
+h_all_data_n <- right_join(annotLookup, h_all_data_n,by=c("ID_REF"="Genes"))
+
+source("http://www.bioconductor.org/biocLite.R")
+require("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+mart <- useDataset("mmusculus_gene_ensembl", mart)
+listAttributes(mart)
+listEnsembl(mart)
+listDatasets(mart)
+annotLookup_m <- getBM(
+  mart = mart,
+  attributes = c(
+    "ensembl_gene_id",
+    "external_gene_name", "entrezgene_id")
+  )
+ensembl_gene_id
+colnames(annotLookup_m) <- c("ID_REF","Gene")
+save(annotLookup_m,file="Affymouse430_2_HUGO.rdata")
+
+m_all_data_n <- right_join(annotLookup_m,m_all_data_n,by=c("ID_REF"="Genes"))
+#m_all_data_n %<>% dfilter(!is.na(GSM967852))
+```
+```{r}
+if (interactive()) {
+mart <- useMart("ensembl")
+datasets <- listDatasets(mart)
+mart <- useDataset("hsapiens_gene_ensembl",mart)
+getBM(attributes = c("affy_hg_u95av2", "hgnc_symbol", "chromosome_name", "band"),
+      filters    = "affy_hg_u95av2",
+      values     = c("1939_at","1503_at","1454_at"), 
+      mart       = mart)
+# rows are sorted by `affy_hg_u95av2`, and in different order than the `values` argument
+}
+```
+
+Groom data for unique gene rows
+
+Remove duplicate probes, selection for the more specific probe classes in each case
+_a_at   _at _f_at _g_at _i_at _r_at _s_at _x_at 
+  Unfiltered: 39785 probes
+  Unique: 22893 probes
+  Then only the keep the first, most specific probe type for a gene. Get rid of the rest
+```{r}
+m_all_data_n %>% mutate(probe_type= sub("^[0-9]*","",ID_REF)) %>% dselect(probe_type) %>% table 
+m_all_data_n_unique  %>% dselect(probe_type) %>% table 
+
+m_all_data_n_unique <- m_all_data_n %>% mutate(probe_type= sub("^[0-9]*","",ID_REF)) %>% dselect(ID_REF, probe_type,Gene, everything()) %>% mutate(probe_type=factor(probe_type, levels=c("_at","_a_at","_s_at","_x_at" ,"_i_at", "_f_at", "_g_at","_r_at"))) %>% arrange(Gene,probe_type) %>% group_by(Gene) %>% dfilter(row_number() == 1) %>% ungroup()
+#AD_JAK_unique %>% dfilter(Gene=="IL34")
+save(m_all_data_n_unique,file="mouse_all_data_n_unique.rdata")
+load("mouse_all_data_n_unique.rdata")
+
+m_all_data_n_unique %>% dfilter(!grepl("Rik$",Gene))
+
+h_all_data_n_unique <- h_all_data_n %>% mutate(probe_type= sub("^[0-9]*","",ID_REF)) %>% dselect(ID_REF, probe_type,Gene, everything()) %>% mutate(probe_type=factor(probe_type, levels=c("_at","_a_at","_s_at","_x_at" ,"_i_at", "_f_at", "_g_at","_r_at"))) %>% arrange(Gene,probe_type) %>% group_by(Gene) %>% dfilter(row_number() == 1) %>% ungroup()
+save(h_all_data_n_unique,file="human_all_data_n_unique.rdata")
+load("human_all_data_n_unique.rdata")
+h_all_data_n_unique
+```
+
+Merge with metadata and gather, plot
+
+In the T cell signature, only NFKB is significantly up-regulated
+
+Endothelial: XCELL ENCODE 1
+FIbroblast: xcell ENCODE 1
+```{r fig.height=3, fig.width=}
+T_cell <- c("CD8A","CD8B","CD27","CCR7","DSC1","PRMT2","IL16","MMP19","NFKB1","NPAT","PCNT","PFN2","PURA","RING1","MTRF1","TSPAN32","CD96","CEPT1","MSL3","DIDO1","AAK1","RBM34","CLUAP1","CBY1","POP5","RAPGEF6","YLPM1","CRTAM","CIAPIN1","TRAF3IP3")
+M2 <- c("ACP2","ADCY3","ABCD1","ALK","ARSB","ATP2A2","ATP6V1C1","ATP6V0A1","TSPO","CAMP","CANX","CD63","CD81","CLCN7","TPP1","SLC31A1","FDX1","FGR","FTL","GLB1","HADHB","NCKAP1L","HEXA","HEXB","HPS1","IFNAR1","ITGAX","KCNJ5","LAIR1","LAMP1","MSR1","MYO9B","P2RX7","SDCBP","SNX1","SNX2","STX4","MARCO","CDS2","PABPC4","ATP6V0D1","PICK1","ARHGEF11","HS3ST2","PDCD6IP","SCAMP2","COL4A3BP","HSPH1","OS9","SDS","LILRB4","VSIG4","GABARAP","TFEC","WDFY3","TBC1D9B","ZC3H3","CYFIP1","PLEKHM2","FKBP15","SMG5","UNC50","GGA1","SNX5","SLC39A1","ADAMDEC1","COMMD9","SLC25A24","SPG21","MS4A4A","ANKFY1","BTBD1","STX18","RIN2","PQLC2","TMEM70","ACSM5","AGGF1","SLC38A7","VPS53","NOP10","IARS2","CCDC88A","VPS35","TMEM184C","EXOC1","SLAMF8","C16orf62","POGK","HAMP","DNASE2B","MTMR14","GORASP1","C10orf76","LONRF3","UBXN6")
+
+Endothelial_cell <- c("ACVRL1","ANGPT2","ANXA2","RHOC","BMX","PTTG1IP","CAV1","CLTA","DAD1","ERG","FOXC2","GPR4","KDR","MYL6","PIK3C2A","PLS3","PSMD10","RALA","MAPK12","SLC16A1","TEK","TIE1","CLDN5","VWF","HYAL2","FEZ2","ACTR1A","TXNDC9","PCGF3","COPS6","PWP1","FAM107A","ECD","ARHGEF15","MMRN1","CD93","TTLL5","MTCH1","CLEC1A","PCDH12","EMCN","SOX18","ROBO4","RASIP1","LRRC59","MRPL17","CXorf36","MMRN2","MYCT1","PLVAP","KANK3")
+
+Fibroblast_cell <- c("ADH5","ARF4","ARL1","ASPA","ATP2A2","BAD","BMPR1A","CACNA1C","AP2M1","CSNK1A1","CSNK1G3","DCTD","DPT","ECT2","ELN","ETF1","FKTN","FGF7","GARS","GOLGA4","GRIA1","GRIA3","HIF1A","HLCS","HTR2A","HTR2B","ITIH3","IPO5","KRT19","LGALS1","SMAD5","MARS","MYH1","MYH2","2-Sep","NFATC4","OCRL","PPIB","PRKG1","PTGIR","RAD23B","RCN2","PRPH2","RYK","ATXN2","SGCD","SGCG","SHMT2","SIM1","SNTB2","TBX5","CLEC3B","TPD52L2","TSPYL1","SLC35A2","VCL","WNT2","ZFPL1","B4GALT2","MPZL1","ZMYM4","ZFYVE9","GGPS1","SCAMP1","BAG2","PRDX6","RNF14","SCRN1","RNF41","TFG","YAP1","SPTLC1","CORIN","FRS2","SPIN1","TMED10","KDELR2","DSTN","EMILIN1","MAP4K5","XPOT","RRAS2","RAB11FIP2","RAB3GAP1","TRIM32","GANAB","DNAJC13","ICMT","LMOD1","MYOF","TBL2","SEC22A","NPTN","HSPB7","SEC61A1","TNFRSF12A","NGRN","MBTPS2","AMOTL2","GPR85","TMED9","ASPN","ST7L","SLC35A5","KIF26B","GPATCH2","IMPACT","POMGNT1","CAND1","ACTR10","SAR1A","THAP10","CCDC90B","MAGEF1","ACBD3","C7orf25","AHNAK","FTO","ZC3H14","PODNL1","TCEAL4","SVEP1","TTC26","SLC25A32","ADAMTS12","TM2D1","ANKRD40","MYL12B","LRRC42","HSPB6","TOR1AIP2","TXLNA","RNASEH1","DPY19L4","SNX19")
+
+aas_sig <- c("CLIC4","YARS","SARS","PHGDH","C6orf48","GARS","ASNS","SAT1","SLC3A2","DDIT3","WARS","CHAC1","HERPUD1","PYCR1","TRIB3","CEBPB","PPP1R15A","ATF4")
+
+xcell_NK_sig  <- c("FASLG", "CX3CR1", "GZMB", "GZMM", "IL2RB", "KLRD1", "KPNB1", "MED1", "PRF1", "MAPK1", "PTGDR", "PTPN4", "BRD2", "XCL1", "MAP3K7", "TKTL1", "TNFSF11", "IL18RAP", "ZNF264", "NCR1", "STX8", "PJA2", "HELZ", "GNLY", "STAG2", "ZMYND11", "ZBTB1", "SACM1L", "TBX21", "RAB14", "CD244", "AGK", "DNAJB14", "FIP1L1", "ARPC5L", "HIPK1")
+
+load(file="/Volumes/Picard/FLX/Reference_tables/GCN2_human_sig.rdata")
+
+aas_sig_m <- mouseAnnot %>% dfilter(HumanName %in% aas_sig) %>% .$GENE.SYMBOL #this returns a vector instead of a data.frame
+load("/Volumes/Enterprise/FLX/Silpa_data/mouseAnnot.rdata")
+load("D:/FLX/Silpa_data/mouseAnnot.rdata")
+mouseAnnot #translation table
+angiogenesis <- c("ELTD1")
+
+h_all_data_n_unique %>% dselect(-ID_REF,-probe_type) %>% dfilter(Gene %in% T_cell) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + facet_wrap(~Gene, ncol=3, scales="free_y") + geom_boxplot() + geom_point()
+
+h_all_data_n_unique %>% dselect(-ID_REF,-probe_type) %>% dfilter(Gene %in% GCN2_h) %>% summarise_if(is.numeric,mean) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% rename(mRNA_signal= '.') %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% ggplot(aes(x=interaction(Treatment,Batch), y=mRNA_signal, colour=Batch)) + geom_boxplot() + geom_point()
+```
+
+```{r fig.height=2, fig.width=4}
+m_all_data_n_unique %>% dselect(-ID_REF,-probe_type) %>% dfilter(Gene %in% GCN2_pathway) %>% tibble::column_to_rownames("Gene") %>% summarise_if(is.numeric,mean) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(m_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% ggplot(aes(x=interaction(Treatment,Batch), y=., colour=Batch)) + geom_boxplot() + geom_point()
+
+
+m_all_data_n_unique %>% dselect(-ID_REF,-probe_type) %>% dfilter(Gene %in% gMDSC_sig_m) %>% tibble::column_to_rownames("Gene") %>% summarise_if(is.numeric,mean) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(m_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib")  %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% ggplot(aes(x=interaction(Treatment,Batch), y=., colour=Batch)) + geom_boxplot() + geom_point()
+```
+
+Z-scores and Signature scores
+```{r fig.height=3, fig.width=7}
+
+h_zscore <- h_all_data_n_unique %>% dselect(-probe_type,-ID_REF) %>% mutate_if(is.numeric,mx_zscore2)
+save(h_zscore,file="Human_zscore.rdata")
+load("Human_zscore.rdata")
+m_zscore <- m_all_data_n_unique %>% dselect(-probe_type,-ID_REF) %>% mutate_if(is.numeric,mx_zscore)
+
+h_zscore %>% dfilter(Gene == "EIF2AK4") %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + ggsave("VEGFi_human_GCN2.jpg", width=5, height=2, dpi=600, plot= last_plot(), units = "in")
+m_zscore %>% dfilter(Gene == "Eif2ak4") %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(m_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + ggsave("VEGFi_mouse_Gcn2.jpg", width=5, height=2, dpi=600, plot= last_plot(), units = "in")
+
+h_zscore %>% dfilter(Gene == "ASNS") %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + ggsave("VEGFi_human_ASNS.jpg", width=5, height=2, dpi=600, plot= last_plot(), units = "in")
+m_zscore %>% dfilter(Gene == "Asns") %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(m_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + ggsave("VEGFi_mouse_ASNS.jpg", width=5, height=2, dpi=600, plot= last_plot(), units = "in")
+
+h_zscore %>% dfilter(Gene %in% aas_sig) %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + ggsave("VEGFi_human_AAS.jpg", width=5, height=2, dpi=600, plot= last_plot(), units = "in")
+m_zscore %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(m_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + ggsave("VEGFi_mouse_AAS.jpg", width=5, height=2, dpi=600, plot= last_plot(), units = "in")
+
+gMDSC_sig <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "DEFA1", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C", "LTF", "F13A1", "PPBP", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "CD24", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1")
+
+h_zscore %>% dfilter(Gene %in% gMDSC_sig) %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + ggsave("gMDSC_human_AAS.jpg", width=5, height=2, dpi=600, plot= last_plot(), units = "in")
+
+h_zscore %>% dfilter(Gene %in% Arg_sig_u) %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + ggsave("ARG_AAS_human_AAS.jpg", width=5, height=2, dpi=600, plot= last_plot(), units = "in")
+
+h_zscore %>% dfilter(Gene=="ARG1") %>% summarise_if(is.numeric,sum) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Microarray_Signal,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Microarray_Signal, colour=Batch)) + geom_boxplot() + geom_point() + scale_x_discrete(labels=c("Acute_Ctrl","Acute_VEGFi","Chronic_Ctrl","Chronic_VEGFi")) + theme(axis.title = element_text(size=14), axis.text = element_text(size=12)) + ggsave("ARG1_AAS_human_AAS.jpg", width=7, height=3, dpi=600, plot= last_plot(), units = "in")
+
+
+Common <- c("DDIT3","TRIB3","PPP1R15A","ASNS")
+ISR_m <- c("Ddit3","Trib3","Ppp1r15a","Asns","Atf4")
+load(file="/Volumes/Picard/FLX/Reference_tables/GCN2_sig_5marker_m.rdata")
+load(file="/Volumes/Picard/FLX/Reference_tables/GCN2_sig_m.rdata")
+
+PKR <- c("IFIT1","ISG15","USP18")
+PERK_try <- c("ATF3","TNFRSF12A") 
+HRI_sub <-c("SLC7A11","SOAT2","ARL14EP","PYCR1") 
+Common_vegf <- h_zscore %>% dfilter(Gene %in% Common) %>% summarise_if(is.numeric,sum) 
+PKR_vegf <- h_zscore %>% dfilter(Gene %in% PKR) %>% summarise_if(is.numeric,sum) 
+PERK_vegf <- h_zscore %>% dfilter(Gene %in% PERK_try) %>% summarise_if(is.numeric,sum) 
+HRI_vegf <- h_zscore %>% dfilter(Gene %in% HRI_sub) %>% summarise_if(is.numeric,sum) 
+Tcell_vegf <- h_zscore %>% dfilter(Gene %in% T_cell) %>% summarise_if(is.numeric,sum) 
+M2_vegf <- h_zscore %>% dfilter(Gene %in% M2) %>% summarise_if(is.numeric,sum)
+Endo_vegf <- h_zscore %>% dfilter(Gene %in% Endothelial_cell) %>% summarise_if(is.numeric,sum)
+Fibro_vegf <- h_zscore %>% dfilter(Gene %in% Fibroblast_cell) %>% summarise_if(is.numeric,sum)
+
+Gcn2_score <- rbind(Common_vegf,HRI_vegf,PERK_vegf,PKR_vegf,Tcell_vegf,M2_vegf,Endo_vegf,Fibro_vegf) %>% data.frame
+rownames(Gcn2_score) <- c("Common_ISR","HRI_s","PERK_s","PKR_s","Tcell_s","M2_s","Endothelial_s","Fibro_s")
+Gcn2_score_t <- Gcn2_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")
+
+Gcn2_ISR <- Gcn2_score_t %>% mutate(PKRi= ifelse(PKR_s<0,0,PKR_s), PERKi=ifelse(PERK_s <0,0,PERK_s), HRIi=ifelse(HRI_s<0,0,HRI_s)) %>% mutate(GCN2_specific = Common_ISR - PKRi - PERKi - HRIi)
+
+Gcn2_ISR %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Tcell_s,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Tcell_s, colour=Batch)) + geom_boxplot() + geom_point() + scale_x_discrete(labels=c("Acute_Ctrl","Acute_VEGFi","Chronic_Ctrl","Chronic_VEGFi")) + theme(axis.title = element_text(size=14), axis.text = element_text(size=12)) + ylab("T cell score") +  ggsave("T_cell_score.jpg", width=7, height=3, dpi=300, plot= last_plot(), units = "in")
+
+Gcn2_ISR %>% dselect(M2_s,Sample) %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,M2_s,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=M2_s, colour=Batch)) + geom_boxplot() + geom_point() + scale_x_discrete(labels=c("Acute_Ctrl","Acute_VEGFi","Chronic_Ctrl","Chronic_VEGFi")) + theme(axis.title = element_text(size=14), axis.text = element_text(size=12)) + ylab("M2 cell score") +  ggsave("M2_cell_score.jpg", width=7, height=3, dpi=300, plot= last_plot(), units = "in")
+
+Gcn2_ISR %>% dselect(Endothelial_s,Sample) %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Endothelial_s,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Endothelial_s, colour=Batch)) + geom_boxplot() + geom_point() + scale_x_discrete(labels=c("Acute_Ctrl","Acute_VEGFi","Chronic_Ctrl","Chronic_VEGFi")) + theme(axis.title = element_text(size=14), axis.text = element_text(size=12)) + ylab("Endothelial cell score") +  ggsave("Endothelial_cell_score.jpg", width=7, height=3, dpi=300, plot= last_plot(), units = "in")
+
+Gcn2_ISR %>% dselect(Fibro_s,Sample) %>% left_join(h_all_meta %>% t %>% data.frame, by="Sample") %>% dfilter(Treatment != "dib") %>% mutate(Treatment= factor(Treatment,levels=c("ctrl","beva"))) %>% gather(Gene,Fibro_s,-Treatment,-Batch,-Sample) %>% ggplot(aes(x=interaction(Treatment,Batch), y=Fibro_s, colour=Batch)) + geom_boxplot() + geom_point() + scale_x_discrete(labels=c("Acute_Ctrl","Acute_VEGFi","Chronic_Ctrl","Chronic_VEGFi")) + theme(axis.title = element_text(size=14), axis.text = element_text(size=12)) + ylab("Fibroblast cell score") +  ggsave("FIbroblast_cell_score.jpg", width=7, height=3, dpi=300, plot= last_plot(), units = "in")
+
+```
+
+
+DESeq2
+Make sure the data matrix sample order in the columns matches the order of the metadata rows for the samples
+Create deseq2 object
+Set the reference conditions
+in the design, put the more important factor on the end.
+```{r}
+library(limma)
+dds_wt <- DESeqDataSetFromMatrix(countData = human_chr,
+                              colData = human_chr_meta,
+                              design= ~ treatment)
+
+ko <- as.matrix(HRI_matrix %>% tibble::column_to_rownames("Rik") %>% dselect(GSM3371783:GSM3371788))
+ko_meta <- as.matrix(HRI_meta %>% tibble::column_to_rownames("GSM") %>% dfilter(genotype=="ko"))
+
+dds_ko <- DESeqDataSetFromMatrix(countData = ko,
+                              colData = ko_meta,
+                              design= ~ Fe)
+
+fe_minus <- as.matrix(HRI_matrix %>% tibble::column_to_rownames("Rik") %>% dselect(GSM3371780:GSM3371782,GSM3371786:GSM3371788))
+fe_minus_meta <- as.matrix(HRI_meta %>% tibble::column_to_rownames("GSM") %>% dfilter(Fe=="minus"))
+
+dds_fe_minus <- DESeqDataSetFromMatrix(countData = fe_minus,
+                              colData = fe_minus_meta,
+                              design= ~ genotype)
+
+dds_wt$Fe <- relevel(dds_wt$Fe, ref="plus")
+dds_ko$Fe <- relevel(dds_ko$Fe, ref="plus")
+dds_fe_minus$genotype <- relevel(dds_fe_minus$genotype, ref="ko")
+```
+
+Horikawa et al. Mouse Ovarian cancer cell line in B6C3F1 mouse background with mouse VEFG antibody treatment
+Treatment shown to have minimal effect on tumor growth!!
+
+The data needs to be normalized
+```{r}
+horikawa <- read.table("D:/FLX/GCN2/VEGF/GSE115944_data_matrix.txt", sep="\t", header=TRUE)
+library(limma)
+mouse_norm <- normalizeBetweenArrays(horikawa[,2:9])
+boxplot(horikawa[,2:9] %>% as.matrix) 
+boxplot(mouse_norm) 
+rownames(mouse_norm) <- horikawa[,1]
+colnames(mouse_norm) <- c("Ctrl1","Ctrl2","Ctrl3","Ctrl4","VEGFi_1","VEGFi_2","VEGFi_3","VEGFi_4")
+```
+Look up the Goddamn Affy array names
+They're not available in Bioconductor
+There is a txt file from NCBI GEO GPL20775: it's huge and ugly
+
+```{r}
+source("http://www.bioconductor.org/biocLite.R")
+require("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+mart <- useDataset("mmusculus_gene_ensembl", mart)
+listAttributes(mart)
+listEnsembl(mart)
+listDatasets(mart)
+annotLookup_m <- getBM(
+  mart = mart,
+  attributes = c(
+    "affy_mouse430_2",
+    "external_gene_name", "entrezgene_id")
+  )
+colnames(annotLookup_m) <- c("ID_REF","Gene")
+save(annotLookup_m,file="Affymouse430_2_HUGO.rdata")
+load("Affymouse430_2_HUGO.rdata")
+```
+Probe names: put them in there
+```{r}
+Probe_Gene <- read.table("D:/FLX/GCN2/VEGF/MTA_Affy_Mouse_Probe2Gene.txt",sep="\t", header=FALSE)
+colnames(Probe_Gene) <- c("Probe","Gene","Other") 
+Probe_Gene %<>% dselect(-Other)
+mouse_norm %<>% data.frame %>% tibble::rownames_to_column("Probe")
+mouse_norm_gene <- left_join(Probe_Gene,mouse_norm, by="Probe") %>% dfilter(!is.na(Ctrl1),!is.na(Gene))
+mouse_norm_gene %>% dfilter(Gene=="Arg1")
+mouse_norm_gene %>% dfilter(Probe=="TC0100000038.mm.1")
+save(mouse_norm_gene,file="Horikawa_norm_final.rdata")
+load(file="Horikawa_norm_final.rdata")
+```
+Collect and translate signatures to Mouse
+
+```{r}
+Arg_sig_u
+load("D:/FLX/Silpa_data/mouseAnnot.rdata")
+Arg_sig_m <- mouseAnnot %>% dfilter(HumanName %in% Arg_sig_u) %>% dselect(GENE.SYMBOL)
+gMDSC_sig_m <- mouseAnnot %>% dfilter(HumanName %in% gMDSC_sig) %>% dselect(GENE.SYMBOL)
+Tcell_sig_m <- mouseAnnot %>% dfilter(HumanName %in% T_cell) %>% dselect(GENE.SYMBOL)
+M2_sig_m <- mouseAnnot %>% dfilter(HumanName %in% M2) %>% dselect(GENE.SYMBOL)
+Endo_sig_m <- mouseAnnot %>% dfilter(HumanName %in% Endothelial_cell) %>% dselect(GENE.SYMBOL)
+Fibro_sig_m <- mouseAnnot %>% dfilter(HumanName %in% Fibroblast_cell) %>% dselect(GENE.SYMBOL)
+xcell_NK_sig_m <- mouseAnnot %>% dfilter(HumanName %in% xcell_NK_sig) %>% dselect(GENE.SYMBOL)
+
+```
+
+Zscore
+```{r}
+mouse_zscore <- mouse_norm_gene %>% mutate_if(is.numeric,mx_zscore2)
+#mouse_zscore %>% dfilter(Probe=="TC0100000038.mm.1")
+```
+
+Calculate scores
+```{r fig.height=2, fig.width=5}
+Arg_AAS_score <- mouse_zscore %>% dfilter(Gene %in% Arg_sig_m$GENE.SYMBOL) %>% summarise_if(is.numeric,sum)
+Arg1_gene <- mouse_zscore %>% dfilter(Gene == "Arg1") %>% summarise_if(is.numeric,sum)
+Gcn2_gene <- mouse_zscore %>% dfilter(Gene == "Eif2ak4") %>% summarse_if(is.numeric,sum)
+Ddit3_gene <- mouse_zscore %>% dfilter(Gene == "Ddit3") %>% summarise_if(is.numeric,sum)
+Atf4_gene <- mouse_zscore %>% dfilter(Gene == "Atf4") %>% summarse_if(is.numeric,sum)
+Pan_AAS_score <- mouse_zscore %>% dfilter(Gene %in% aas_sig_m) %>% summarise_if(is.numeric,sum)
+gMDSC_score <- mouse_zscore %>% dfilter(Gene %in% gMDSC_sig_m$GENE.SYMBOL) %>% summarise_if(is.numeric,sum)
+Tcell_score <- mouse_zscore %>% dfilter(Gene %in% Tcell_sig_m$GENE.SYMBOL) %>% summarise_if(is.numeric,sum)
+M2_score <- mouse_zscore %>% dfilter(Gene %in% M2_sig_m$GENE.SYMBOL) %>% summarise_if(is.numeric,sum)
+Endo_score <- mouse_zscore %>% dfilter(Gene %in% Endo_sig_m$GENE.SYMBOL) %>% summarise_if(is.numeric,sum)
+Fibro_score <- mouse_zscore %>% dfilter(Gene %in% Fibro_sig_m$GENE.SYMBOL) %>% summarise_if(is.numeric,sum)
+NK_score <- mouse_zscore %>% dfilter(Gene %in% xcell_NK_sig_m$GENE.SYMBOL) %>% summarise_if(is.numeric,sum)
+
+
+Score_bind <- rbind(Gcn2_gene,Arg1_gene,Arg_AAS_score,gMDSC_score,Tcell_score,M2_score,Endo_score,Fibro_score,NK_score)
+Score_bind %<>% mutate(Sample=factor(c("Gcn2_gene","Arg1_gene","ARG_AAS_score","gMDSC_score","Tcell_score","M2_score","Endo_Score","Fibro_score","NK_score"),levels=c("Gcn2_gene","Arg1_gene","ARG_AAS_score","gMDSC_score","Tcell_score","M2_score","Endo_Score","Fibro_score","NK_score"))) %>% dselect(Sample, everything())
+Score_bind %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(batch= factor(c(rep("Ctrl",4),rep("VEGFi",4)),levels=c("Ctrl","VEGFi"))) %>% melt %>% ggplot(aes(x=batch, y=value, colour= batch)) + facet_wrap(~variable, scales="free_y", ncol=3) + geom_boxplot() + geom_point() +
+ggsave("VEGFi_Mouse_Horikawa.jpg", width=10, height=8, dpi=600, plot= last_plot(), units = "in")
+
+mouse_norm_gene %>% dselect(-Probe) %>% dfilter(Gene %in% GCN2_sig_m) %>% summarise_if(is.numeric,mean) %>% t %>% data.frame %>% rename(mRNA_signal= '.') %>% mutate(Treatment=c(rep("Ctrl",4),rep("VEGFRi",4))) %>% ggplot(aes(x=Treatment, y=mRNA_signal, colour=Treatment)) + geom_boxplot() + geom_point()
+
+mouse_norm_gene %>% dselect(-Probe) %>% dfilter(Gene %in% ISR_m) %>% summarise_if(is.numeric,mean) %>% t %>% data.frame %>% rename(mRNA_signal= '.') %>% mutate(Treatment=c(rep("Ctrl",4),rep("VEGFRi",4))) %>% ggplot(aes(x=Treatment, y=mRNA_signal, colour=Treatment)) + geom_boxplot() + geom_point()
+```
+
+ 

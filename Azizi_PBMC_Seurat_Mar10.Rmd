@@ -1,0 +1,629 @@
+---
+title: "Azizi_PBMC.rmd"
+author: "Mengshu"
+date: "2/22/2019"
+output: html_document
+---
+
+The Azizi et al. PBMC dataset from breast cancer patients is sequenced with the InDrop system. InDrop is the non-commercial equivalent of 10X scRNA seq. 
+I will perform analysis with raw read counts without imputation for variable gene selection, defining PCs, clustering, and differential analysis.
+When all these are finished, I will use imputed data for data display purposes only. 
+
+A focus for this analysis will be to find all possible DC and monocyte subtypes, with special attention to presence of regulatory markers. Use the classification system defined by Villani et al. from the Satija Regev collaboration scRNA study.  
+
+Data is parse from GSE114725_rna_raw.csv using code "Azizi_parse_raw.Rmd"
+PBMCs extracted from normal tissues, blood, and tumor of the same patient are all included
+47016 cells by 14875 genes
+
+Load packages
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+library(tidyr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+
+Load data into table
+47016 cells by 14875 genes, split up into 5000 genes per batch
+Cells in each category: 
+    BLOOD LYMPHNODE    NORMAL     TUMOR 
+    16056      5167      4540     21253 
+```{r}
+azizi_p <- read.table("Azizi_pbmc_raw_all_tissue.csv", header=TRUE, row.names=1, sep=",")
+azizi_pbmc <- CreateSeuratObject(raw.data =azizi_p) # don't filter anything out
+saveRDS(azizi_pbmc,file="Azizi_PBMC_Seurat.rds")
+azizi_pbmc <- readRDS("Azizi_PBMC_Seurat.rds")
+
+levels(myeloid@ident)
+saveRDS(myeloid, "Azizi_Myeloid.rds")
+myeloid <- readRDS("Azizi_Myeloid.rds")
+
+saveRDS(DCsubgroup, "Azizi_DCsubgroup.rds")
+DCsubgroup <- readRDS("Azizi_DCsubgroup.rds")
+```
+
+Insert the SAVER Imputed data into the Imputed slot
+There was an error due to non-matching cell names in colnames and azizi_pbmc@cell.names, just insert one into the other
+```{r}
+imputed <- readRDS("azizi_orig_saver_Mo.rds")
+#str(saver_imp)
+saver_imp <- data.frame(imputed)
+#fix the cell names 
+azizi_pbmc@imputed <- saver_imp
+colnames(azizi_pbmc@imputed) <- azizi_pbmc@cell.names
+#str(azizi_pbmc@imputed)
+```
+
+Add metadata for tissue and donor
+```{r}
+cell_names <- colnames(azizi_pbmc@raw.data) # save all the cell names, then parse out metadata from them
+tissue <- sapply(strsplit(cell_names, "_"),`[`,2) #this splits the string and recovers the second element
+donor <- sapply(strsplit(cell_names, "_"),`[`,1)
+umi <- azizi_pbmc@meta.data$nUMI
+metadata <- data.frame(donor,tissue,umi)
+metadata %>% group_by(donor) %>% count(tissue)
+summary_pbmc <- metadata %>% group_by(donor) %>% count(tissue)
+write.table(spread(summary_pbmc, "donor", "n"),"Tissue sampling Azizi.txt", row.names=FALSE, sep="\t")
+table(as.factor(tissue))
+table(as.factor(donor))
+azizi_pbmc@meta.data$tissue <- as.factor(tissue)
+azizi_pbmc@meta.data$donor <- as.factor(donor)
+```
+Add mitochondrial and ribosomal protein metadata
+
+```{r}
+mito.genes <- grep(pattern="^MT.", x=rownames(azizi_pbmc@data),value=TRUE,perl= TRUE)
+percent.mito <- Matrix::colSums(azizi_pbmc@raw.data[mito.genes,])/Matrix::colSums(azizi_pbmc@raw.data)
+azizi_pbmc <- AddMetaData(object=azizi_pbmc, metadata=percent.mito, col.name= "percent.mito")
+
+ribo.genes <- grep(pattern="^RP[S|L]", x=rownames(x=azizi_pbmc@raw.data),value=TRUE)
+percent.ribo <- Matrix::colSums(azizi_pbmc@raw.data[ribo.genes,])/Matrix::colSums(azizi_pbmc@raw.data)
+azizi_pbmc <- AddMetaData(object=azizi_pbmc, metadata=percent.ribo, col.name= "percent.ribo")
+```
+
+Inspect data
+```{r fig.height=15, fig.width=15}
+VlnPlot(object=azizi_pbmc, features.plot=c("nGene","nUMI"), group.by="donor",nCol=2)
+ggsave("Azizi_PBMC_UMI_donor.jpg", dpi= 600, width=10, height=5, units= "in", plot=last_plot())
+VlnPlot(object=azizi_pbmc, features.plot=c("nGene","nUMI","percent.mito","percent.ribo"), group.by="tissue",nCol=2,point.size.use = 0.05) +
+ggsave("Azizi_PBMC_UMI_tissue.jpg", dpi= 600, width=15, height=15, units= "in", plot=last_plot())
+```
+
+Normalize data
+Scale data by regressing out certain factors
+Find variable genes #3220
+
+```{r fig.height=12, fig.width=15}
+memory.limit(size=56000)
+azizi_pbmc <- NormalizeData(object=azizi_pbmc)
+azizi_pbmc <- ScaleData(object=azizi_pbmc, vars.to.regress=c("percent.ribo","percent.mito","nUMI"), display.progress = TRUE, assay.type = "RNA", check.for.norm = TRUE)
+
+```
+
+Variable Genes
+```{r}
+azizi_pbmc <- FindVariableGenes(azizi_pbmc, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0125,x.high.cutoff = 3.5, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+
+
+length(azizi_pbmc@var.genes) #3220
+```
+
+
+PCA
+#run on Variable genes
+PC1: CD8 vs Monocyte
+
+```{r}
+azizi_pbmc <- RunPCA(object=azizi_pbmc, pc.genes=azizi_pbmc@var.genes, do.print=TRUE, pcs.print=1:10,pcs.compute = 25)
+PrintPCA(object = azizi_pbmc, pcs.print = 20:25, genes.print = 5, use.full = FALSE)
+```
+
+Visualize PCAs
+```{r}
+VizPCA(object = azizi_pbmc, pcs.use = 1:3)
+PCAPlot(object = azizi_pbmc, dim.1 = 1, dim.2 = 2)
+PCHeatmap(object = azizi_pbmc, pc.use = 1, cells.use = 500, do.balanced = TRUE, label.columns = FALSE)
+```
+
+Assess PCS
+Jackstraw is taking too long to run
+```{r}
+azizi_pbmc <- JackStraw(object = azizi_pbmc, num.replicate = 100, display.progress = FALSE)
+JackStrawPlot(object = azizi_pbmc, PCs = 1:25)
+PCElbowPlot(object = azizi_pbmc,PCs = 1:25) #20 clusters looks fine
+```
+
+Cluster
+```{r}
+azizi_pbmc <- FindClusters(object = azizi_pbmc, reduction.type = "pca", dims.use = 1:25, 
+    resolution = 1, print.output = 0, save.SNN = TRUE)
+```
+##################
+Run UMAP for visualization as comparison
+###################
+Seurat has a UMAP function, install the python version of umap on the local machine first, Seurat will call the python code from R
+In Terminal> sudo pip install umap-learn, then restart the R session
+n_neighbors = 30L determines preservation of global structures (larger numbers). Typical range 5-50.
+Metrics: for this dataset, "manhattan"" works the best
+metric: chebyshev = manhattan (better borders) > cosine  > correlation > canberra (chaotic and clumpy) >>>> Jaccard (for binary data) >> Haversine (doens't run)
+n_neighbours 10 or 30 didn't make much difference, the clusters are very tight
+```{r fig.height=10, fig.width=15}
+library(umap)
+azizi_pbmc <- RunUMAP(azizi_pbmc, cells.use = NULL, dims.use = 1:25, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 10L,
+  min_dist = 0.2, metric = "manhattan", seed.use = 42)
+
+DimPlot(object = azizi_pbmc, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 4) 
+ggsave("Azizi_PBMCs_UMAP.jpg", width= 12, height=8, dpi=600, plot= last_plot(), units = "in")
+```
+Markers
+T cell
+```{r fig.height=26, fig.width=26}
+FeaturePlot(object=azizi_pbmc, features.plot = c("CD3D","CD8A","CD4","FOXP3","CCR7","GZMB","LYZ","ITGAX","KLRB1","SELL","PRF1","GNLY","NKG7","CD14","ITGAE","CD69","CD79A","CXCL13","ITGAM","PDCD1"), cols.use=c("grey","blue"), no.legend=FALSE,reduction.use="umap") 
+ggsave("Azizi_PBMC_Global Markers.jpg", width= 25, height=18, dpi=600, plot= last_plot(), units = "in")
+```
+#########
+#####
+#####################
+######
+###############################
+Subset into Myeloid lineage
+Clusters: 9, 12, 15, 16, 20, 22, and 23 is DC1, (far away from the rest)
+#########
+#####
+#############################################
+######
+############################################################
+
+```{r}
+myeloid <- SubsetData(azizi_pbmc, ident.use=c("9","12","15","16","20","22","23"), do.clean=TRUE, subset.raw=TRUE)
+levels(myeloid@ident)
+saveRDS(myeloid, "Azizi_Myeloid.rds")
+
+```
+
+Re-process Myeloid cells alone
+
+```{r}
+VlnPlot(myeloid, features.plot = c("nUMI","nGene","CD276"))
+myeloid <- NormalizeData(myeloid)
+myeloid <- ScaleData(myeloid,display.progress = TRUE, assay.type = "RNA", check.for.norm = TRUE)
+myeloid <- FindVariableGenes(myeloid, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0125,x.high.cutoff = 3.5, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+
+```
+
+Skip both Normalization and ScaleData, then put raw.data into the imputed slot, and frun RunPCA on the raw data in "imputed" slot
+```{r}
+length(myeloid@var.genes) #3350
+myeloid@imputed <- myeloid@raw.data
+myeloid <- RunPCA(object=myeloid, pc.genes=myeloid@var.genes, do.print=TRUE, pcs.print=1:10,pcs.compute = 25, use.imputed=TRUE)
+PCElbowPlot(myeloid)
+```
+Cluster
+```{r}
+myeloid <- FindClusters(object = myeloid,
+    resolution = 0.5, print.output = 0, save.SNN = TRUE, reduction.type = "pca", dims.use = 1:15, plot.SNN=TRUE) # genes.use=c("SLAMF8","CD59","CD1C","CLEC10A","S100A9","FCGR3A","DAB2","NRP1","UGCG")
+
+#TSNE
+myeloid <- RunTSNE(myeloid, reduction.use = "pca", seed.use=1, tsne.method = "Rtsne",dims.use=1:15, check_duplicates = FALSE, perplexity=100)
+
+TSNEPlot(myeloid, do.label =TRUE)
+
+#UMAP
+myeloid <- RunUMAP(myeloid, cells.use = NULL, dims.use = 1:15, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 50L,
+  min_dist = 0.1, metric = "manhattan", seed.use = 13)
+
+DimPlot(object = myeloid, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 4) 
+ggsave("Azizi_myeloid_UMAP_15PC.jpg", width= 9, height=6, dpi=600, plot= last_plot(), units = "in")
+```
+Using 25 PCs makes too many clusters (16), reduce resolution from 1 to 0.3
+```{r fig.height=10, fig.width=15}
+FeaturePlot(object=myeloid, features.plot = c("SLAMF8","CD59","CD1C","CLEC10A","S100A9","LYZ","FCGR3A","LST1","DAB2","IL3RA","GZMB","CD276"), cols.use=c("grey90","blue"),no.legend=FALSE,reduction.use="umap", nCol=4) 
+FeaturePlot(object=myeloid, features.plot = c("SLAMF8","CD59","CD1C","CLEC10A","S100A9","LYZ","FCGR3A","LST1","DAB2","IL3RA","GZMB","CD276"), cols.use=c("grey90","blue"),no.legend=FALSE,reduction.use="umap", use.imputed = TRUE)
+ggsave("Myeloid_ClusterGenePlot.jpg", width= 15, height=10, dpi=600, plot= last_plot(), units = "in")
+
+FeaturePlot(object=myeloid, features.plot = c("CXCL8","KLF2","KLF4"), cols.use=c("grey90","blue"),no.legend=FALSE,reduction.use="umap") 
+FeaturePlot(object=azizi_pbmc, features.plot = c("AXL","IL3RA","CLEC4C","GZMB"), cols.use=c("grey90","blue"),no.legend=FALSE,reduction.use="umap") 
+```
+
+Markers of regulatory DC cells
+Not expressed: "ARG1"
+```{r fig.height=10, fig.width=20}
+FeaturePlot(object=myeloid, features.plot = c("TGFB1","IL10","ITGAM","IFNG","IL1B","CD276","FAS", "PDCD1","PDCD1LG2", "IL6"), cols.use=c("grey90","blue"),no.legend=FALSE,reduction.use="umap") 
+VlnPlot(object=myeloid, features.plot = c("TGFB1","ITGAM","IL1B","CD276"), x.lab.rot = TRUE, do.sort=TRUE, nCol=4)
+#FeaturePlot(object=myeloid, features.plot = c("TGFB1","IL10","ITGAM","IL1B","CD276","IDO1", "PDCD1","PDCD1LG2", "IL6"), cols.use=c("grey90","blue"),no.legend=FALSE,reduction.use="umap", use.imputed = TRUE) 
+ggsave("Myeloid_regDC_markers_Vln_noNorm.jpg", width= 12, height=6, dpi=600, plot= last_plot(), units = "in")
+```
+Label cell clusters
+
+```{r}
+current.cluster.ids <- c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+
+current.cluster.ids <- c("0. DC1","1. DC2","2. Immature DC","3. DC2", "4. DC1", "5. DC3","6. DC4","7. DC5","8. Unknown","9. DC6","10.DC3","11")
+new.cluster.ids <- c("0. DC1","1. DC2","2. Immature DC","3. DC2", "4. DC1", "5. DC3","6. DC4","7. DC5","8. Unknown","9. DC6","10.DC3","11. DC1")
+myeloid@ident <- plyr::mapvalues(x = myeloid@ident, from = current.cluster.ids, to = new.cluster.ids)
+levels(myeloid@ident)
+```
+################
+############
+Isolate DC1, DC5, and Cluster 8 to sub-cluster for the regDC-like group
+Include precursor DC to have an anchor for Pseudotime analysis later
+############
+#################
+
+```{r}
+DCsubgroup <- SubsetData(myeloid, ident.use=c("0. DC1","2. Immature DC","4. DC1","7. DC5","8. Unknown","11. DC1"), subset.raw= TRUE, do.clean= TRUE )
+levels(DCsubgroup@ident)
+saveRDS(DCsubgroup, "Azizi_DCsubgroup.rds")
+```
+Process Data
+#Changing parameters does not increase clustering above 9 
+#Skip Normalization -> Doesn't help the signal inflation at all, did change the UMAP clustering
+#Can't Skip ScaleData
+```{r}
+DCsubgroup <- NormalizeData(DCsubgroup)
+DCsubgroup <- ScaleData(DCsubgroup,do.scale =FALSE,do.center=FALSE, display.progress = TRUE, assay.type = "RNA", check.for.norm = TRUE)
+DCsubgroup <- FindVariableGenes(DCsubgroup, mean.function = ExpMean,
+  dispersion.function = LogVMR, do.plot = TRUE, set.var.genes = TRUE,
+  x.low.cutoff = 0.0125,x.high.cutoff = 3.5, y.cutoff = 0.5,
+  y.high.cutoff = Inf, num.bin = 20, binning.method = "equal_width",
+  selection.method = "mean.var.plot", top.genes = 1000, do.recalc = TRUE,
+  sort.results = TRUE, do.cpp = TRUE, display.progress = TRUE)
+length(DCsubgroup@var.genes) #3820
+#trick the program into using raw.data inserted into imputed slot
+DCsubgroup@imputed <- DCsubgroup@raw.data
+DCsubgroup <- RunPCA(object=DCsubgroup, pc.genes=DCsubgroup@var.genes, do.print=TRUE, pcs.print=1:10,pcs.compute = 25, use.imputed=TRUE)
+
+PCElbowPlot(DCsubgroup)
+DCsubgroup <- FindClusters(object = DCsubgroup,
+    resolution = 0.8, print.output = 0, save.SNN = TRUE, reduction.type = "pca", dims.use = 1:25, plot.SNN=TRUE,force.recalc =TRUE) # genes.use=c("SLAMF8","CD59","CD1C","CLEC10A","S100A9","FCGR3A","DAB2","NRP1","UGCG")
+DCsubgroup <- RunUMAP(DCsubgroup, cells.use = NULL, dims.use = 1:15, reduction.use = "pca",
+  genes.use = NULL, assay.use = "RNA", max.dim = 2L,
+  reduction.name = "umap", reduction.key = "UMAP", n_neighbors = 50L,
+  min_dist = 0.1, metric = "manhattan", seed.use = 13)
+
+DimPlot(object = DCsubgroup, do.label = TRUE, reduction.use = 'umap', pt.size = 0.8, label.size = 6, cols.use=c("#0000FF","#8B0000","#9400D3","#FF0000","#FFA500","#FF1493", "#00FF00","#FFD700","#32CD32","#00FFFF")) 
+
+ggsave("Azizi_DCsubgroup_UMAP.jpg", width= 6, height=4, dpi=600, plot= last_plot(), units = "in")
+
+
+table(DCsubgroup@ident)
+```
+Violin plot showing increased gene content in CD276+ cells
+```{r fig.height=8, fig.width=20}
+VlnPlot(DCsubgroup, features.plot = c("nUMI","nGene","GAPDH","RPL10","CD276","HLA.DRA"), use.raw=TRUE, nCol=6)
+ggsave("Azizi_DCsubgroup_RNAcontent.jpg", width= 20, height=8, dpi=600, plot= last_plot(), units = "in")
+```
+
+
+Differential Analysis
+
+```{r}
+Cluster_1 <- FindMarkers(object=DCsubgroup, ident.1=1, ident.2 =c(2,9,0,5), min.pct=0.1, logfc.threshold = 0.3) #8,
+Cluster_1 %<>% mutate(gene=rownames(Cluster_1)) %>% arrange(avg_logFC)
+Cluster_1 %<>% dfilter(gene != "^RP*")
+write.table(Cluster_1,"Cluster_1_diff_2905.txt", quote=FALSE, sep="\t")
+```
+Find markers upregulated in most differentiated TAMs, compare along the lineage
+
+```{r}
+levels(DCsubgroup@ident)
+lineage <-  FindMarkers(object=DCsubgroup, ident.1=1, ident.2 =c(3,4), min.pct=0.1, logfc.threshold = 0.3)
+lineage %<>% mutate(gene=rownames(lineage)) %>% arrange(-avg_logFC)
+lineage %<>% dfilter(gene != "^RP*")
+lineage
+write.table(lineage,"Azizi_TAM_lineage_1_vs_34.txt", quote=FALSE, sep="\t")
+```
+
+
+Check groupings
+
+```{r fig.height=10, fig.width=15}
+FeaturePlot(DCsubgroup, features.plot = c("HLA.DPB1","TGFB1","ITGAM","ITGAX", "PDCD1","CD276","KLF4","CXCL8"), cols.use=c("grey90","blue"),no.legend=FALSE,reduction.use="umap") 
+#ggsave("Azizi_DCsubgroup_Feature.jpg", width= 10, height=7, dpi=600, plot= last_plot(), units = "in")
+VlnPlot(DCsubgroup, features.plot = c("HLA.DPB1","TGFB1","ITGAM","ITGAX", "PDCD1","CD276"), x.lab.rot = TRUE, nCol=3) #,use.raw=TRUE
+
+FeaturePlot(object=DCsubgroup, features.plot = c("SLAMF8","CD59","CD1C","CLEC10A","S100A9","LYZ","FCGR3A","LST1","DAB2","IL3RA","GZMB","CD276"), cols.use=c("grey90","blue"),no.legend=FALSE,reduction.use="umap", nCol=4) 
+ggsave("Azizi_DCsubgroup_Feature.jpg", width= 10, height=7, dpi=600, plot= last_plot(), units = "in")
+VlnPlot(DCsubgroup, features.plot = c("SLAMF8","CD59","CD1C","CLEC10A","S100A9","LYZ","FCGR3A","LST1","DAB2","IL3RA","GZMB","CD276"), x.lab.rot = TRUE, nCol=4, use.raw=TRUE )
+ggsave("Azizi_DCsubgroup_Violin.jpg", width= 10, height=7, dpi=600, plot= last_plot(), units = "in")
+```
+Tissue or Donor specific expression of regDC markers?
+
+```{r fig.height=10, fig.width=10}
+VlnPlot(DCsubgroup, features.plot = c("HLA.DPB1","TGFB1","ITGAM","ITGAX", "PDCD1","CD276"), x.lab.rot = TRUE, nCol=3, group.by="donor", use.raw=TRUE)
+ggsave("Azizi_DCsubgroup_Vln_donor.jpg", width= 12, height=8, dpi=600, plot= last_plot(), units = "in")
+table(DCsubgroup@meta.data$tissue)
+table(DCsubgroup@meta.data$donor)
+```
+
+Overlap of DC1, 2, 3 markers in the same cells?
+```{r}
+
+```
+
+
+Pseudotime with Monocle 3
+
+```{r}
+library(monocle)
+
+```
+##########################################
+Import Seurat object into Monocle 3
+#################################
+#######################
+##############
+########
+```{r}
+myeloid_m <- importCDS(myeloid, import_all= TRUE)
+DCs <- importCDS(DCsubgroup, import_all=TRUE)
+regDCm <- importCDS(regDC, import_all=TRUE)
+
+save(myeloid_m, file='azizi_myeloid_Monocle.RData')
+load('azizi_myeloid_Monocle.RData') # don't pass to anything
+```
+Export cluster information from Seurat to label cells in Monocle 3
+```{r}
+pData(myeloid_m)$cluster <- myeloid@ident
+
+c("0. DC1","1. DC2","2. Immature DC","3. DC2", "4. DC1", "5. DC3","6. DC4","7. DC5","8. Unknown","9. DC6","10.DC3","11. DC1")
+
+cell_type_colour <- c("0. DC1" = "#FF0000", #red
+                      "1. DC2" ="#32CD32", #lgreen 
+                      "2. Immature DC" ="#00FF00", #lime
+                      "3. DC2" ="#228B22",  #green
+                      "4. DC1" = "#FFA500", # orange
+                      "5. DC3" = "#0000FF", #blue
+                      "6. DC4" = "#696969", #grey
+                      "7. DC5" ="#FFD700", #gold
+                      "8. Unknown" ="#00FFFF", #aqua
+                      "9. DC6" ="#FF1493", #hotpink
+                      "10.DC3" = "#00008B", #navyblue
+                      "11. DC1" ="#8B0000") #crimson
+
+pData(DCs)$cluster <- DCsubgroup@ident
+
+cell_type_colour <- c("0" = "#0000FF", #blue
+                      "1" ="#8B0000", #crimson
+                      "2" ="#9400D3", #purple
+                      "3" ="#FF0000", #red
+                      "4" = "#FFA500", #orange
+                      "5" = "#FF1493", #hot pink
+                      "6" = "#00FF00", #lime green
+                      "7" ="#FFD700",  #gold
+                      "8" ="#32CD32", #lgreen 
+                      "9" ="#00FFFF") #aqua
+
+pData(regDCm)$cluster <- regDC@ident
+```
+Process
+
+```{r}
+myeloid_m <- estimateSizeFactors(myeloid_m)
+myeloid_m <- estimateDispersions(myeloid_m)
+
+DCs <- estimateSizeFactors(DCs)
+DCs <- estimateDispersions(DCs)
+
+regDCm <- estimateSizeFactors(regDCm)
+regDCm <- estimateDispersions(regDCm)
+```
+
+Preprocess data to find pricipal components
+```{r}
+myeloid_m <- preprocessCDS(myeloid_m, num_dim=20)
+myeloid_m <- reduceDimension(myeloid_m, reduction_method = 'UMAP')
+
+myeloid_m <- clusterCells(myeloid_m,method = 'louvain',
+                        res = 1e-6,
+                        louvain_iter = 1,
+                        verbose = T)
+
+DCs <- preprocessCDS(DCs, num_dim=20)
+DCs <- reduceDimension(DCs, reduction_method = 'UMAP')
+
+DCs <- clusterCells(DCs,method = 'louvain',
+                        res = 1e-6,
+                        louvain_iter = 1,
+                        verbose = T)
+
+regDCm <- preprocessCDS(regDCm, num_dim=20)
+regDCm <- reduceDimension(regDCm, reduction_method = 'UMAP')
+
+regDCm <- clusterCells(regDCm,method = 'louvain',
+                        res = 1e-6,
+                        louvain_iter = 1,
+                        verbose = T)
+```
+
+3. Partition cells into Supergroups
+```{r}
+myeloid_m <- partitionCells(myeloid_m)
+
+DCs <- partitionCells(DCs)
+
+regDCm <- partitionCells(regDCm)
+```
+
+4. Learn the Pricipal graph
+SimplePPT and DDRTree are not giving different results
+```{r}
+myeloid_m <- learnGraph(myeloid_m, RGE_method ='SimplePPT') # partition_component +T
+myeloid_m <- learnGraph(myeloid_m, RGE_method ='DDRTree')
+
+DCs <- learnGraph(DCs, RGE_method ='DDRTree')
+
+regDCm <- learnGraph(regDCm, RGE_method ='DDRTree')
+```
+
+5. Visualize trajectory
+```{r fig.height=6, fig.width=8}
+plot_cell_trajectory(myeloid_m , 
+                     color_by = "cluster",
+                     show_backbone=TRUE, show_branch_points = TRUE, alpha = 0.9)  +
+                     scale_color_manual(values = cell_type_colour) + 
+                     theme(legend.position = "bottom")  +
+                     guides(colour=guide_legend(nrow=3))
+
+ggsave("Azizi_myeloid_Supercluster_path_cluster.jpg", plot = last_plot(), dpi=400, height= 6, width = 10, units = "in")
+
+plot_cell_trajectory(myeloid_m , color_by = "louvain_component",show_backbone = TRUE, backbone_color = "black") 
+ggsave("Azizi_myeloid_Supercluster_louvain_component.jpg", plot = last_plot(), dpi=400, height= 6, width = 10, units = "in")
+
+plot_cell_clusters(myeloid_m, color_by = pData(myeloid_m)$cluster) 
+
+
+plot_cell_trajectory(DCs, 
+                     color_by = "cluster",
+                     show_backbone=TRUE, show_branch_points = TRUE, alpha = 0.9)  +
+                     scale_color_manual(values = cell_type_colour) + 
+                     theme(legend.position = "bottom")  +
+                     guides(colour=guide_legend(nrow=3))
+ggsave("Azizi_DCs_Psedotime_Path_cluster.jpg", plot = last_plot(), dpi=400, height= 8, width = 10, units = "in")
+
+
+plot_cell_trajectory(regDCm, 
+                     color_by = "cluster",
+                     show_backbone=TRUE, show_branch_points = TRUE, alpha = 0.9)  +
+                     scale_color_manual(values = cell_type_colour) + 
+                     theme(legend.position = "bottom")  +
+                     guides(colour=guide_legend(nrow=3))
+ggsave("Azizi_regDC_Psedotime_Path_cluster.jpg", plot = last_plot(), dpi=400, height= 8, width = 10, units = "in")
+
+```
+Root the tree
+
+```{r}
+azizi_node_ids = get_correct_root_state(myeloid_m,
+                                      cell_phenotype =
+                                        'cluster', "2. Immature DC")
+myeloid_m <- orderCells(myeloid_m, root_pr_nodes = azizi_node_ids)
+plot_cell_trajectory(myeloid_m)
+ggsave("Azizi_myeloid_Supercluster_heatmap.jpg", plot = last_plot(), dpi=400, height= 6, width = 10, units = "in")
+
+
+azizi_node_ids = get_correct_root_state(DCs,
+                                      cell_phenotype =
+                                        'cluster', "6")
+DCs <- orderCells(DCs, root_pr_nodes = azizi_node_ids)
+plot_cell_trajectory(DCs)
+ggsave("Azizi_DCs_Supercluster_heatmap.jpg", plot = last_plot(), dpi=400, height= 6, width = 8, units = "in")
+
+
+azizi_node_ids = get_correct_root_state(regDCm,
+                                      cell_phenotype =
+                                        'cluster', "6")
+regDCm <- orderCells(regDCm, root_pr_nodes = azizi_node_ids)
+plot_cell_trajectory(regDCm)
+ggsave("Azizi_regDC_Supercluster_heatmap.jpg", plot = last_plot(), dpi=400, height= 6, width = 8, units = "in")
+```
+PLot Markers
+
+```{r fig.height=15, fig.width=20} 
+plot_cell_trajectory(myeloid_m , 
+                     markers = c("HLA.DPB1","TGFB1","ITGAM","ITGAX", "PDCD1","CD276"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") + scale_color_gradient(low="grey90", high="blue")
+#"TGFB1","ITGAM","ITGAX",
+
+plot_cell_trajectory(DCs, 
+                     markers = c("HLA.DPB1","TGFB1","ITGAM","ITGAX", "PDCD1","CD276"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") + scale_color_gradient(low="grey90", high="blue")
+
+plot_cell_trajectory(regDCm, 
+                     markers = c("APOE","ACP5","PLD3"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") + scale_color_gradient(low="grey90", high="blue")
+
+plot_cell_trajectory(regDCm, 
+                     markers = c("APOE","SPP1","FN1","CD9","IL10","CD59","C1QB","CHIT1","PDCD1","MARCO","CD276","CD84"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") + scale_color_gradient(low="grey90", high="blue")
+
+ggsave("Azizi_regDC_Supercluster_diffMarkers.jpg", plot = last_plot(), dpi=400, height= 12, width = 15, units = "in")
+ggsave("Azizi_myeloid_Supercluster_MHCII.jpg", plot = last_plot(), dpi=400, height= 12, width = 15, units = "in")
+```
+Find the HLA genes
+
+```{r}
+greprownames(myeloid@data)
+grep(pattern="^HLA", x= rownames(x=myeloid@data), value=TRUE)
+```
+
+Differential expression along the lineage
+
+```{r}
+pr_graph_test <- principalGraphTest(regDCm, k=3, cores=10, interactive=TRUE)
+
+DClineage <- dplyr::add_rownames(pr_graph_test) %>%
+    dplyr::arrange(plyr::desc(morans_test_statistic), plyr::desc(-qval)) %>% head(200)
+write.table(DClineage, "Pseudotime_lineage_DE.txt",sep="\t", quote=FALSE)
+
+```
+
+Refine the lineage further to just regDCs
+This eliminates branching points and makes a cleaner Moral statistic
+Go Back to Monocle Pseudotime analysis and come back to this point: do a musical CODA
+```{r}
+regDC <- SubsetData(DCsubgroup, ident.use=c("1","3","4","7","8","6"), do.clean=TRUE, subset.raw=TRUE)
+```
+
+Count cells expressing specific markers
+
+```{r}
+cd276 <- DCsubgroup@raw.data["CD276",] > 0 # 
+length(cd276[cd276 == TRUE]) #908
+
+cd276 <- SubsetByPredicate(object = DCsubgroup,
+                      vars.use = c("CD276"),
+                      predicate = "CD276 > 0")
+table(cd276@ident)
+
+
+table(cd276@meta.data$donor)
+table(DCsubgroup@meta.data$donor)
+"SLAMF8","CD59","S100A9","LYZ","FCGR3A","LST1","DAB2","IL3RA","CD276"
+multiDC <- SubsetByPredicate(object = DCsubgroup,
+                      vars.use = c("SLAMF8","CD59","S100A9","LYZ","FCGR3A","LST1","DAB2","IL3RA","CD276"),
+                      predicate = "SLAMF8 > 0 &
+                                    CD59 > 0 &
+                                    S100A9 > 0 &
+                                    LYZ > 0 &
+                                    FCGR3A > 0 &
+                                    LST1 > 0 &
+                                    DAB2 > 0 &
+                                    IL3RA > 0 &
+                                    CD276 > 0")
+table(DCsubgroup@ident)
+table(multiDC@ident)
+
+multiDC2 <- SubsetByPredicate(object = DCsubgroup,
+                      vars.use = c("CD59","S100A9","FCGR3A","DAB2","CD276"),
+                      predicate = " CD59 > 2 &
+                                    S100A9 > 2 &
+                                    FCGR3A > 2 &
+                                    DAB2 > 2 &
+                                    CD276 > 2")
+table(DCsubgroup@ident)
+table(multiDC2@ident)
+```
+

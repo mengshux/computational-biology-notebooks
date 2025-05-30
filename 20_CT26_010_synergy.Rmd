@@ -1,0 +1,189 @@
+---
+title: "20_CT26_010_Synergy_test.Rmd"
+author: "MX"
+date: "7/24/2020"
+output: html_document
+---
+
+Summary
+
+20_CT26_010 is a study with compound F20885 alone and in combination with aVEGFR Antibody treatment. This analysis is to see if there is synergy at any dose
+This is not a real synergy analysis, since there is only a single dose point, but we want to know if there is any synergy at each dose combination, 
+assuming the F20885 and aVEGFR treatment are completely independent and an additive effect is the product of A x B
+
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+```
+
+Load data
+Each group has 10 mice
+```{r}
+library(ggbeeswarm)
+data <- read.table("/Volumes/Picard/FLX/GCN2/20_CT26_010_synergy/20_CT26_010_tumor_vol_Day25.txt", sep="\t", header=TRUE) %>% dfilter(!is.na(Tumor_size)) %>% mutate(Treatment=factor(Treatment, levels=c("Vehicle","F20855_5mpk","F20855_10mpk","F20855_15mpk","VEGFR","F20855_5mpk_VEGFR","F20855_10mpk_VEGFR","F20855_15mpk_VEGFR")))
+unique(data$Treatment)
+data %>% ggplot(aes(Treatment, Tumor_size, group=Treatment)) + geom_boxplot() + geom_beeswarm() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) 
+```
+
+Set max tumor volume at 1500
+```{r}
+data_max <- data %>% mutate(Tumor_size= if_else(Tumor_size >= 1500, 1500, Tumor_size))
+
+data_max %>% ggplot(aes(Treatment, Tumor_size, group=Treatment)) + geom_boxplot() + geom_beeswarm() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) 
+```
+
+Without a maximum at 1500mm3
+Calculate the expected % therapeutic efficacy by random sampling 885/Vehicle, VEGFR/Vehicle and calculating the product of that
+```{r fig.height=6, fig.width=4}
+sample_mx <- function(x) {
+  rand <- sample(1:10,3, replace= TRUE) # pick a vehicle sample
+  veh <- data %>% dfilter(Treatment=="Vehicle") %>% pull(Tumor_size) %>% .[rand[1]]
+  var1 <- data %>% dfilter(Treatment=="F20855_10mpk") %>% pull(Tumor_size) %>% .[rand[2]]
+  var2 <- data %>% dfilter(Treatment=="VEGFR") %>% pull(Tumor_size) %>% .[rand[3]]
+  exp <- (var1/veh) * (var2/veh) 
+  #mpk20 <- var1/veh
+  return(exp)
+  }
+
+#exp_vegf <- sapply(seq_along(1:10000), sample_mx)
+#exp_mpk10 <- sapply(seq_along(1:10000), sample_mx)
+#exp_mpk20 <- sapply(seq_along(1:10000), sample_mx)
+exp_5mpk_combo2 <- sapply(seq_along(1:10000), sample_mx)
+exp_10mpk_combo2 <- sapply(seq_along(1:10000), sample_mx)
+exp_15mpk_combo2 <- sapply(seq_along(1:10000), sample_mx)
+
+median(exp_5mpk_combo)
+median(exp_10mpk_combo)
+median(exp_20mpk_combo)
+
+median(exp_5mpk_combo2)
+median(exp_10mpk_combo2)
+median(exp_15mpk_combo2)
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+getmode(exp_5mpk_combo2)
+median(exp_10mpk_combo2)
+median(exp_20mpk_combo2)
+
+data.frame(combo_5mpk= exp_5mpk_combo2, combo_10mpk=exp_10mpk_combo2, combo_15mpk=exp_15mpk_combo2) %>% gather(Combo,Effect) %>% mutate(Dose=if_else(grepl("5mpk",Combo),"5mpk",if_else(grepl("10mpk",Combo),"10mpk","15mpk"))) %>% mutate(Dose=factor(Dose,levels=c("5mpk","10mpk","15mpk"))) %>% mutate(Type=if_else(grepl("exp",Combo),"Expected","Observed"))  %>% mutate(Type= factor(Type)) %>% ggplot(aes(x=Effect,alpha=0.8, fill=Type,color=Type)) + geom_histogram(binwidth=0.05) +facet_wrap(~Dose,ncol=1) + xlim(0,2) + nolegend() 
+  
+  stat_density_ridges(binwidth=0.1,height=0.9,size=0.5, rel_min_height=0.01) + theme(text = element_text(size = 16)) +xlim(0,3)
+```
+Single agent
+Calculate the observed % therapeutic efficacy by random sampling 885/Vehicle, VEGFR/Vehicl
+```{r fig.height=6, fig.width=4}
+
+sample2 <- function(x) {
+  rand <- sample(1:10,3, replace= TRUE) # pick a vehicle sample
+  veh <- data %>% dfilter(Treatment=="Vehicle") %>% pull(Tumor_size) %>% .[rand[1]]
+  var1 <- data %>% dfilter(Treatment=="F20858_20mpk") %>% pull(Tumor_size) %>% .[rand[2]]
+  #var2 <- data %>% dfilter(Treatment=="VEGFR") %>% pull(Tumor_size) %>% .[rand[3]]
+  #exp <- (var1/veh) * (var2/veh) 
+  obs <- var1/veh
+  return(obs)
+  }
+
+#exp_vegf <- sapply(seq_along(1:10000), sample_mx)
+#exp_mpk10 <- sapply(seq_along(1:10000), sample_mx)
+#exp_mpk20 <- sapply(seq_along(1:10000), sample_mx)
+obs_5mpk <- sapply(seq_along(1:10000), sample2)
+
+obs_10mpk <- sapply(seq_along(1:10000), sample2)
+
+obs_20mpk <- sapply(seq_along(1:10000), sample2)
+
+data.frame(obs_5mpk, obs_10mpk, obs_20mpk) %>% gather(Combo,Effect) %>% mutate(Dose=if_else(grepl("5mpk",Combo),"5mpk",if_else(grepl("10mpk",Combo),"10mpk","20mpk"))) %>% mutate(Dose=factor(Dose,levels=c("5mpk","10mpk","20mpk"))) %>% ggplot(aes(x=Effect,alpha=0.8, fill=Type,color=Type)) + geom_histogram(binwidth=0.05) +facet_wrap(~Dose,ncol=1) + xlim(0,2) + nolegend() 
+  
+median(obs_5mpk_combo2)
+median(obs_10mpk_combo2)
+median(obs_20mpk_combo2)
+```
+
+Combo: Calculate the observed median combo effect by random sampling the n=10 data
+```{r fig.height=6, fig.width=5}
+library(ggridges)
+
+sample_combo <- function(x) {
+  rand <- sample(1:10,2, replace= TRUE) # pick a vehicle sample
+  veh <- data %>% dfilter(Treatment=="Vehicle") %>% pull(Tumor_size) %>% .[rand[1]]
+  var1 <- data %>% dfilter(Treatment=="F20855_5mpk_VEGFR") %>% pull(Tumor_size) %>% .[rand[2]]
+  Obs <- var1/veh
+  return(Obs)
+}
+
+#Obs_5mpk <- sapply(seq_along(1:10000), sample_combo)
+#Obs_10mpk <- sapply(seq_along(1:10000), sample_combo)
+#Obs_20mpk <- sapply(seq_along(1:10000), sample_combo)
+
+Obs_5mpk2 <- sapply(seq_along(1:10000), sample_combo)
+Obs_5mpk_combo2 <- Obs_5mpk2
+Obs_10mpk2 <- sapply(seq_along(1:10000), sample_combo)
+Obs_10mpk_combo2 <- Obs_10mpk2
+Obs_15mpk2 <- sapply(seq_along(1:10000), sample_combo)
+Obs_15mpk_combo2 <- Obs_15mpk2
+median(Obs_20mpk)
+
+obs <- cbind(obs_5mpk_combo,obs_10mpk_combo,obs_15mpk_combo) %>% data.frame
+
+#obs_exp <- cbind(exp_5mpk_combo,exp_10mpk_combo,exp_20mpk_combo,obs_5mpk_combo=Obs_5mpk,obs_10mpk_combo=Obs_10mpk,obs_20mpk_combo=Obs_20mpk) %>% data.frame
+
+obs_exp2 <- cbind(exp_5mpk_combo2,exp_10mpk_combo2,exp_15mpk_combo2,Obs_5mpk_combo2,Obs_10mpk_combo2,Obs_15mpk_combo2) %>% data.frame
+
+
+obs %>% gather(Combo, Effect) %>% mutate(Dose=if_else(grepl("15mpk",Combo),"15mpk",if_else(grepl("10mpk",Combo),"10mpk","5mpk"))) %>% mutate(Type=if_else(grepl("exp",Combo),"Expected","Observed")) %>% mutate(Dose=factor(Dose,levels=c("5mpk","10mpk","15mpk"))) %>% ggplot(aes(Effect, alpha=0.5, color=Type, fill=Type)) + geom_histogram(binwidth=0.05) + facet_wrap(~Dose,ncol=1) + nolegend() +xlim(0,2)
+
+obs_exp2 %>% gather(Combo, Effect) %>% dfilter(Effect < 1) %>% mutate(Dose=if_else(grepl("15mpk",Combo),"15mpk",if_else(grepl("10mpk",Combo),"10mpk","5mpk"))) %>% mutate(Type=if_else(grepl("exp",Combo),"Expected","Observed")) %>% ggplot(aes(Effect,colour=Type,fill=Type, alpha=0.5)) + geom_freqpoly(binwidth=0.1) + facet_wrap(~Dose)
+
+obs_exp2 %>% gather(Combo, Effect)  %>% mutate(Dose=if_else(grepl("15mpk",Combo),"15mpk",if_else(grepl("10mpk",Combo),"10mpk","5mpk"))) %>% mutate(Dose=factor(Dose,levels=c("15mpk","10mpk","5mpk"))) %>% mutate(Type=if_else(grepl("exp",Combo),"Expected","Observed")) %>% mutate(Type= factor(Type)) %>% ggplot(aes(y=Dose,x=Effect,alpha=0.8, fill=Type,color=Type)) + stat_density_ridges(quantile_lines=TRUE,scale=0.9, binwidth=0.5,height=0.9,size=0.5, rel_min_height=0.1, joint_bandwidth=0.3) + theme(text = element_text(size = 16)) + nolegend() +xlim(0,2)
+#%>% dfilter(Effect < 1)
+obs_exp %>% gather(Combo, Effect) %>% dfilter(Effect < 1) %>% mutate(Dose=if_else(grepl("5mpk",Combo),"5mpk",if_else(grepl("10mpk",Combo),"10mpk","20mpk"))) %>% mutate(Dose=factor(Dose,levels=c("5mpk","10mpk","20mpk"))) %>% mutate(Type=if_else(grepl("exp",Combo),"Expected","Observed")) %>% mutate(Type= factor(Type)) %>% ggplot(aes(y=Dose,x=Effect,alpha=0.8, fill=Type,color=Type)) + stat_density_ridges(quantile_lines=TRUE,scale=0.9, binwidth=0.5,height=0.9,size=0.5, rel_min_height=0.1, joint_bandwidth=0.3) + nolegend() + theme(text = element_text(size = 16))  
+
+median(Obs_5mpk_combo2)
+median(Obs_10mpk_combo2)
+median(Obs_15mpk_combo2)
+
+geo.mean(exp_5mpk_combo2)
+geo.mean(exp_10mpk_combo2)
+geo.mean(exp_15mpk_combo2)
+geo.mean(Obs_5mpk_combo2)
+geo.mean(Obs_10mpk_combo2)
+geo.mean(Obs_15mpk_combo2)
+
+x <- c(0.80, 0.83, 1.89, 1.04, 1.45, 1.38, 1.91, 1.64, 0.73, 1.46) # median 1.4
+y <- c(1.15, 0.88, 0.90, 0.74, 1.21) #median 0.9
+median(x)
+median(y)
+wilcox.test(x, y, alternative = "g")        # greater
+```
+Wilcoxon Signed rank test, non-paired data
+Greater = refers to the first listed variable being greater than the second one, not the other way around
+```{r}
+wilcox.test(obs_exp2$exp_5mpk_combo2,obs_exp2$Obs_5mpk_combo2, paired=FALSE,alternative="greater") #W = 59415274, p-value < 2.2e-16
+wilcox.test(obs_exp2$exp_10mpk_combo2,obs_exp2$Obs_10mpk_combo2, paired=FALSE,alternative="greater") #W = 62386543, p-value < 2.2e-16
+wilcox.test(obs_exp2$exp_15mpk_combo2,obs_exp2$Obs_15mpk_combo2, paired=FALSE,alternative="less") #W = 50577838, p-value = 0.157
+
+wilcox.test(obs_exp2$exp_5mpk_combo2[1:1000],obs_exp2$Obs_5mpk_combo2[1:1000], paired=FALSE, conf.int=TRUE) #W = 599275, p-value = 1.496e-14
+wilcox.test(obs_exp2$exp_5mpk_combo2[1:500],obs_exp2$Obs_5mpk_combo2[1:500], paired=FALSE) #W = 143888, p-value = 3.534e-05
+wilcox.test(obs_exp2$exp_5mpk_combo2[1:100],obs_exp2$Obs_5mpk_combo2[1:100], paired=FALSE, alternative="less") # W = 4893, p-value = 0.7947
+```
+Cut off the Effect < 1, and test again
+```{r}
+obs_exp2 %>% mutate(stupid= seq_along(1:10000)) %>% gather(combo, effect, -stupid) %>% dfilter(effect <= 1) %>% mutate(combo=factor(combo)) %>% pivot_wider(names_from=combo, values_from=effect, id_cols=stupid) #  
+
+obs_fil <- obs_exp2 %>% mutate(across(everything(), function(x) {x[x>1] <- NA; x}))
+
+wilcox.test(obs_fil$exp_5mpk_combo2,obs_fil$Obs_5mpk_combo2, paired=FALSE) #W = 59415274, p-value = 0.08075
+wilcox.test(obs_fil$exp_10mpk_combo2,obs_fil$Obs_10mpk_combo2, paired=FALSE) #W = 62386543, p-value = 0.9
+wilcox.test(obs_fil$exp_15mpk_combo2,obs_fil$Obs_15mpk_combo2, paired=FALSE,alternative="less") #W = 50577838, p-value = 0.157
+```
+

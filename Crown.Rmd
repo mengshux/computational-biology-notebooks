@@ -1,0 +1,221 @@
+---
+title: "Crown_XenoBase"
+author: "MX"
+date: "4/27/2020"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tibble)
+library(tidyr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+```
+
+
+```{r}
+crown_rna <- readxl::read_excel("/Volumes/Picard/FLX/GCN2/Crown_XenoBase_markers.xlsx") %>% dselect(-ID)
+```
+CCLE vs Crown data
+Crown 3978
+CCLE 5984
+
+Can't use this data, it's not normalized in any way.....how do they expect anyone to look at this meaningfully??????
+I'll download from CCLE, and then pick out the lines that Crown has in house
+https://portals.broadinstitute.org/ccle/data
+```{r fig.height=30, fig.width=15}
+crown_rna %>% dfilter(Source=="Crownbio")
+crown_rna %>% dfilter(Source=="CCLE") %>% arrange(`CELL LINE`)
+crown_rna %>% ggplot(aes(`CELL LINE`,`LOG2(FPKM)`, fill=`CANCER TYPE`)) + geom_bar(stat="identity") + facet_wrap(~GENE,ncol=20) + coord_flip()
+
+crown_rna %>% dfilter(grepl("253",`CELL LINE`))
+save(crown_rna,file="crown_rna.rdata")
+```
+
+Crown vs CCLE cell line names are different
+Take out the "_"
+Make everything CAPITAL
+who the fuck puts spaces in the the cell line names????????? take out spaces
+ccle 1019
+crown 447
+
+only 291 cell lines match by name
+and 318 cell lines match after CAPITALIZATION
+and 344 lines after removing spaces
+```{r}
+install.packages("Hmisc")
+library(Hmisc)
+library(fuzzyjoin)
+crown_lines <- crown_rna %>% dselect(`CELL LINE`,`CANCER TYPE`) %>% rename(Cellline=`CELL LINE`) %>% unique
+
+crown_lines %<>% mutate(Cellline= sedit(Cellline,"-","")) 
+crown_lines %<>% mutate(Cellline=toupper(Cellline)) 
+crown_lines %<>% mutate(Cellline= sedit(Cellline," ","")) 
+
+ccle_lines <- colnames(ccle[,2:1020]) %>% data.frame %>% mutate(Cellline=.data$.) %>% dselect(-.data$.) %>% separate(Cellline,into=c("Cellline","Tissue"), extra="merge", sep="_")
+crown_match <- crown_lines %>% left_join(ccle_lines,by="Cellline", keep=TRUE) %>% dfilter(!is.na(Tissue))
+#crown_lines %>% dfilter(Cellline=="COLO201")
+crown_list <- crown_match$Cellline
+```
+
+
+
+CCLE RSEM data
+```{r}
+ccle <- read.table(file="/Volumes/Picard/FLX/Reference_tables/CCLE_RNAseq_rsem_genes_tpm_20180929.txt", header=TRUE,sep="\t") %>% dselect(-transcript_ids)
+save(ccle,file="/Volumes/Picard/FLX/Reference_tables/CCLE_RNAseq_rsem.rdata")
+ccle[1:15,1:5]
+```
+
+Translate genes
+```{r}
+source("http://www.bioconductor.org/biocLite.R")
+require("biomaRt")
+listMarts()
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+listDatasets(mart)
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+listAttributes(mart)
+annotLookup <- getBM(
+  mart = mart,
+  attributes = c(
+    "ensembl_gene_id",
+    "external_gene_name")
+  )
+
+genes <- ccle$gene_id %>% data.frame %>% separate(.data$.,into=c("id",NA), sep='\\.') %>% pull(id)
+ccle %<>% mutate(gene_id=genes) %>% dselect(gene_id,everything())
+
+ccle %<>% left_join(annotLookup, by=c("gene_id"="ensembl_gene_id")) %>% dselect(external_gene_name, everything()) %>% dselect(-gene_id) 
+ccle$external_gene_name %>% unique %>% length #57820 thre are some duplicate genes
+ccle %<>% dfilter(!grepl("-AS1$",external_gene_name)) %>% group_by(external_gene_name) %>% summarise_if(is.numeric,sum) %>% ungroup()
+save(ccle,file="/Volumes/Picard/FLX/Reference_tables/ccle_RSEM_preNorm.rdata")
+```
+
+Normalize and take Z score of data
+```{r}
+ccle_norm <- normalizeBetweenArrays(ccle[,2:1020])
+ccle_norm %<>% data.frame %>% mutate(Gene=ccle$external_gene_name) %>% dselect(Gene,everything())
+ccle_norm %<>% dfilter(!is.na(Gene))
+save(ccle_norm,file="/Volumes/Picard/FLX/Reference_tables/ccle_RSEM_Norm.rdata")
+
+ccle_z <- ccle_norm %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene") 
+
+save(ccle_z, file="/Volumes/Picard/FLX/Reference_tables/ccle_z.rdata")
+```
+
+Select Crown lines out of CCLE data
+There were two cell lines called "TT" what aren't unique once the tissue name is removed
+```{r}
+ccle_crown_meta <- ccle_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample,into=c("Line","Tissue"), extra="merge", sep="_") %>% dfilter(Line %in% crown_list) %>% dselect(Line,Tissue) %>% mutate(Line=toupper(Line)) 
+
+ccle_meta <- ccle_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample,into=c("Line","Tissue"), extra="merge", sep="_") %>% dselect(Line,Tissue) %>% mutate(Line=toupper(Line))
+
+ccle_z_crown <- ccle_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample,into=c("Line","Tissue"), extra="merge", sep="_") %>% dfilter(Line %in% crown_list) %>% dselect(-Tissue) %>% dfilter(Line != "TT") %>% tibble::column_to_rownames("Line") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+ccle_z <- ccle_z %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample,into=c("Line","Tissue"), extra="merge", sep="_") %>% dselect(-Tissue) %>% dfilter(Line != "TT") %>% tibble::column_to_rownames("Line") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+save(ccle_z_crown,file="/Volumes/Picard/FLX/Reference_tables/ccle_z_crown.rdata")
+save(ccle_z,file="/Volumes/Picard/FLX/Reference_tables/ccle_z.rdata")
+```
+
+
+Calculate signature scores for CCLE data
+```{r}
+# c("ATF4","ASNS","DDIT3","PPP1R15A","TRIB3")
+isr_h
+aas_sig
+
+isr_ccle <- ccle_z_crown %>% dfilter(Gene %in% isr_h) %>% dselect(-Gene) %>% mutate_if(is.numeric, mean_mx) %>% unique
+aas_ccle <- ccle_z_crown %>% dfilter(Gene %in% aas_sig) %>% dselect(-Gene) %>% mutate_if(is.numeric, mean_mx) %>% unique
+atf4 <- ccle_z_crown %>% dfilter(Gene == "ATF4") %>% dselect(-Gene)
+gcn2 <- ccle_z_crown %>% dfilter(Gene == "EIF2AK4") %>% dselect(-Gene)
+nfe2l2 <- ccle_z_crown %>% dfilter(Gene == "NFE2L2") %>% dselect(-Gene)
+
+isr_ccle <- ccle_z %>% dfilter(Gene %in% isr_h) %>% dselect(-Gene) %>% mutate_if(is.numeric, mean_mx) %>% unique
+aas_ccle <- ccle_z %>% dfilter(Gene %in% aas_sig) %>% dselect(-Gene) %>% mutate_if(is.numeric, mean_mx) %>% unique
+atf4 <- ccle_z %>% dfilter(Gene == "ATF4") %>% dselect(-Gene)
+gcn2 <- ccle_z %>% dfilter(Gene == "EIF2AK4") %>% dselect(-Gene)
+nfe2l2 <- ccle_z %>% dfilter(Gene == "NFE2L2") %>% dselect(-Gene)
+
+sigs <- rbind(ISR_sig = isr_ccle, AAS_sig= aas_ccle, ATF4_zscore=atf4, GCN2_zscore=gcn2, NRF2_zscore=nfe2l2)
+
+```
+
+
+Graph
+```{r fig.height=48, fig.width=5}
+library(ggplot2)
+sigs %>% tibble::rownames_to_column("Signature") %>% gather(Cell_line, zscore,-Signature) %>% left_join(ccle_crown_meta, by=c("Cell_line"="Line")) %>% dfilter(Signature =="ISR_sig") %>% mutate(Tissue=factor(Tissue)) %>% mutate(Cell_line = fct_reorder(Cell_line, zscore)) %>% ggplot(aes(x=Cell_line, y=zscore, fill=Tissue))  + geom_bar(stat="identity") + facet_wrap(~Signature) + coord_flip() 
+
+sigs %>% tibble::rownames_to_column("Signature") %>% summarise_if(is.numeric,sum_mx) %>% gather(Cell_line, zscore) %>% left_join(ccle_crown_meta, by=c("Cell_line"="Line")) %>% mutate(Tissue=factor(Tissue)) %>% mutate(Cell_line = fct_reorder(Cell_line, zscore)) %>% ggplot(aes(x=Cell_line, y=zscore, fill=Tissue))  + geom_bar(stat="identity") + coord_flip() 
+
+library(scales)
+sigs %>% tibble::rownames_to_column("Signature") %>% gather(Cell_line, zscore,-Signature) %>% left_join(ccle_crown_meta, by=c("Cell_line"="Line")) %>% dfilter(Tissue !="HAEMATOPOIETIC_AND_LYMPHOID_TISSUE") %>% mutate(Tissue=factor(Tissue)) %>% mutate(Cell_line = fct_reorder(Cell_line, zscore)) %>% ggplot(aes(y=Cell_line, x=Signature, fill=zscore))  + geom_tile() + scale_fill_gradient2(low="green4", high="purple", mid= "gray90", limits=c(-5,5), oob=squish) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + scale_x_discrete(position = "top") #+ ggsave("Mouse_model_zz_YUMM_hypoxia.jpg", width=3, height=60, dpi=150, plot= last_plot(), units = "in")
+```
+
+Export scores for excel sheel: I will need to incorporate genotype and cell line data also
+
+Removed KEAP1 mutations because most of them are not known to be pathogenic, and Nrf2 expression is the more downstream signal anyway
+
+```{r}
+readxl::read_excel("/Volumes/Picard/FLX/GCN2/Crown_XenoBase_Mutations.xlsx") %>% dfilter(Source=="CCLEWES") %>% dselect(Sample,SYMBOL,Protein_position,Amino_acids,IMPACT) %>% pivot_wider(names_from=c(SYMBOL), values_from=c(Protein_position,Amino_acids,IMPACT))
+
+readxl::read_excel("/Volumes/Picard/FLX/GCN2/Crown_XenoBase_Mutations.xlsx") %>% dfilter(Source=="CCLEWES") %>% dselect(Sample,SYMBOL,Protein_position,Amino_acids,IMPACT)  %>% dfilter((SYMBOL=="BRAF"& Protein_position ==600) | (SYMBOL=="KRAS" & Protein_position == c(12,13,61))| (SYMBOL=="NRAS" & Protein_position == 61)| SYMBOL=="NFE2L2") %>% unite(Mutation,SYMBOL,Protein_position,Amino_acids, sep="_") %>% dselect(-IMPACT) %>% full_join(sigs %>% t %>% data.frame %>% tibble::rownames_to_column("Sample"), by="Sample") %>% left_join(ccle_crown_meta,by=c("Sample"="Line")) %>% arrange(desc(Mutation),desc(ISR_sig)) %>% dfilter(Tissue !="HAEMATOPOIETIC_AND_LYMPHOID_TISSUE") %>% write.table(file="/Volumes/Picard/FLX/GCN2/Crown_XenoBase_Mutations_Sig_scores.txt", sep="\t", row.names=FALSE,quote=FALSE)
+#%>% spread(key=SYMBOL, value=c(Protein_position))
+```
+Export all Signatures with Genotypes for a larger spreadsheet
+```{r}
+readxl::read_excel("/Volumes/Picard/FLX/GCN2/Crown_XenoBase_Mutations.xlsx") %>% dfilter(Source=="CCLEWES") %>% dselect(Sample,SYMBOL,Protein_position,Amino_acids,IMPACT)  %>% dfilter((SYMBOL=="BRAF"& Protein_position ==600) | (SYMBOL=="KRAS" & Protein_position == c(12,13))| (SYMBOL=="NRAS" & Protein_position == 61)| SYMBOL=="NFE2L2") %>% arrange(Sample) %>% full_join(sigs %>% t %>% data.frame %>% tibble::rownames_to_column("Sample"), by="Sample") %>% arrange(desc(ISR_sig)) %>% write.table(file="/Volumes/Picard/FLX/GCN2/Crown_XenoBase_Mutations_Signatures.txt", sep="\t")
+```
+
+Import CCLE mutation data
+```{r}
+CCLE_meta <- read.table("/Volumes/Picard/FLX/Reference_tables/CCLE_mutations.txt", sep="\t",header=TRUE) %>% dselect(-STUDY_ID) %>% separate(SAMPLE_ID,into=c("Model","Tissue"),sep="_") %>% dfilter((grepl("V600",BRAF) | is.na(BRAF)) & (grepl("^G1",KRAS) | is.na(KRAS)) & (grepl("^Q61",NRAS) | is.na(NRAS)))
+```
+
+Merge CCLE
+```{r}
+sigs %>% t %>% data.frame %>% tibble::rownames_to_column("Model") %>% left_join(CCLE_meta, by="Model") %>% arrange(desc(ISR_sig)) %>% dfilter(Tissue !="HAEMATOPOIETIC") %>% write.table(file="/Volumes/Picard/FLX/GCN2/CCLE_All_Mutations_Signatures.txt", sep="\t", row.names=FALSE, quote=FALSE)
+```
+Champion data
+
+```{r}
+champ <- read.table("/Volumes/Picard/FLX/GCN2/Champion_data.txt", header=TRUE,sep="\t")
+meta_champion <- champ %>% dselect(Model,Tumor.type) %>% unique %>% mutate(Model=sedit(Model,"-","."))
+```
+make a matrix out of this: this is the z.score table
+```{r}
+champ_z <- champ %>% dselect(-Fold.expression, -Tumor.type) %>% pivot_wider(names_from=c(Gene), values_from=c(z.score)) %>% tibble::column_to_rownames("Model") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+```
+Calculate signture scores
+```{r}
+isr_ccle <- champ_z  %>% dfilter(Gene %in% isr_h) %>% dselect(-Gene) %>% mutate_if(is.numeric, mean_mx) %>% unique
+aas_ccle <- champ_z  %>% dfilter(Gene %in% aas_sig) %>% dselect(-Gene) %>% mutate_if(is.numeric, mean_mx) %>% unique
+atf4 <- champ_z  %>% dfilter(Gene == "ATF4") %>% dselect(-Gene)
+#gcn2 <- champ_z  %>% dfilter(Gene == "EIF2AK4") %>% dselect(-Gene)
+#nfe2l2 <- champ_z  %>% dfilter(Gene == "NFE2L2") %>% dselect(-Gene)
+
+champ_sigs <- rbind(ISR_sig = isr_ccle, AAS_sig= aas_ccle, ATF4_zscore=atf4)
+
+```
+
+```{r}
+champ_sigs_tumor <- champ_sigs %>% t %>% data.frame %>% tibble::rownames_to_column("Model") %>% arrange(-ISR_sig) %>% left_join(meta_champion, by="Model")
+```
+Get the mutation information
+```{r}
+champ_mut <- read.table("/Volumes/Picard/FLX/GCN2/Champion_mutation.txt", header=TRUE,sep="\t") %>% mutate(Model=sedit(Model,"-",".")) %>% dselect(-Effect, -Change,-Impact,-Tumor.type)  %>% dfilter(Gene=="BRAF" & Amino.acid.change =="V600E" | Gene=="KRAS" & grepl("^G1|^Q61",Amino.acid.change) ) %>% unite(Mutation, Gene, Amino.acid.change, sep="_")
+```
+Final spreadsheet
+```{r}
+champion_final <- champ_sigs_tumor %>% left_join(champ_mut, by="Model")
+save(champion_final,file="/Volumes/Picard/FLX/GCN2/Champion_final.rdata")
+
+champ_sigs_tumor %>% left_join(champ_mut, by="Model") %>% write.table(file="/Volumes/Picard/FLX/GCN2/Champion_Mutations_Signatures.txt", sep="\t", row.names=FALSE, quote=FALSE)
+```
+

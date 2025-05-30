@@ -1,0 +1,165 @@
+---
+title: "HRI_regulation_Seq"
+author: "Mengshu"
+date: "8/9/2019"
+output: html_document
+---
+```{r}
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+detach_package("tidyverse")
+library(tibble)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+
+Mouse HRI-/- and WT
+GSE119365 RNA seq dataset
+Illumina HiSeq 2000 (Mus musculus)
+This experiment is done in purified erythroblasts from fetal liver
+```{r}
+files <- list.files(path="/Volumes/Enterprise/FLX/GCN2/ISR_data/GSE119365_RAW/", pattern="*.txt$", full.names = TRUE)
+file_names <-  list.files(path="/Volumes/Enterprise/FLX/GCN2/ISR_data/GSE119365_RAW/", pattern="*.txt$", full.names = FALSE)
+data <- lapply(files,read.table)
+str(data)
+names(data) <- file_names
+matrix <- do.call("cbind",data)
+#matrix1 <- bind_cols(data)
+HRI_meta <- matrix %>% tibble::column_to_rownames("V1") %>% select_if(is.numeric) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample, sep="_|.txt.",into=c("GSM","rna","seq","genotype","Fe","replicate","trash2","trash3")) %>% dselect(GSM,genotype,Fe,replicate)
+save(HRI_meta, file="GSE119365_meta.rdata")
+load("GSE119365_meta.rdata")
+
+HRI_matrix <- matrix %>% tibble::column_to_rownames("GSM3371777_rna_seq_wt_plus_r1.txt.V1") %>% select_if(is.numeric)
+colnames(HRI_matrix) <- HRI_meta$GSM
+save(HRI_matrix,file="GSE119365_matrix.rdata")
+load("/Volumes/Enterprise/FLX/GCN2/ISR_data/GSE119365_matrix.rdata")
+```
+
+Metadata
+```{r}
+HRI_meta
+```
+DESeq2
+Make sure the data matrix sample order in the columns matches the order of the metadata rows for the samples
+Create deseq2 object
+Set the reference conditions
+in the design, put the more important factor on the end. In this case, it could be either one. 
+DESeq2 can't do multifactor DE analysis, so I have to split up the data into groups and do pair-wise analyses; so stupid
+```{r}
+library(DESeq2)
+wt <- as.matrix(HRI_matrix %>% tibble::column_to_rownames("Rik") %>% dselect(GSM3371777:GSM3371782))
+wt_meta <- as.matrix(HRI_meta %>% tibble::column_to_rownames("GSM") %>% dfilter(genotype=="wt"))
+
+dds_wt <- DESeqDataSetFromMatrix(countData = wt,
+                              colData = wt_meta,
+                              design= ~ Fe)
+
+ko <- as.matrix(HRI_matrix %>% tibble::column_to_rownames("Rik") %>% dselect(GSM3371783:GSM3371788))
+ko_meta <- as.matrix(HRI_meta %>% tibble::column_to_rownames("GSM") %>% dfilter(genotype=="ko"))
+
+dds_ko <- DESeqDataSetFromMatrix(countData = ko,
+                              colData = ko_meta,
+                              design= ~ Fe)
+
+fe_minus <- as.matrix(HRI_matrix %>% tibble::column_to_rownames("Rik") %>% dselect(GSM3371780:GSM3371782,GSM3371786:GSM3371788))
+fe_minus_meta <- as.matrix(HRI_meta %>% tibble::column_to_rownames("GSM") %>% dfilter(Fe=="minus"))
+
+dds_fe_minus <- DESeqDataSetFromMatrix(countData = fe_minus,
+                              colData = fe_minus_meta,
+                              design= ~ genotype)
+
+dds_wt$Fe <- relevel(dds_wt$Fe, ref="plus")
+dds_ko$Fe <- relevel(dds_ko$Fe, ref="plus")
+dds_fe_minus$genotype <- relevel(dds_fe_minus$genotype, ref="ko")
+```
+Prefilter data
+```{r}
+keep <- rowSums(counts(dds_wt)) >= 10
+dds_wt <- dds_wt[keep,]
+
+keep <- rowSums(counts(dds_ko)) >= 10
+dds_ko <- dds_ko[keep,]
+
+keep <- rowSums(counts(dds_fe_minus)) >= 10
+dds_fe_minus <- dds_fe_minus[keep,]
+```
+
+DE analysis
+```{r}
+dds_wt <- DESeq(dds_wt)
+result_wt <- results(dds_wt)
+resultsNames(dds_wt)
+
+dds_ko <- DESeq(dds_ko)
+result_ko <- results(dds_ko)
+resultsNames(dds_ko)
+
+dds_fe_minus <- DESeq(dds_fe_minus)
+result_fe_minus <- results(dds_fe_minus)
+resultsNames(dds_fe_minus)
+```
+
+Shrink log fold change for visualization (so the number range isn't so huge)
+```{r}
+source("https://bioconductor.org/biocLite.R")
+biocLite("apeglm")
+library(apeglm)
+resultLFC_wt <- lfcShrink(dds_wt, coef="Fe_minus_vs_plus", type="apeglm")
+resultLFC_ko <- lfcShrink(dds_ko, coef="Fe_minus_vs_plus", type="apeglm")
+resultLFC_fe_minus <- lfcShrink(dds_fe_minus, coef="genotype_wt_vs_ko", type="apeglm")
+```
+
+
+
+```{r}
+summary(result_wt) #43 UP 
+summary(result_ko) #18 UP
+summary(result_fe_minus) #34 UP
+res_wt_Ordered <- result_wt[order(result_wt$pvalue),]
+res_ko_Ordered <- result_ko[order(result_ko$pvalue),]
+res_fe_minus_Ordered <- result_fe_minus[order(result_fe_minus$pvalue),]
+
+res_wt_sig <- subset(res_wt_Ordered, padj < 0.1 & log2FoldChange >1) # 43
+res_ko_sig <- subset(res_ko_Ordered, padj < 0.5 & log2FoldChange >1) # 16
+res_fe_minus_sig <- subset(res_fe_minus_Ordered, padj < 0.1 & log2FoldChange >1)
+
+sum(res_fe_minus_sig$padj < 0.05, na.rm=TRUE) # 41
+```
+Differential on the DE
+setdiff(A,B) present in A, but not present in B
+intersect(A,B)
+```{r}
+rownames(res_wt_sig)
+rownames(res_ko_sig)
+rownames(res_fe_minus_sig)
+WTonly_Fe_minus_vs_plus <- setdiff(rownames(res_wt_sig),rownames(res_ko_sig))
+intersect(rownames(res_wt_sig),rownames(res_ko_sig))
+
+intersect(WTonly_Fe_minus_vs_plus,rownames(res_fe_minus_sig))
+```
+
+
+Plot results
+```{r}
+plotMA(result_wt)
+plotMA(resultLFC_wt, ylim=c(-2,2))
+plotMA(result_ko)
+plotMA(resultLFC_ko, ylim=c(-2,2))
+plotMA(result_fe_minus)
+plotMA(resultLFC_fe_minus, ylim=c(-2,2))
+```
+
+Export
+
+```{r}
+write.csv(as.data.frame(res_wt_Ordered), 
+          file="DeSeq2_WT_Fe_minus_vs_plus.csv")
+write.csv(as.data.frame(res_ko_Ordered), 
+          file="DeSeq2_ko_Fe_minus_vs_plus.csv")
+write.csv(as.data.frame(res_fe_minus_Ordered), 
+          file="DeSeq2_Fe_minus_wt_vs_ko.csv")
+```
+
+

@@ -1,0 +1,238 @@
+---
+title: "20CT26_009_VEGF_combo"
+author: "MX"
+date: "7/21/2020"
+output: html_document
+---
+
+```{r}
+library(limma)
+library(tidyverse)
+#update.packages("ggplot2")
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+library(DESeq2)
+library(edgeR)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+sum_mx <- function(x) {sum(x,na.rm=TRUE)}
+mean_mx <- function(x) {mean(x,na.rm=TRUE)}
+
+```
+
+Saving and Loading Zone
+```{r}
+save(tpm_gene,file="/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/tpm_gene.rdata") 
+file="/Volumes/Picard/FLX/Reference_tables/Ensembl_Manu_GeneTranslator.rdata")
+
+save(tpm_norm,file="/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/tpm_norm.rdata") 
+load("/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/tpm_norm.rdata")
+
+save(tpm_z,file="tpm_z.rdata")
+load("/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/tpm_z.rdata")
+```
+
+Read in the data
+```{r}
+file_names <- list.files("/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/", pattern=".tsv") %>% lapply(function(i) {strsplit(i,".kallisto")[[1]][1]})
+files <- base::list.files("/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/", pattern=".tsv", full.names=TRUE)
+#strsplit("G_AAS_1.kallisto_quant.abundance.tsv","\\.")[[1]][1]
+data_files <- lapply(files, function(i){read.table(i,header=TRUE)})
+tpms <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+rownames(tpms) <- data_files[[1]]$target_id
+colnames(tpms) <- file_names
+```
+
+Normalize data for plotting
+Sum by genes
+and take gene-wise z_score
+```{r}
+gencode_symbol <- read.table("/Volumes/Picard/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+
+tpm_gene <- tpms %>% data.frame %>% tibble::rownames_to_column("Gencode") %>% left_join(gencode_symbol, by="Gencode") %>% dselect(Symbol,everything()) %>% dselect(-Gencode) %>% group_by(Symbol) %>% mutate_if(is.numeric,sum_mx) %>% unique %>% ungroup
+
+tpm_norm <- normalizeBetweenArrays(tpm_gene[2:13]  %>% as.matrix)
+boxplot(tpm_norm)
+rownames(tpm_norm) <- tpm_gene$Symbol
+tpm_norm %<>% data.frame %>% tibble::rownames_to_column("Gene")
+tpm_norm %<>% dfilter(!grepl("Gm|Rik",Gene))   
+
+tpm_z <- tpm_norm %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+```
+
+Metadata
+```{r}
+meta <- cbind(Sample=colnames(tpm_norm)[2:13],Treatment=c(rep(c("Vehicle","282 15mpk BID","aVEGFR","Combo"),each=3)), Rep=rep(c(1,2,3),4), Tumor_size=c(124,303,76,238,165,301,47,95,248,175,147,108)) %>% data.frame %>% mutate(Treatment = factor(Treatment,levels=c("Vehicle","282 15mpk BID","aVEGFR","Combo")))
+
+meta <- cbind(Sample=colnames(tpm_norm)[2:13],Treatment=c(rep(c("Vehicle","282_15mpk","aVEGFR","Combo"),each=3)), Rep=rep(c(1,2,3),4), Tumor_size=c(124,303,76,238,165,301,47,95,248,175,147,108)) %>% data.frame %>% mutate(Treatment = factor(Treatment,levels=c("Vehicle","282_15mpk","aVEGFR","Combo")))
+```
+Myeloid cell markers
+```{r fig.height=6, fig.width=4}
+tpm_norm %>% dfilter(Gene %in% c("Lag3","Havcr2","Pdcd1","Tox","Nr4a1"))%>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample"))  %>% ggplot(aes(x=Treatment, y=mRNA_TPM, fill=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + ylim(0,NA) + scale_fill_manual(values=c("grey50","dodgerblue3","deepskyblue2","deepskyblue","orange","orangered1","darkorange2","darkorange1")) 
+
+tpm_norm %>% dfilter(Gene %in% c("Csf1","Cxcr2","Ido1","Cd83")) %>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample"))  %>% ggplot(aes(x=Treatment, y=mRNA_TPM, fill=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + ylim(0,NA) + scale_fill_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) 
+
+tpm_norm %>% dfilter(Gene %in% c("Csf1","Cxcr2","Ido1","Cd83")) %>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample"))  %>% ggplot(aes(x=Treatment, y=mRNA_TPM, fill=Treatment)) + geom_boxplot() + geom_point(aes(size=Tumor_size,alpha=0.5)) + facet_wrap(~Gene, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + ylim(0,NA) + scale_fill_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) 
+
+tpm_norm %>% dfilter(Gene %in% c("Arg1","Nos2")) %>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample"))  %>% ggplot(aes(x=Treatment, y=mRNA_TPM, fill=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + ylim(0,NA) + scale_fill_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) 
+
+tpm_norm %>% dfilter(Gene %in% c("Cxcl1","Adam8","Cxcl3","Cxcl2","Thbs4")) %>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample"))  %>% ggplot(aes(x=Treatment, y=mRNA_TPM, fill=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + ylim(0,NA) + scale_fill_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) 
+
+tpm_norm %>% dfilter(Gene %in% c("Arg1","Nos2")) %>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample"))  %>% ggplot(aes(x=Treatment, y=mRNA_TPM, fill=Treatment)) + geom_boxplot() + geom_point(aes(size=Tumor_size, alpha=0.5)) + facet_wrap(~Gene, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + ylim(0,NA) + scale_fill_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) 
+
+pair <- tpm_norm %>% dfilter(Gene %in% c("Cd83")) %>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample")) 
+t.test(pair %>% dfilter(Treatment=="Vehicle") %>% pull(mRNA_TPM) , pair %>% dfilter(Treatment=="Combo") %>% pull(mRNA_TPM) , alternative="two.sided")
+# "deepskyblue2","deepskyblue","orange","orangered1","darkorange2"
+```
+T cell
+```{r fig.height=8, fig.width=4}
+tpm_norm %>% dfilter(Gene %in% c("Cd8a","Cd4","Nkg7")) %>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample"))  %>% ggplot(aes(x=Treatment, y=mRNA_TPM, fill=Treatment)) + geom_boxplot() + geom_point(aes(size=Tumor_size, alpha=0.3)) + facet_wrap(~Gene, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + ylim(0,NA) + scale_fill_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) + scale_color_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) 
+
+pair <- tpm_norm %>% dfilter(Gene %in% c("Cd8a")) %>% gather(Sample,mRNA_TPM,-Gene)  %>% left_join(meta,by=c("Sample")) 
+t.test(pair %>% dfilter(Treatment=="Vehicle") %>% pull(mRNA_TPM) , pair %>% dfilter(Treatment=="282_15mpk") %>% pull(mRNA_TPM) , alternative="two.sided")
+
+```
+
+Signatures
+```{r}
+
+load(file="/Volumes/Picard/FLX/Reference_tables/TAN_sig_m.rdata") #TAN_sig_m
+
+load(file="/Volumes/Picard/FLX/Reference_tables/Neutrophil_sig_m.rdata") # Neutrophil_sig_m, 
+
+load(file="/Volumes/Picard/FLX/Reference_tables/gMDSC_Talmadge_sig_m.rdata") #gMDSC_sig_m
+
+TAN_score <- tpm_z %>% dfilter(Gene %in% TAN_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="TAN_score") %>% tibble::column_to_rownames("rownames")
+
+Neutrophil_score <- tpm_z %>% dfilter(Gene %in% Neutrophil_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="Neutrophil_score") %>% tibble::column_to_rownames("rownames")
+
+gMDSC_score <- tpm_z %>% dfilter(Gene %in% gMDSC_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="gMDSC_score") %>% tibble::column_to_rownames("rownames")
+
+granolocytes <- rbind(TAN_score,Neutrophil_score,gMDSC_score)
+
+CSF1R_sig_m
+
+CSF1R_exp_score <- tpm_z %>% dfilter(Gene %in% CSF1R_sig_m) %>% mutate_if(is.numeric,mean_mx) %>% dselect(-Gene) %>% unique %>% ungroup %>% mutate(rownames="TAM_score_CSF1R_study") %>% tibble::column_to_rownames("rownames")
+
+```
+Graph scores
+```{r fig.height=6, fig.width=4}
+granolocytes %>% tibble::rownames_to_column("Signature") %>% gather(Sample,Signature_zscore,-Signature) %>% left_join(meta,by=c("Sample")) %>% ggplot(aes(x=Treatment, y=Signature_zscore, fill=Treatment)) + geom_boxplot() + geom_point(aes(size=Tumor_size, alpha=0.5)) + facet_wrap(~Signature, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + scale_fill_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) 
+
+pair <- granolocytes %>% tibble::rownames_to_column("Signature") %>% gather(Sample,Signature_zscore,-Signature) %>% left_join(meta,by=c("Sample")) %>% dfilter(Signature %in% c("TAN_score"))
+t.test(pair %>% dfilter(Treatment=="Vehicle") %>% pull(Signature_zscore) , pair %>% dfilter(Treatment=="Combo") %>% pull(Signature_zscore) , alternative="two.sided")
+
+CSF1R_exp_score %>% tibble::rownames_to_column("Signature") %>% gather(Sample,Signature_zscore,-Signature) %>% left_join(meta,by=c("Sample")) %>% ggplot(aes(x=Treatment, y=Signature_zscore, fill=Treatment)) + geom_boxplot() + geom_point() + facet_wrap(~Signature, scales="free_y", ncol=1) + nolegend() + theme(axis.text.x = element_text(angle=45,size=12, vjust=1, hjust=1),strip.text=element_text(size=12)) + xlab("") + scale_fill_manual(values=c("grey50","#0A95A7","#FE9F33","#E5541B")) 
+
+pair <- CSF1R_exp_score %>% tibble::rownames_to_column("Signature") %>% gather(Sample,Signature_zscore,-Signature) %>% left_join(meta,by=c("Sample")) 
+
+t.test(pair %>% dfilter(Treatment=="Vehicle") %>% pull(Signature_zscore) , pair %>% dfilter(Treatment=="Combo") %>% pull(Signature_zscore) , alternative="two.sided")
+
+```
+
+DEG analysis
+
+```{r}
+library(DESeq2)
+#BiocManager::install("tximport")
+library(tximport)
+#BiocManager::install("tximeta")
+#library(tximport)
+
+gencode_symbol <- read.table("/Volumes/Picard/FLX/Reference_tables/GRCm38_GENCODE2SYMBOL.txt",sep="\t",header=TRUE) %>% data.frame
+my_files <- list.files("/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/", pattern=".tsv", full.names=TRUE)
+all(file.exists(my_files)) # TRUE
+
+my_files <- my_files[c(-6,-11)]
+
+ct26 <- tximport(my_files, type="kallisto", tx2gene=gencode_symbol)
+#colnames(renca$counts) <- colnames(tpm_gene)[2:42]
+meta %<>% mutate(Tumor_size= as.numeric(Tumor_size))
+
+ct26_des <- DESeqDataSetFromTximport(ct26,
+                                   colData = meta,
+                                   design= ~ Treatment)
+save(ct26_des,file="CT26_VEGF_DESeq2.rdata")
+
+```
+
+PCA plot
+
+```{r}
+rct26 <- rlog(ct26_des)
+data <- plotPCA(rct26, intgroup=c("Treatment","Sample","Tumor_size"), returnData=TRUE)
+ggplot(data, aes(PC1,PC2, fill=Treatment, label=Treatment, alpha=0.1)) + geom_label(vjust = "inward", hjust = "inward") + geom_point(aes(size=Tumor_size))
+```
+
+DE
+```{r}
+ct26_des$Treatment <- relevel(ct26_des$Treatment, ref = "Vehicle")
+ct26_des <- DESeq(ct26_des)
+
+res_282 <- results(ct26_des, name="Treatment_282_15mpk_vs_Vehicle")
+
+
+res_282_f <- res_282 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange <= -1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene))   
+res_282 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange <= -1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/282_DN.txt", quote=FALSE, sep="\t", row.names = FALSE)
+
+res_282_f <- res_282 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.1,log2FoldChange >= 1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene))   
+res_282 %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange >= 1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/282_UP.txt", quote=FALSE, sep="\t", row.names = FALSE)
+
+
+res_combo <- results(ct26_des, name="Treatment_Combo_vs_Vehicle")
+res_combo_D <- res_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange <= -1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene))   
+res_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange <= -1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/Combo_DN.txt", quote=FALSE, sep="\t", row.names = FALSE)
+
+res_combo_U <- res_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange >= 1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene))  
+
+res_combo <- results(ct26_des, name="Treatment_Combo_vs_Vehicle")
+
+res_combo_f <- res_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange >= 1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene))   
+res_combo %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj <= 0.05,log2FoldChange >= 1) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="/Volumes/Picard/FLX/GCN2/CT26_VEGF_JUL2020/Combo_UP.txt", quote=FALSE, sep="\t", row.names = FALSE)
+
+
+intersect(res_15_f$Gene, res_5_f$Gene)
+intersect(res_15_f$Gene, res_5_f$Gene) %>% write.table(file="282_DN_shared_5_15mpk.txt", sep="\t",quote=FALSE, row.names = FALSE)
+intersect(intersect(res_5_f$Gene, res_50_f$Gene),intersect(res_15_f$Gene, res_50_f$Gene)) %>% write.table(file="282_DN_shared_64.txt", sep="\t",quote=FALSE, row.names = FALSE)
+
+combo <- intersect(intersect(res_5mpk_vegf_f,res_15mpk_vegf_f), intersect(res_5mpk_vegf_f,res_50mpk_vegf_f))  %>% write.table(file="Combo_DN_shared.txt", sep="\t",quote=FALSE, row.names = FALSE)
+combo_VEGF <- intersect(combo,res_vegf_f)
+
+res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange <= -0.5) %>% arrange(pvalue) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% write.table(file="RENCA_19_10_DN.txt",sep="\t", quote=FALSE,row.names = FALSE)
+sig_UP <- res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange >= 0.5) %>% arrange(-log2FoldChange) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% pull(Gene)
+sig_DN <- res %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(pvalue <= 0.003,log2FoldChange <= -0.5) %>% arrange(-log2FoldChange) %>% dfilter(!grepl("Gm|Rik",Gene))  %>% pull(Gene)
+sig_UP %>% data.frame
+```
+
+MA plot
+```{r}
+plotMA(res, ylim=c(-7,7))
+plotMA(res05, ylim=c(-7,7))
+plotMA
+```
+Volcano Plot
+
+https://www.biostars.org/p/282295/
+
+```{r fig.height=10, fig.width=7}
+#install.packages("devtools")
+#devtools::install_github("hadley/devtools")
+#devtools::install_github('kevinblighe/EnhancedVolcano')
+library(EnhancedVolcano)
+
+pdf("Volcanoplot_ct26_vegf.pdf",width = 8, height = 10)
+EnhancedVolcano(results(ct26_des, contrast=c("Treatment","Combo","Vehicle")),
+                 lab = rownames(results(ct26_des, contrast=c("Treatment","Combo","Vehicle"))),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0, 10),
+                 xlim = c(-7.5, 7.5),
+                 #ylim = c(-0.1, 6),
+                 ylab = bquote(~-Log[10]~~italic(P)),
+                 title = 'CT26 Combo vs Vehicle',
+                 pCutoff = 0.01,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'blue'),
+                 colAlpha = 1)
+dev.off()
+```

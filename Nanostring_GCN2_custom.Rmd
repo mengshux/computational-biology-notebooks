@@ -1,0 +1,225 @@
+---
+title: "GCN2_NanoString_custom"
+author: "Mengshu"
+date: "1/16/2020"
+output: html_document
+---
+
+
+Process raw data from GCN2 custom panel samples
+Input is normalized to 1.5ug. Samples were ballpark 300-400 ng/uL
+```{r}
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tibble)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+19_RENCA_010
+
+20_RENCA_001
+
+```{r}
+renca <- read.table(file="/Volumes/Enterprise/FLX/Nanostring/GCN2_custom_panel/19RENCA010_Nanostring.txt", sep="\t",skip=1, header=TRUE)
+colnames(renca) <- c("Gene","Type","Veh_1","Veh_2","Veh_3","Veh_4","RPT659_1","RPT659_2","RPT659_3","RPT659_4","RPT282_1","RPT282_2","RPT282_3","RPT282_4")
+renca %<>% dselect(-Type)
+renca %<>% dfilter(!grepl("^NEG",Gene), !grepl("^POS",Gene))
+
+save(renca_norm,file="renca_norm.rds")
+load("renca_norm.rds")
+save(renca,file="renca.rds")
+
+renca2 <- read.table(file="/Volumes/Enterprise/FLX/Nanostring/GCN2_custom_panel/20_RENCA_001.txt", sep="\t",skip=1, header=TRUE)
+colnames(renca2) <- c("Gene","Veh_5_2","Veh_5_3","RPT282_9_1","RPT282_10_1","RPT282_10_2","RPT282_10_3","VEGF_14_1","VEGF_14_2","VEGF_14_3","Combo_19_1","Combo_19_2","Combo_19_3")
+renca2 %<>% dfilter(!grepl("^NEG",Gene), !grepl("^POS",Gene))
+renca2_samples <- colnames(renca2)
+```
+
+Check total read counts
+
+   Veh_1    Veh_2    Veh_3    Veh_4 RPT659_1 RPT659_2 RPT659_3 RPT659_4 RPT282_1 RPT282_2 RPT282_3 RPT282_4 
+ 1047248   511767   949708   602916   312055   661006   733197   925168  1067157  1013043  1027888   580713 
+ 
+```{r fig.height=4, fig.width=9}
+total_reads <- renca %>% dselect(-Gene) %>% colSums() %>% t %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Sample = factor(Sample, levels=Sample))
+colnames(total_reads) <- c("Sample", "Total_Counts")
+ggplot(total_reads,aes(x=Sample,y=Total_Counts)) + geom_bar(stat="identity")
+
+
+renca %<>% mutate(Group= c(rep("Veh",4),rep("RPT659",4),rep("RPT282",4)))
+```
+Check Housekeeping genes and Normalize by total reads 
+```{r fig.height=4, fig.width=9}
+renca %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx"))  %>% gather(Sample,Counts,-Gene) %>% separate(Sample, into= c("Group","Rep"), sep="_") %>% ggplot(aes(x=Group,y=Counts)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, ncol=3, scale="free_y")
+
+renca2 %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx"))  %>% gather(Sample,Counts,-Gene) %>% separate(Sample, into= c("Group","Rep"), sep="_") %>% ggplot(aes(x=Group,y=Counts)) + geom_boxplot() + geom_point() + facet_wrap(~Gene, ncol=3, scale="free_y")
+```
+
+Do Housekeeping genes correlate with total counts?
+```{r fig.height=13, fig.width=13.5}
+renca %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx")) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble:: rownames_to_column("Sample") %>% mutate(Tot_count=total_reads$Total_Counts) %>% ggplot(aes(x=Daxx, y=Tot_count, label=Sample)) + geom_point() + geom_label(aes(alpha=0.5))
+renca %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx"))%>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble:: rownames_to_column("Sample") %>% mutate(Tot_count=total_reads$Total_Counts) %>% ggplot(aes(x=Tbp, y=Tot_count)) + geom_point()
+
+renca %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx"))%>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble:: rownames_to_column("Sample") %>% mutate(Tot_count=total_reads$Total_Counts) %>% ggplot(aes(x=Gapdh, y=Tot_count, label=Sample)) + geom_point() + geom_label(aes(alpha=0.5))
+
+renca %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx")) %>% dselect(-Type) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble:: rownames_to_column("Sample") %>% mutate(Tot_count=total_reads$Total_Counts) %>% mutate(GeoMean= geo.mean(c(Daxx,Gapdh,Tbp))) %>% ggplot(aes(x=Gapdh, y=Tot_count)) + geom_point()
+
+renca %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx")) %>% dselect(-Type) %>% tibble::column_to_rownames("Gene")
+
+hk <- renca %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx")) %>% dselect(-Type) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble:: rownames_to_column("Sample") %>% mutate(Tot_count=total_reads$Total_Counts)
+cor(hk$Tot_count,hk$Tbp) # 0.94
+cor(hk$Tot_count,hk$Gapdh) # 0.99
+cor(hk$Tot_count,hk$Daxx) # 0.96
+
+```
+Gapdh Max= 632713
+Gapdh Min= 203786
+
+colsum min = 312055
+colsum max = 1067157
+
+Normalize to total Read Count
+To normalize, dplyr does not apply norm factors across rows, so I have to flip the matrix and apply normalization by columns, and then flip it back
+```{r fig.height=25, fig.width=25}
+col_sum <- colSums(renca[2:13])
+renca_norm <- t((t(renca %>% tibble::column_to_rownames("Gene"))/col_sum)*1044515)
+colSums(renca_norm)
+
+
+col_sum2 <- colSums(renca2[2:13])
+renca2_norm <- t((t(renca2 %>% tibble::column_to_rownames("Gene"))/col_sum2)*1044515)
+colSums(renca2_norm)
+
+renca_12_norm <- cbind(renca_norm,renca2_norm)
+colSums(renca_12_norm)
+```
+
+Normalizing to Total Read count shows variation in the Vehicle group that is not due to tumor size, but still follows the bias from RNA input, in the markers GCN2/EIF2AK4 and GADD34/PPP1R15A, Soat2, Vegf etc: DAXX mirrors this bias. 
+Try normalizing to DAXX counts
+
+```{r}
+daxx <- colSums(renca %>% dfilter(Gene == "Daxx") %>% .[,2:13])
+renca_norm_daxx <- t((t(renca %>% tibble::column_to_rownames("Gene"))/daxx)*2000)
+```
+
+
+Normalize to GeoMean of all Housekeeping genes
+Normalizing to Daxx fixes some problems and creates other ones
+```{r}
+hk <- colSums(renca %>% dfilter(Gene %in% c("Daxx","Gapdh")) %>% summarise_if(is.numeric,geo.mean) %>% .[,1:12])
+renca_norm_hk <- t((t(renca %>% tibble::column_to_rownames("Gene"))/hk)*10000)
+```
+
+
+Add tumor mass to the data
+```{r}
+tumor_mass <- c(393,292,205.5,378.6,434.4,524.99,235.08,248.66,119.23,107.99,112.68,332.65) %>% t %>% data.frame 
+rownames(tumor_mass) <- "Tumor_mass"
+colnames(tumor_mass) <- colnames(renca_norm)
+mass <- t(tumor_mass) %>% data.frame %>% tibble::rownames_to_column("Sample")
+
+
+renca_norm <- rbind(renca_norm,tumor_mass)
+# combo
+tumor_mass_12 <- c(393,292,205.5,378.6,434.4,524.99,235.08,248.66,119.23,107.99,112.68,332.65,721,968,270,298,453,335,183,370,293,152,229,159) %>% t %>% data.frame 
+rownames(tumor_mass_12) <- "Tumor_mass"
+colnames(tumor_mass_12) <- colnames(renca_12_norm)
+mass <- t(tumor_mass_12) %>% data.frame %>% tibble::rownames_to_column("Sample")
+
+#renca_12_norm_mass <- rbind(renca_12_norm %>% data.frame,tumor_mass_12)
+
+```
+
+Plot
+
+Remove the degraded Vehicle 5-3 from 20-RENCA-001
+```{r fig.height=9, fig.width=18}
+renca_12_norm %>% data.frame %>% dselect(-Veh_5_3) %>% tibble::rownames_to_column("Gene") %>% gather(Sample,Count_n,-Gene) %>% left_join(mass,by="Sample") %>% mutate(Tumor_mass=Tumor_mass/100) %>% mutate(Gene=factor(Gene, levels=marker_order)) %>% separate(Sample, into= c("Group","Rep"), sep="_",extra="merge") %>% mutate(Batch=if_else(grepl("_",Rep),"Thera_30BID","Prophy_15BID")) %>%  mutate(Group=factor(Group,levels=c("Veh","RPT282","VEGF","Combo"))) %>% dfilter(Group != "RPT659") %>% ggplot(aes(x=Group,y=Count_n, colour=Batch,size=Tumor_mass)) + geom_point(pch=19, alpha=0.8) + theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 0, size=10),axis.text.y = element_text(size=8)) + scale_color_rapt() + facet_wrap(~Gene, ncol=13, scale="free_y") + expand_limits(y=0) + ggsave("Nanostring_RENCA_combined.jpg", width=18, height=9, dpi=150, plot= last_plot(), units = "in") 
+
+save(renca_12_norm,file="/Volumes/Enterprise/FLX/Nanostring/GCN2_custom_panel/RENCA_combined.rdata")
+```
+
+
+
+
+
+```{r fig.height=9, fig.width=18}
+
+#colour by group
+renca_norm %>% data.frame %>% tibble::rownames_to_column("Gene") %>% gather(Sample,Count_n,-Gene) %>% left_join(mass,by="Sample") %>% mutate(Tumor_mass=Tumor_mass/100) %>% mutate(Gene=factor(Gene, levels=marker_order)) %>% separate(Sample, into= c("Group","Rep"), sep="_", ) %>%  mutate(Group=factor(Group,levels=c("Veh","RPT659","RPT282"))) %>% dfilter(Group != "RPT659") %>% ggplot(aes(x=Group,y=Count_n, colour=Group,size=Tumor_mass)) + geom_boxplot(alpha=0.3) + geom_point(pch=19, alpha=0.8) + scale_color_rapt() + facet_wrap(~Gene, ncol=13, scale="free_y") + expand_limits(y=0) + ggsave("Nanostring_markers_TumorSize_no659_Group.jpg", width=18, height=9, dpi=150, plot= last_plot(), units = "in") 
+
+renca_norm %>% data.frame %>% tibble::rownames_to_column("Gene") %>% gather(Sample,Count_n,-Gene) %>% left_join(mass,by="Sample") %>% mutate(Tumor_mass=Tumor_mass/100) %>% mutate(Gene=factor(Gene, levels=marker_order)) %>% separate(Sample, into= c("Group","Rep"), sep="_") %>%  mutate(Group=factor(Group,levels=c("Veh","RPT659","RPT282"))) %>% dfilter(Group != "RPT659") %>% ggplot(aes(x=Group,y=Count_n, size=Tumor_mass)) + geom_boxplot(alpha=0.3) + geom_point(aes(colour=Rep), pch=19, alpha=0.8) + scale_color_rapt() + facet_wrap(~Gene, ncol=13, scale="free_y") + expand_limits(y=0) + ggsave("Nanostring_markers_TumorSize_no659_Rep.jpg", width=18, height=9, dpi=150, plot= last_plot(), units = "in") 
+
+
+marker_order <- c("Eifa2ak4","Il1b","Ifng","Il10","Tnfa","Yars","Sars","Mars","Cth","Cars","Kynu","Rhoq","Myrip","Ppp1r15a","Asns","Ddit3","Atf4","Trib3","Cebpb","Ifit1","Isg15","Usp18","Slc7a11","Soat2","Arl14ep","Lep","Nos2","Nos3","Vegf","Edn1","Egln1","Egln3","Marco","Ido","Arg1","Gapdh","Daxx","Tbp","Tumor_mass")
+#renca %>% gather(Sample,Count_n,-Gene) %>% separate(Sample, into= c("Group","Rep"), sep="_") %>% mutate(Group=factor(Group,levels=c("Veh","RPT659","RPT282"))) %>% ggplot(aes(x=Group,y=Count_n, colour=Group)) + geom_boxplot(alpha=0.3) +  geom_point(size=3, pch=19) + facet_wrap(~Gene, ncol=8, scale="free_y") + expand_limits(y=0)
+```
+
+Plot Daxx normalized data
+
+```{r fig.height=9, fig.width=18}
+renca_norm_daxx %>% data.frame %>% tibble::rownames_to_column("Gene") %>% gather(Sample,Count_n,-Gene) %>% left_join(mass,by="Sample") %>% mutate(Tumor_mass=Tumor_mass/100) %>% mutate(Gene=factor(Gene, levels=marker_order)) %>% separate(Sample, into= c("Group","Rep"), sep="_") %>%  mutate(Group=factor(Group,levels=c("Veh","RPT659","RPT282"))) %>% dfilter(Group != "RPT659") %>% ggplot(aes(x=Group,y=Count_n, size=Tumor_mass)) + geom_boxplot(alpha=0.3) + geom_point(aes(colour=Rep), pch=19, alpha=0.8) + scale_color_rapt() + facet_wrap(~Gene, ncol=13, scale="free_y") + expand_limits(y=0)
+```
+
+
+```{r fig.height=9, fig.width=18}
+renca_norm_hk %>% data.frame %>% tibble::rownames_to_column("Gene") %>% gather(Sample,Count_n,-Gene) %>% left_join(mass,by="Sample") %>% mutate(Tumor_mass=Tumor_mass/100) %>% mutate(Gene=factor(Gene, levels=marker_order)) %>% separate(Sample, into= c("Group","Rep"), sep="_") %>%  mutate(Group=factor(Group,levels=c("Veh","RPT659","RPT282"))) %>% dfilter(Group != "RPT659") %>% ggplot(aes(x=Group,y=Count_n, size=Tumor_mass)) + geom_boxplot(alpha=0.3) + geom_point(aes(colour=Rep), pch=19, alpha=0.8) + scale_color_rapt() + facet_wrap(~Gene, ncol=13, scale="free_y") + expand_limits(y=0)
+```
+
+Significance testing
+Since there are so few markers, there is no adjusted p value, calculate significance for each marker individually
+```{r}
+renca_norm %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample, into=c("Group","Rep"), sep="_") %>% dfilter(Group != "RPT659") %>% dselect(-Rep) %>% group_by(Group) %>% summarise_all(mean)
+renca_norm %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% separate(Sample, into=c("Group","Rep"), sep="_") %>% dfilter(Group != "RPT659") %>% dselect(-Rep) %>% group_by(Group) %>% summarise_all(t.test)
+
+
+```
+
+20-CT26-001 experiment
+
+```{r}
+ct26 <- read.table(file="/Volumes/Enterprise/FLX/Nanostring/GCN2_custom_panel/20-CT26-001_Nanostring3.txt", sep="\t", header=TRUE)
+ct26 %<>% dfilter(!is.na(Veh1)) %>% dselect(-Annotation) %>% rename(Gene=Probe.Name) %>% dfilter(!grepl("^POS",Gene), !grepl("^NEG",Gene))
+
+total_reads <- ct26 %>% dselect(-Gene) %>% colSums() %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Sample = factor(Sample, levels=Sample))
+colnames(total_reads) <- c("Sample", "Total_Counts")
+ggplot(total_reads,aes(x=Sample,y=Total_Counts)) + geom_bar(stat="identity")
+save(ct26_norm, file="20-C26-01.rdata")
+```
+
+Check Housekeeping genes and Normalize by total reads for CT26 20-CT26-001
+
+```{r fig.height=4, fig.width=9}
+ct26 %>% dfilter(Gene %in% c("Tbp","Gapdh","Daxx")) %>% gather(Sample,Counts,-Gene) %>% mutate(Sample = factor(Sample, levels=total_reads$Sample)) %>% ggplot(aes(x=Sample,y=Counts)) + geom_bar(stat="identity") + facet_wrap(~Gene, ncol=1, scale="free_y")
+
+cor(ct26 %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% dselect(Gapdh) %>% .[,1], total_reads %>% .[,2]) # 0.944
+cor(ct26 %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% dselect(Daxx) %>% .[,1], total_reads %>% .[,2]) # 0.602
+cor(ct26 %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% dselect(Tbp) %>% .[,1], total_reads %>% .[,2]) # 0.870
+
+max(total_reads %>% .[,2]) #979170
+
+ct26_norm <- t(t(ct26 %>% tibble::column_to_rownames("Gene"))/colSums(ct26 %>% tibble::column_to_rownames("Gene"))*979170)
+```
+
+Add in Tumor mass column
+```{r}
+tumor_mass <- c(109,296,93,129,99,131,133,137,173,192,124,59) %>% t %>% data.frame
+rownames(tumor_mass) <- "tumor_mass"
+colnames(tumor_mass) <- colnames(ct26_norm)
+ct26_norm <- rbind(ct26_norm,tumor_mass)
+
+marker_order <- c("Eifa2ak4","Il1b","Ifng","Il10","Tnfa","Yars","Sars","Mars","Cth","Cars","Kynu","Rhoq","Myrip","Ppp1r15a","Asns","Ddit3","Atf4","Trib3","Cebpb","Ifit1","Isg15","Usp18","Slc7a11","Soat2","Arl14ep","Lep","Nos2","Nos3","Vegf","Edn1","Egln1","Egln3","Marco","Ido","Arg1","Gapdh","Daxx","Tbp","tumor_mass")
+```
+
+Plot data
+
+Leave out the last sample, because it's degraded
+```{r fig.height=9, fig.width=18}
+ct26_norm %>% tibble:: rownames_to_column("Gene") %>% gather(Sample, Count, -Gene) %>% mutate(Group= rep(c("Vehicle","RPT282","VEFG","Combo"), each=3*39), Rep= factor(rep(rep(1:3,each=39),4)), Tumor_mass= rep( c(109,296,93,129,99,131,133,137,173,192,124,59), each=39) ) %>% mutate(Group=factor(Group, levels=c("Vehicle","RPT282","VEFG","Combo"))) %>% dfilter(Sample != "combo.2")  %>% mutate(Gene=factor(Gene, levels=marker_order)) %>% ggplot(aes(x=Group,y=Count, colour=Group,size=Tumor_mass)) + geom_boxplot(alpha=0.3) + geom_point(pch=19, alpha=0.8) + facet_wrap(~Gene, ncol=13, scale="free_y") + expand_limits(y=0) + scale_color_rapt() + ggsave("20-CT26-001.jpg", width=18, height=9, dpi=150, plot= last_plot(), units = "in")
+
+ct26_norm %>% tibble:: rownames_to_column("Gene") %>% gather(Sample, Count, -Gene) %>% mutate(Group= rep(c("Vehicle","RPT282","VEFG","Combo"), each=3*39), Rep= factor(rep(rep(1:3,each=39),4)), Tumor_mass= rep( c(109,296,93,129,99,131,133,137,173,192,124,59), each=39) ) %>% mutate(Group=factor(Group, levels=c("Vehicle","RPT282","VEFG","Combo"))) %>% dfilter(Sample != "combo.2")  %>% mutate(Gene=factor(Gene, levels=marker_order)) %>% ggplot(aes(x=Group,y=Count, size=Tumor_mass)) + geom_boxplot(alpha=0.3) + geom_point(aes(colour=Rep), pch=19, alpha=0.8) + facet_wrap(~Gene, ncol=13, scale="free_y") + expand_limits(y=0) + scale_color_rapt() + ggsave("20-CT26-001_byTumor.jpg", width=18, height=9, dpi=150, plot= last_plot(), units = "in")
+```
+

@@ -1,0 +1,293 @@
+---
+title: "Azizi T cell Monocle"
+author: "Mengshu"
+date: "1/7/2019"
+output: html_document
+---
+I want to determine the various activation states and naive-memory-exhaustion states of T cells
+Monocle has a pseudotime analysis tool that I will use for this
+Dataset: Azizi T cell dataset made from the 10X 5' Seq TCR dataset: 24K cells
+
+```{r}
+library(Seurat)
+library(monocle)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+INSTALLATION
+Determine which version of Monocle is downloaded: monocle_2.10.0
+Update version
+```{r}
+sessionInfo() #monocle_2.99.2   This must be what they named beta 3
+install.packages("devtools")
+#Install DDRTree (simple-ppt-like branch) from our GitHub repo:
+devtools::install_github("cole-trapnell-lab/DDRTree", ref="simple-ppt-like")
+
+#Install the latest version of L1-graph from our GitHub repo:
+devtools::install_github("cole-trapnell-lab/L1-graph")
+
+#Dependencies
+install.packages("reticulate") #this seems to be an R version of python, thus the name?
+library(reticulate)
+py_install('umap-learn', pip = T, pip_ignore_installed = T) # Ensure the latest version of UMAP is installed
+py_install("louvain")
+
+#install xquartz from xquartz.org
+#Then pull the monocle3_alpha branch of the Monocle GitHub repo:
+devtools::install_github("cole-trapnell-lab/monocle-release", ref="monocle3_alpha", force = TRUE)
+install.packages("rgl")
+library(monocle)
+#Install DelayedArray, because estimateDispersions(azizi_t) throws and error
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("DelayedArray", version = "3.8")
+```
+-1. Load data though Seurat -> Monocle
+Monocle is able to import Seurat datasets with the importCDS() function
+importCDS(dataset, import_all= TRUE)
+
+Apparently Imputed data won't work for this, because the data type is inferred, and the logic check is data == floor(data), so the numbers have to be integers.
+Load raw (unimputed) data into Seurat, because it's easier to use, then import into Monocle. 
+```{r}
+#BRCA_singlet <- readRDS("BRCA_singlet_Azizi.rds")
+expression_matrix <- read.table("GSE114724_rna_raw.tsv", skip=1, header=TRUE, row.names=1, sep="\t",colClasses=c("character",rep("numeric",28013)))
+
+brca <- readRDS("BRCA_singlet_Azizi.rds")
+
+brca_tcell <- CreateSeuratObject(raw.data = expression_matrix)
+#Tranasfer over the  cluster identities
+brca_tcell@ident <- BRCA_singlet@ident
+
+#Add the cell identities to a meta.data column
+brca_tcell@meta.data$cell_ID <- brca_tcell@ident
+
+# Check the labels make sense. They do. it all matches
+VlnPlot(object=brca_tcell, features.plot = c("CD8A","FOXP3","GZMK"), use.raw = TRUE, x.lab.rot = TRUE,size.x.use = 10, point.size.use = 0.1 ) 
+
+# Transfer over more metadata information: variable genes
+brca_tcell@var.genes <- BRCA_singlet@var.genes
+
+saveRDS(brca_tcell,file="Azizi_t_cell_raw_Seurat.rds")
+brca_tcell <- readRDS("Azizi_t_cell_raw_Seurat.rds")
+```
+
+The Cell_ID is available only for a subset of all cells, namely 27792 of 28013 cells
+I need to export all cell-barcodes, and all cell_ids, and merge together, filling in the missing cols with NA, then put it back into the Monocle object
+```{r}
+IDS <- as.data.frame(colnames(brca@raw.data))
+colnames(IDS) <- "barcode"
+IDS %<>% rename(barcode='colnames(brca@raw.data)')
+
+c_type <- as.data.frame(brca@ident)
+barcodes <- rownames(c_type)
+c_type %<>% mutate(barcode=barcodes)
+
+head(c_type)
+
+merge_ids <- left_join(IDS,c_type, by="barcode")
+#dim(merge_ids)
+#head(merge_ids)
+rownames(merge_ids) <- merge_ids$barcode
+#rownames(merge_ids)
+merge_ids %<>% dselect(-barcode)
+pData(azizi_t)$cluster <- as.vector(merge_ids[,1])
+```
+
+Add percent.ribo to cell information
+```{r}
+rp <- as.data.frame(brca@meta.data$percent.ribo)
+rp %<>% mutate(barcode= rownames(brca@meta.data))
+
+RPS10 <- as.data.frame(brca@meta.data$RPS10)
+RPS10 %<>% mutate(barcode= rownames(brca@meta.data))
+
+RPL17 <- as.data.frame(brca@meta.data$RPL17)
+RPL17 %<>% mutate(barcode= rownames(brca@meta.data))
+
+merge_rp <-left_join(IDS,rp, by="barcode")
+merge_rps10 <-left_join(IDS,RPS10, by="barcode") #('colnames(brca@raw.data)','brca@meta.data$percent.ribo')
+merge_rpl17 <-left_join(IDS,RPL17, by="barcode")
+dim(merge_rp) #28013 2
+rownames(merge_rp) <- merge_rp[,1]
+merge_rp %<>% select(-barcode)
+pData(azizi_t)$percent_ribo <- merge_rp
+pData(azizi_t)$RPS10 <- merge_rps10 
+pData(azizi_t)$RPL17 <- merge_rpl17
+```
+
+```{r}
+azizi_t <- importCDS(brca_tcell, import_all=TRUE)
+save(azizi_t, file='azizi_t_Monocle.RData')
+load("azizi_t_Monocle.RData")
+```
+
+0. Label cells with predetermined groups and assign colours
+levels(BRCA_singlet@ident)
+ "0. Naive CD4 T"           "1. Effector GZMK CD8 T"   "2. Memory CD4 T"         
+ "3. Effector GNLY CD8 T"   "4. CD4 T reg"             "5. Helper CXCL13 CD4 T"  
+ "6. Effector CD8 T"        "7. Resident memory CD8 T" "8. CD4 T" 
+```{r}
+options(warn=-1)
+
+#these are two slots for storing cell metadata
+length(pData(azizi_t)$cluster)
+length(brca_tcell@ident)
+pData(azizi_t)$cluster <- merge_ids
+pData(azizi_t)$cell_type2 <- as.vector.factor(merge_ids)
+
+cell_type_colour <- c("0. Naive CD4 T" = "#f6ff60", 
+                     "1. Effector GZMK CD8 T" ="#00fbdb", 
+                     "2. Memory CD4 T" = "#f9d62e", 
+                     "3. Effector GNLY CD8 T" ="#198908", 
+                     "4. CD4 T reg" ="#ff4e50",
+                     "5. Helper CXCL13 CD4 T" ="#fc913a", 
+                     "6. Effector CD8 T" = "#231aff",
+                     "7. Resident memory CD8 T" = "#131313",
+                     "8. CD4 T" ="#a300ff",
+                     "NA" = "#808080")
+```
+
+1. Estimate Size Factors and Dispersions
+Needed when working with negbinomail.size() or negbinomial()expression family, which is for UMI data
+```{r}
+azizi_t <- estimateSizeFactors(azizi_t)
+azizi_t <- estimateDispersions(azizi_t)
+#glm.fit: algorithm did not convergeRemoving 16 outliers
+#Error in .local(object, ...) : Error: estimateDispersions only works, and is only needed, when you're using a CellDataSet with a negbinomial or negbinomial.size expression family
+#This suggests that the data in not in the right expression family format
+#Using un-imputed data fixed the above error
+```
+Preprocess data to find pricipal components
+```{r}
+azizi_t <- preprocessCDS(azizi_t, num_dim=20)
+```
+2. UMAP dimension reduction
+2.5 Regress out cell cycle markers
+#Added percent.ribo as a metadata col and using it as a residualModelFormulaStr to regress out ribosome content
+```{r}
+azizi_t <- reduceDimension(azizi_t, reduction_method = 'UMAP', residualModelFormulaStr ="~percent_ribo + RPL17 + RPS10 + cellcycle_genes")
+
+cellcycle_genes <- c('RRM2','TYMS','BIRC5',"UHRF1","CDC20","DLGAP5","UBE2C","PKMYT1","CDT1","CCNB2","SPC25","HJURP","CDC45","CDCA5")
+# use_pca = TRUE,
+```
+
+```{r}
+azizi_t <- clusterCells(azizi_t,method = 'louvain',
+                        res = 1e-6,
+                        louvain_iter = 1,
+                        verbose = T)
+plot_cell_clusters(azizi_t, color_by = "cluster")
+```
+
+
+3. Partition cells into Supergroups
+```{r}
+azizi_t <- partitionCells(azizi_t,residualModelFormulaStr ="~percent_ribo + RPL17 + RPS10 + cellcycle_genes")
+```
+4. Learn the Pricipal graph
+SimplePPT and DDRTree are not giving different results
+```{r}
+azizi_t <- learnGraph(azizi_t, RGE_method ='SimplePPT',residualModelFormulaStr ="~percent_ribo + RPL17 + RPS10 + cellcycle_genes") # partition_component +T
+azizi_t <- learnGraph(azizi_t, RGE_method ='DDRTree')
+```
+5. Visualize trajectory
+```{r fig.height=6, fig.width=10}
+plot_cell_trajectory(azizi_t, 
+                     color_by = "cluster",
+                     show_backbone=TRUE, show_branch_points = TRUE, alpha = 0.9)  +
+                     scale_color_manual(values = cell_type_colour) + 
+                    theme(legend.position = "bottom")  +
+                    guides(colour=guide_legend(nrow=3))
+ggsave("Azizi_t_Supercluster_path_cluster.jpg", plot = last_plot(), dpi=400, height= 6, width = 10, units = "in")
+
+plot_cell_trajectory(azizi_t, color_by = "louvain_component",show_backbone = TRUE, backbone_color = "black") scale_color_manual(values = cell_type_colour)
+ggsave("Azizi_t_Supercluster_louvain_component.jpg", plot = last_plot(), dpi=400, height= 6, width = 10, units = "in")
+
+plot_cell_clusters(azizi_t, color_by = pData(azizi_t)$cell_type2) +
+                     scale_color_manual(values = cell_type_colour)
+```
+Specify the Root of the large cluster
+```{r}
+# a helper function to identify the root principal points:
+get_correct_root_state <- function(cds, cell_phenotype, root_type){
+  cell_ids <- which(pData(cds)[, cell_phenotype] == root_type)
+
+  closest_vertex <-
+    cds@auxOrderingData[[cds@rge_method]]$pr_graph_cell_proj_closest_vertex
+  closest_vertex <- as.matrix(closest_vertex[colnames(cds), ])
+  root_pr_nodes <-
+    V(cds@minSpanningTree)$name[as.numeric(names
+      (which.max(table(closest_vertex[cell_ids,]))))]
+
+  root_pr_nodes
+}
+
+azizi_node_ids = get_correct_root_state(azizi_t,
+                                      cell_phenotype =
+                                        'cluster', "0. Naive CD4 T")
+azizi_t<- orderCells(azizi_t, root_pr_nodes = azizi_node_ids)
+plot_cell_trajectory(azizi_t)
+ggsave("Azizi_t_Supercluster_pseudotime.jpg", plot = last_plot(), dpi=400, height= 6, width = 10, units = "in")
+```
+DIFFERENTIAL ANALYSIS
+
+```{r}
+pr_graph_test <- principalGraphTest(azizi_t, k=3, cores=6)
+my_list <- dplyr::add_rownames(pr_graph_test) %>%
+    dplyr::arrange(plyr::desc(morans_test_statistic), plyr::desc(-qval)) %>% head(8000)
+grep("MTRNR*", my_list)
+write.table(trajectory_genes, file="Azizi_t_trajectory_genes_50.txt", sep="\t", quote=FALSE)
+genes
+nrow(subset(pr_graph_test, qval < 0.01))
+# 6517 genes are significant
+```
+```{r fig.height=10, fig.width=12}
+#T RM cycling cluster
+plot_cell_trajectory(azizi_t, 
+                     markers = c('RRM2','TYMS','BIRC5',"UHRF1","CDC20","DLGAP5","UBE2C","PKMYT1","CDT1","CCNB2","SPC25","HJURP","CDC45","CDCA5"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") + scale_color_gradient(low="grey90", high="blue")
+#test
+plot_cell_trajectory(azizi_t, 
+                     markers = c("MTRNR2L12","MTRNR2L8"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") +scale_color_gradient(low="grey90", high="blue")
+#main
+plot_cell_trajectory(azizi_t, 
+                     markers = c('NKG7','CXCL13','CCL5',"CD8A","TRDV2","FOXP3","GZMK","CCL4","GZMA","CST7","CD8B","GZMB","KRT86","HLA-DRB1","IFIT1"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") +scale_color_gradient(low="grey90", high="blue")
+Global separator
+plot_cell_trajectory(azizi_t, 
+                     markers = c("RPS10","RPL41","EEF1G","MTRNR2L12","RPL21"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") + scale_color_gradient(low="grey90", high="blue")
+ggsave("Azizi_t_Monocle_RRM2.jpg", plot = last_plot(), dpi=400, height= 6, width = 10, units = "in")
+
+Humanin
+plot_cell_trajectory(azizi_t, 
+                     markers = c("MTRNR2L12","RPS10"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") +scale_color_gradient(low="grey90", high="blue")
+ggsave("Azizi_t_Monocle_Humanin_RPS10.jpg", plot = last_plot(), dpi=400, height= 6, width = 10, units = "in")
+
+# CCR4
+plot_cell_trajectory(azizi_t, 
+                     markers = c("CCR4","GATA3","CXCR3","FOXP3","SELL"), use_color_gradient = TRUE,
+                     show_backbone=TRUE, alpha = 0.9)  +
+                    theme(legend.position = "bottom") + scale_color_gradient(low="grey90", high="blue")
+
+```
+Visualizing genes by pseudotemporal expression pattern
+```{r}
+diff_test_res <- differentialGeneTest(HSMM_myo[marker_genes,],
+              fullModelFormulaStr = "~sm.ns(Pseudotime)")
+sig_gene_names <- row.names(subset(diff_test_res, qval < 0.1))
+plot_pseudotime_heatmap(HSMM_myo[sig_gene_names,],
+                num_clusters = 3,
+                cores = 1,
+                show_rownames = T)
+```
+

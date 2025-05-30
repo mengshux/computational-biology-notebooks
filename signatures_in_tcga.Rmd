@@ -1,0 +1,661 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+source("~/R/R_functions.r")
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(ggbeeswarm)
+theme_set(theme_rapt())
+filter <- dplyr::filter
+```
+
+
+```{r}
+load("/extra/UCSC_XENA_PublicDataHub/allMergedData.quantileNorm.rdata")  
+load("/extra/UCSC_XENA_PublicDataHub/allMergedData.SampleInfo.rdata")
+load("/extra/R_DataSets/cbioportal_massaged.rdata")
+
+```
+
+Signatures from Mengshu
+```{r}
+gMDSC_sig_n <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C","F13A1","VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1")
+mMDSC_sig <- c("CSF3R", "SLC6A6", "TREM1", "CLEC4E", "PLBD1")
+
+quantiseq <- read_tsv("QuantiSeq_CiberSort_CellTypeFractionsData.tsv", col_types="cccdd")
+xcell <- read_tsv("xCell_TCGA_RSEM.txt")
+colnames(xcell)[1] <- "CellType"
+xcell <- xcell %>% pivot_longer(cols=-CellType, names_to="Sample", values_to="xcell")
+xcell <- xcell %>% mutate(Sample=str_replace_all(Sample,"\\.","-"))
+```
+
+```{r}
+cat("**** xcel:\n")
+setcomp(xcell$Sample, allMergedData.SampleInfo$Sample)
+
+cat("\n**** quantiseq:\n")
+setcomp(quantiseq$Sample, str_replace(unique(allMergedData.SampleInfo$Sample),"-\\d+$",""))
+
+```
+
+```{r}
+orig_sampleinfo_cols <- colnames(allMergedData.SampleInfo)
+
+xcell_wide <- xcell %>% filter(Sample %in% allMergedData.SampleInfo$Sample) %>% pivot_wider(names_from="CellType", values_from="xcell", names_prefix="XCELL.")
+allMergedData.SampleInfo <- merge(allMergedData.SampleInfo, xcell_wide, by="Sample", all.x=TRUE)
+
+allMergedData.SampleInfo[, Sample_short := str_replace(Sample,"-\\d+$","") ]
+quantiseq_wide <- quantiseq %>% select(Sample_short=Sample, Celltype, QuantiSeq) %>% filter(Sample_short %in% allMergedData.SampleInfo$Sample_short, !is.na(QuantiSeq)) %>% distinct() %>%
+	pivot_wider(names_from="Celltype", values_from="QuantiSeq", names_prefix="QS.")
+cibersort_wide <- quantiseq %>% select(Sample_short=Sample, Celltype, CiberSort) %>% filter(Sample_short %in% allMergedData.SampleInfo$Sample_short, !is.na(CiberSort)) %>% distinct() %>%
+	pivot_wider(names_from="Celltype", values_from="CiberSort", names_prefix="CS.")
+
+allMergedData.SampleInfo <- merge(allMergedData.SampleInfo, quantiseq_wide, by="Sample_short", all.x=TRUE)
+allMergedData.SampleInfo <- merge(allMergedData.SampleInfo, cibersort_wide, by="Sample_short", all.x=TRUE)
+
+allMergedData.SampleInfo[, AnyCellVal := Sample %in% xcell$Sample | Sample_short %in% quantiseq$Sample]
+
+allMergedData.SampleInfo[, Sample_short := NULL ]
+rm(xcell_wide, quantiseq_wide, cibersort_wide)
+
+deconv_cols <- setdiff(colnames(allMergedData.SampleInfo), orig_sampleinfo_cols)
+deconv_cols <- setdiff(deconv_cols, "AnyCellVal")
+```
+
+
+
+```{r}
+# allMergedData.SampleInfo[, XCELL._Lymphocyte := `XCELL.NK cells` + `XCELL.NKT` + `XCELL.Plasma cells` + `XCELL.CD8+ naive T-cells` + `XCELL.CD8+ T-cells` + `XCELL.CD8+ Tcm` + `XCELL.CD8+ Tem` + `XCELL.CD4+ memory T-cells` + `XCELL.CD4+ naive T-cells` + `XCELL.CD4+ T-cells` + `XCELL.CD4+ Tcm` + `XCELL.CD4+ Tem` + `XCELL.Th1 cells` + `XCELL.Th2 cells` + `XCELL.Tgd cells` + `XCELL.Tregs` + `XCELL.B-cells` + `XCELL.Class-switched memory B-cells` + `XCELL.Memory B-cells` + `XCELL.naive B-cells` + `XCELL.pro B-cells`]
+# allMergedData.SampleInfo[, XCELL._CD3 := `XCELL.CD8+ naive T-cells` + `XCELL.CD8+ T-cells` + `XCELL.CD8+ Tcm` + `XCELL.CD8+ Tem` + `XCELL.CD4+ memory T-cells` + `XCELL.CD4+ naive T-cells` + `XCELL.CD4+ T-cells` + `XCELL.CD4+ Tcm` + `XCELL.CD4+ Tem` + `XCELL.Th1 cells` + `XCELL.Th2 cells` + `XCELL.Tgd cells` + `XCELL.Tregs`]
+# allMergedData.SampleInfo[, XCELL._CD4 := `XCELL.CD4+ memory T-cells` + `XCELL.CD4+ naive T-cells` + `XCELL.CD4+ T-cells` + `XCELL.CD4+ Tcm` + `XCELL.CD4+ Tem` + `XCELL.Th1 cells` + `XCELL.Th2 cells` + `XCELL.Tregs`]
+# allMergedData.SampleInfo[, XCELL._CD8 := `XCELL.CD8+ naive T-cells` + `XCELL.CD8+ T-cells` + `XCELL.CD8+ Tcm` + `XCELL.CD8+ Tem`]
+# allMergedData.SampleInfo[, XCELL._B := `XCELL.B-cells` + `XCELL.Class-switched memory B-cells` + `XCELL.Memory B-cells` + `XCELL.naive B-cells` + `XCELL.pro B-cells`]
+# allMergedData.SampleInfo[, XCELL._DC := `XCELL.aDC` + `XCELL.cDC` + `XCELL.DC` + `XCELL.pDC` + `XCELL.iDC`]
+# allMergedData.SampleInfo[, XCELL._Mono := `XCELL.Macrophages` + `XCELL.Macrophages M1` + `XCELL.Macrophages M2` + `XCELL.Monocytes` + `XCELL.Neutrophils`]
+# deconv_cols <- c(deconv_cols, "XCELL._Lymphocyte", "XCELL._CD3", "XCELL._CD4", "XCELL._CD8", "XCELL._B", "XCELL._DC", "XCELL._Mono")
+
+```
+
+# convert genes into Z scores across experiments
+```{r}
+tumor_names <- allMergedData.SampleInfo$Sample
+gene_names <- allMergedData.quantileNorm$Gene
+sampleXgene <- transpose(allMergedData.quantileNorm, keep.names="Sample", make.names="Gene")
+setkey(sampleXgene, "Sample")
+setkey(allMergedData.SampleInfo, "Sample")
+
+sampleXgeneFull <-  allMergedData.SampleInfo[sampleXgene][!is.na(TumorAbr)]
+
+truncZ <- function(x, low=0.5) { sd <- truncRange(sd(x), low=low); (x - mean(x)) / sd }
+sampleXgeneZFull <- data.table(sampleXgeneFull[, .SD, .SDcols=-gene_names], sampleXgeneFull[, lapply(.SD, truncZ), .SDcols=gene_names])
+
+```
+
+
+# Z score correlations with deconvolution scores
+## Correlations between deconvolution scores and single genes across all tumors
+```{r}
+cor_for_gene_set_Z <- function(gene, set=NULL) {
+	if (!gene %in% colnames(sampleXgeneZFull)) return(NULL)
+	gene_data <- sampleXgeneZFull[[gene]]
+	results <- 	sampleXgeneZFull[, lapply(.SD, cor, gene_data, use="complete.obs"), .SDcols=(deconv_cols)] %>% transpose(keep.names="CellType") %>% arrange(-V1) %>% rename(Correlation=V1) %>% mutate(gene=gene)
+	if (!is.null(set)) results <- results  %>% filter(CellType %like% set)
+	return(results)
+}
+
+cor_for_gene_set_type_Z <- function(gene, type=NULL, set=NULL) {
+	if (!gene %in% colnames(sampleXgeneZFull)) return(NULL)
+	if (is.null(type)) {
+		gene_data <- sampleXgeneZFull[[gene]]
+		results <- 	sampleXgeneZFull[, lapply(.SD, cor, gene_data, use="complete.obs"), .SDcols=(deconv_cols)] %>% transpose(keep.names="CellType") %>% arrange(-V1) %>% rename(Correlation=V1) %>% mutate(gene=gene)
+	} else {
+		gene_data <- sampleXgeneZFull[TumorAbr == type, .SD, .SDcols=gene] %>% unlist
+		results <- 	sampleXgeneZFull[TumorAbr == type, lapply(.SD, cor, gene_data, use="complete.obs"), .SDcols=(deconv_cols)] %>% transpose(keep.names="CellType") %>% arrange(-V1) %>% rename(Correlation=V1) %>% mutate(gene=gene)
+		
+	}
+	if (!is.null(set)) results <- results  %>% filter(CellType %like% set)
+	return(results)
+}
+
+```
+
+### xCell
+```{r}
+lapply(c("CD8A","CD3E","CD4","FOXP3","CD19","ITGAX"), cor_for_gene_set_Z, set="XCELL")
+
+```
+
+### QuantiSeq
+```{r}
+lapply(c("CD8A","CD3E","CD4","FOXP3","CD19","ITGAX"), cor_for_gene_set_Z, set="QS")
+
+```
+
+### CyberSort
+```{r}
+lapply(c("CD8A","CD3E","CD4","FOXP3","CD19","ITGAX"), cor_for_gene_set_Z, set="CS")
+
+```
+
+Observations:
+
+* CD8A correlates well with CD8 scores, though DCs come up pretty high for xCell; rank order for QuantiSeq looks good; CyberSort picks up gdTs, but CD8 T cells are moderate
+
+* CD3E correlates best with DCs in xCell, lymphocytes are moderate; rank order for QuantiSeq looks good; CyberSort picks up gdTs, but T cells are moderate
+
+* CD4 correlates best with myeloid cells in xCell, lymphocytes are moderate; QuantiSeq picks up macrophages before Tregs; CyberSort again picks up gdTs, with CD4s modestly correlated
+
+* FOXP3 correlates with DCs in xCell, and Tregs are pretty weak; QuantiSeq picks up Treg; CyberSort picks up macrophages while Tregs are negatively correlated
+
+* ITGAX correlates with myeloid cells in xCell; macrophages in QuantiSeq; gdTs in CyberSort (why?) followed by macrophages
+
+
+Use these scorings:
+Cybersort:  B, CD8
+Quantiseq: B, NK, CD4, CD8, Treg
+xCell: B, Mac, Mono, CD4, CD8
+
+
+### RUN FROM SCRATCH:
+
+
+
+###############################
+# do deconvolution on un-log transformed TPM data, not Z scores
+```{r}
+raw_tpms <- allMergedData.quantileNorm[, lapply(.SD, function(x) 2^x), .SDcols=-"Gene"]
+raw_tpms[, Gene := allMergedData.quantileNorm$Gene]
+setkey(raw_tpms, "Gene")
+setcolorder(raw_tpms, "Gene")
+
+identical(colnames(raw_tpms)[-1], allMergedData.SampleInfo$Sample)
+
+
+
+algorithms <- c(
+	"quantiseq",
+	"timer",
+	"mcp_counter",
+	"xcell",
+	"epic"
+)
+timer_tumors <- toupper(c('kich', 'blca', 'brca','cesc', 'gbm', 'hnsc', 'kirp', 'lgg', 'lihc', 'luad', 'lusc','prad', 'sarc', 'pcpg', 'paad', 'tgct', 'ucec', 'ov', 'skcm','dlbc', 'kirc', 'acc', 'meso', 'thca', 'uvm', 'ucs', 'thym','esca', 'stad', 'read', 'coad', 'chol'))
+
+# missing tumors
+# [1] "NPC"  "WT"   "CCSK" "HBL"  "RS"   "OS"
+missing_tumors_map <- c(
+	NPC = "HNSC",
+	WT = "READ",
+	CCSK = "READ",
+	HBL = "LIHC",
+	RS = "SARC",
+	OS = "SARC"
+)
+
+
+n_per_split <- ceiling((ncol(raw_tpms)-1) / 12)
+split_groups <- rep(1:12, each=n_per_split)[1:(ncol(raw_tpms)-1)]
+sample_sets <- split(colnames(raw_tpms)[-1], split_groups)
+
+#### run this in terminal
+#save(algorithms, allMergedData.SampleInfo, timer_tumors, missing_tumors_map, n_per_split, split_groups, sample_sets, raw_tpms, file="tmp.rdata")
+library(parallel)
+library(immunedeconv)
+
+results_per_algo <- lapply(algorithms, function(algo) {
+	cat(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", algo, "\n")
+	mclapply(sample_sets, function(the_set) {
+		data.here <- raw_tpms[, .SD, .SDcols=the_set] %>% as.data.frame()
+		rownames(data.here) <- raw_tpms$Gene
+		if (algo == "timer") {
+			samples_here <- colnames(data.here)
+			sample_info <- merge(data.table(Sample=samples_here), allMergedData.SampleInfo[, .(Sample, TumorAbr)], by="Sample")
+			sample_info[ TumorAbr %in% names(missing_tumors_map), TumorAbr := missing_tumors_map[TumorAbr] ]
+			# salvage any final Tumors as BRCA
+			sample_info[ ! TumorAbr %in% names(timer_tumors), TumorAbr := "BRCA" ]
+			try( immunedeconv::deconvolute(data.here, "timer", indications=sample_info$TumorAbr) )
+		} else {
+			try( immunedeconv::deconvolute(data.here, algo) )
+		}
+	}, mc.cores=12)
+})
+names(results_per_algo) <- algorithms
+# Note: this will fail if Timer created any errors....
+results_per_algo <- lapply(results_per_algo, function(result_set) reduce(result_set, full_join, by="cell_type"))
+for (algo in algorithms) results_per_algo[[algo]]$cell_type <- paste0(algo,".", results_per_algo[[algo]]$cell_type)
+
+deconv_results <- bind_rows(results_per_algo)
+#save(deconv_results, file="tmp.rdata")
+
+#load("tmp.rdata")
+
+```
+
+
+
+## try Mengshu's signatures with MCP Counter
+```{r}
+RAPT_signatures <- tribble(
+	~hugo, ~type, ~EntrezID, ~name,
+"DYSF","gMDSC",8291,"dysferlin",
+"C5AR1","gMDSC",728,"complement C5a receptor 1",
+"TREM1","gMDSC",54210,"triggering receptor expressed on myeloid cells 1",
+"CSF3R","gMDSC",1441,"colony stimulating factor 3 receptor",
+"CXCR2","gMDSC",3579,"C-X-C motif chemokine receptor 2",
+"PLBD1","gMDSC",79887,"phospholipase B domain containing 1",
+"CMTM2","gMDSC",146225,"CKLF like MARVEL transmembrane domain containing 2",
+"CXCR1","gMDSC",3577,"C-X-C motif chemokine receptor 1",
+"TNFRSF10C","gMDSC",8794,"TNF receptor superfamily member 10c",
+"F13A1","gMDSC",2162,"coagulation factor XIII A chain",
+"VNN3","gMDSC",55350,"vanin 3",
+"PADI4","gMDSC",23569,"peptidyl arginine deiminase 4",
+"GLT1D1","gMDSC",144423,"glycosyltransferase 1 domain containing 1",
+"CLEC4D","gMDSC",338339,"C-type lectin domain family 4 member D",
+"LCN2","gMDSC",3934,"lipocalin 2",
+"BPI","gMDSC",671,"bactericidal/permeability-increasing protein",
+"CAMP","gMDSC",820,"cathelicidin antimicrobial peptide",
+"PGLYRP1","gMDSC",8993,"peptidoglycan recognition protein 1",
+"CEACAM1","gMDSC",634,"carcinoembryonic antigen related cell adhesion mole…",
+"S100P","gMDSC",6286,"S100 calcium binding protein P",
+"CYP4F3","gMDSC",4051,"cytochrome P450 family 4 subfamily F member 3",
+"CLC","gMDSC",1178,"Charcot-Leyden crystal galectin",
+"S100A12","gMDSC",6283,"S100 calcium binding protein A12",
+"MCEMP1","gMDSC",199675,"mast cell expressed membrane protein 1",
+"BST1","gMDSC",683,"bone marrow stromal cell antigen 1",
+"ARG1","gMDSC",383,"arginase 1",
+"CDA","gMDSC",978,"cytidine deaminase",
+"ADGRG3","gMDSC",222487,"adhesion G protein-coupled receptor G3",
+"CSF2RB","gMDSC",1439,"colony stimulating factor 2 receptor beta common su…",
+"IL1R2","gMDSC",7850,"interleukin 1 receptor type 2",
+"IL1RAP","gMDSC",3556,"interleukin 1 receptor accessory protein",
+"KCNJ15","gMDSC",3772,"potassium voltage-gated channel subfamily J member …",
+"LIMK2","gMDSC",3985,"LIM domain kinase 2",
+"DOCK5","gMDSC",80005,"dedicator of cytokinesis 5",
+"STX3","gMDSC",6809,"syntaxin 3",
+"FFAR2","gMDSC",2867,"free fatty acid receptor 2",
+"MEFV","gMDSC",4210,"MEFV, pyrin innate immunity regulator",
+"SIRPB1","gMDSC",10326,"signal regulatory protein beta 1",
+
+"CSF3R","mMDSC",1441,"colony stimulating factor 3 receptor",
+"SLC6A6","mMDSC",6533,"solute carrier family 6 member 6",
+"TREM1","mMDSC",54210,"triggering receptor expressed on myeloid cells 1",
+"CLEC4E","mMDSC",26253,"C-type lectin domain family 4 member E",
+"PLBD1","mMDSC",79887,"phospholipase B domain containing 1",
+
+"FOXP3","Treg",50943,NA,
+"CTLA4","Treg",1493,NA,
+"IKZF2","Treg",29851,NA,
+"CCR8","Treg",1237,NA,
+
+"CXorf58","CD4+",254158,NA,
+"AKR1E2","CD4+",83592,NA,
+"FAM184A","CD4+",79632,NA,
+"EDAR","CD4+",10913,NA,
+"ANKRD55","CD4+",79722,NA,
+"NT5C1A","CD4+",84618,NA,
+"CACNA1I","CD4+",8911,NA,
+"PCED1B","CD4+",91523,NA,
+"RNF157","CD4+",114804,NA,
+
+"ATF4", "AAS", 468, "activating transcription factor 4",
+"C6orf48", "AAS", 50854, "chromosome 6 open reading frame 48",
+"CEBPB", "AAS", 1051, "CCAAT/enhancer binding protein beta",
+"CLIC4", "AAS", 25932, "chloride intracellular channel 4",
+"GARS", "AAS", 2617, "glycyl-tRNA synthetase",
+"HERPUD1", "AAS", 9709, "homocysteine inducible ER protein with ubiquitin like domain 1",
+"PPP1R15A", "AAS", 23645, "protein phosphatase 1 regulatory subunit 15A",
+"PYCR1", "AAS", 5831, "pyrroline-5-carboxylate reductase 1",
+"WARS", "AAS", 7453, "tryptophanyl-tRNA synthetase",
+"YARS", "AAS", 8565, "tyrosyl-tRNA synthetase",
+"ASNS", "AAS", 440, "asparagine synthetase (glutamine-hydrolyzing)",
+"CHAC1", "AAS", 79094, "ChaC glutathione specific gamma-glutamylcyclotransferase 1",
+"DDIT3", "AAS", 1649, "DNA damage inducible transcript 3",
+"PHGDH", "AAS", 26227, "phosphoglycerate dehydrogenase",
+"SARS", "AAS", 6301, "seryl-tRNA synthetase",
+"SAT1", "AAS", 6303, "spermidine/spermine N1-acetyltransferase 1",
+"SLC3A2", "AAS", 6520, "solute carrier family 3 member 2",
+"TRIB3", "AAS", 57761, "tribbles pseudokinase 3",
+
+"CCL5", "Merck18", 6352, "C-C motif chemokine ligand 5",
+"CD27", "Merck18", 939, "CD27 molecule",
+"CD274", "Merck18", 29126, "CD274 molecule",
+"CD276", "Merck18", 80381, "CD276 molecule",
+"CD8A", "Merck18", 925, "CD8a molecule",
+"CMKLR1", "Merck18", 1240, "chemerin chemokine-like receptor 1",
+"CXCR6", "Merck18", 10663, "C-X-C motif chemokine receptor 6",
+"HLA-DQA1", "Merck18", 3117, "major histocompatibility complex, class II, DQ alpha 1",
+"HLA-DRB1", "Merck18", 3123, "major histocompatibility complex, class II, DR beta 1",
+"HLA-E", "Merck18", 3133, "major histocompatibility complex, class I, E",
+"IDO1", "Merck18", 3620, "indoleamine 2,3-dioxygenase 1",
+"LAG3", "Merck18", 3902, "lymphocyte activating 3",
+"NKG7", "Merck18", 4818, "natural killer cell granule protein 7",
+"PDCD1LG2", "Merck18", 80380, "programmed cell death 1 ligand 2",
+"PSMB10", "Merck18", 5699, "proteasome subunit beta 10",
+"STAT1", "Merck18", 6772, "signal transducer and activator of transcription 1",
+"TIGIT", "Merck18", 201633, "T-cell immunoreceptor with Ig and ITIM domains",
+"CXCL9", "Merck18", 4283, "C-X-C motif chemokine ligand 9",
+
+"CD8A", "Hot", 925, "CD8a molecule",
+"GZMB", "Hot", 3002, "granzyme B",
+"IFNG", "Hot", 3458, "interferon gamma",
+"PRF1", "Hot", 5551, "perforin 1",
+
+"SMAD7", "TGFB", 4092, "SMAD family member 7",
+"AXIN1", "TGFB", 8312, "axin 1",
+"PDPK1", "TGFB", 5170, "3-phosphoinositide dependent protein ki",
+"MAP3K7", "TGFB", 6885, "mitogen-activated protein kinase kinase",
+"PPP1R15A", "TGFB", 23645, "protein phosphatase 1 regulatory subuni",
+"ZFYVE9", "TGFB", 9372, "zinc finger FYVE-type containing 9",
+"TGFB1", "TGFB", 7040, "transforming growth factor beta 1",
+"TGFB3", "TGFB", 7043, "transforming growth factor beta 3",
+"SKIL", "TGFB", 6498, "SKI like proto-oncogene",
+"RPS6KB1", "TGFB", 6198, "ribosomal protein S6 kinase B1",
+"CCN2", "TGFB", 1490, "cellular communication network factor 2",
+"SHC1", "TGFB", 6464, "SHC adaptor protein 1",
+"PML", "TGFB", 5371, "promyelocytic leukemia",
+"ARRB2", "TGFB", 409, "arrestin beta 2",
+"CTNNB1", "TGFB", 1499, "catenin beta 1",
+"TGFBR1", "TGFB", 7046, "transforming growth factor beta recepto",
+"TGFBR2", "TGFB", 7048, "transforming growth factor beta recepto",
+"YAP1", "TGFB", 10413, "Yes associated protein 1",
+"RHOA", "TGFB", 387, "ras homolog family member A",
+"TGFB2", "TGFB", 7042, "transforming growth factor beta 2",
+"PPP1CA", "TGFB", 5499, "protein phosphatase 1 catalytic subunit",
+"YWHAE", "TGFB", 7531, "tyrosine 3-monooxygenase/tryptophan 5-m",
+"PPP2CB", "TGFB", 5516, "protein phosphatase 2 catalytic subunit",
+"FKBP1A", "TGFB", 2280, "FKBP prolyl isomerase 1A",
+"GRB2", "TGFB", 2885, "growth factor receptor bound protein 2 ",
+"PPP2R2A", "TGFB", 5520, "protein phosphatase 2 regulatory subuni",
+"PPP2CA", "TGFB", 5515, "protein phosphatase 2 catalytic subunit",
+"SMAD3", "TGFB", 4088, "SMAD family member 3",
+"DAB2", "TGFB", 1601, "DAB adaptor protein 2",
+"XIAP", "TGFB", 331, "X-linked inhibitor of apoptosis",
+"SPTBN1", "TGFB", 6711, "spectrin beta, non-erythrocytic 1",
+"CAV1", "TGFB", 857, "caveolin 1",
+"TGFBR3", "TGFB", 7049, "transforming growth factor beta recepto",
+"SOS1", "TGFB", 6654, "SOS Ras/Rac guanine nucleotide exchange",
+"BAMBI", "TGFB", 25805, "BMP and activin membrane bound inhibito",
+"SMAD4", "TGFB", 4089, "SMAD family member 4",
+"TAB1", "TGFB", 10454, "TGF-beta activated kinase 1 (MAP3K7) bi",
+"SMAD2", "TGFB", 4087, "SMAD family member 2",
+"OCLN", "TGFB", 100506658, "occludin",
+"DACT2", "TGFB", 168002, "dishevelled binding antagonist of beta ",
+"RNF111", "TGFB", 54778, "ring finger protein 111",
+"ZFYVE16", "TGFB", 9765, "zinc finger FYVE-type containing 16",
+"ITCH", "TGFB", 83737, "itchy E3 ubiquitin protein ligase",
+"NEDD4L", "TGFB", 23327, "NEDD4 like E3 ubiquitin protein ligase ",
+"EIF2A", "TGFB", 83939, "eukaryotic translation initiation facto",
+"WWP1", "TGFB", 11059, "WW domain containing E3 ubiquitin prote",
+"SMURF2", "TGFB", 64750, "SMAD specific E3 ubiquitin protein liga",
+"SMURF1", "TGFB", 57154, "SMAD specific E3 ubiquitin protein liga",
+"DYNLRB1", "TGFB", 83658, "dynein light chain roadblock-type 1",
+"PARD6A", "TGFB", 50855, "par-6 family cell polarity regulator al",
+"TAB2", "TGFB", 23118, "TGF-beta activated kinase 1 (MAP3K7) bi",
+"DAXX", "TGFB", 1616, "death domain associated protein",
+"CAMK2A", "TGFB", 815, "calcium/calmodulin dependent protein ki",
+"STRAP", "TGFB", 11171, "serine/threonine kinase receptor associ",
+
+"TCIM", "GCN2", 56892, "transcriptional and immune response regulator",
+"ANTXR2", "GCN2", 118429, "anthrax toxin receptor 2",
+"CEP85L", "GCN2", 387119, "centrosomal protein 85 like",
+"CNNM4", "GCN2", 26504, "cyclin and CBS domain divalent metal cation transport mediator 4",
+"GREM1", "GCN2", 26585, "gremlin 1, DAN family BMP antagonist",
+"PRUNE2", "GCN2", 158471, "prune homolog 2",
+"TNFAIP2", "GCN2", 7127, "TNF alpha induced protein 2",
+"WDR45", "GCN2", 11152, "WD repeat domain 45",
+"WIPI2", "GCN2", 26100, "WD repeat domain, phosphoinositide interacting 2",
+"ZNRF2", "GCN2", 223082, "zinc and ring finger 2",
+"ANGPTL4", "GCN2", 51129, "angiopoietin like 4",
+"CA8", "GCN2", 767, "carbonic anhydrase 8",
+"NDST3", "GCN2", 9348, "N-deacetylase and N-sulfotransferase 3",
+"PTGS1", "GCN2", 5742, "prostaglandin-endoperoxide synthase 1",
+"RBPJ", "GCN2", 3516, "recombination signal binding protein for immunoglobulin kappa J region",
+"TXNRD1", "GCN2", 7296, "thioredoxin reductase 1",
+"BDKRB2", "GCN2", 624, "bradykinin receptor B2",
+"FOXL1", "GCN2", 2300, "forkhead box L1",
+"TMEM171", "GCN2", 134285, "transmembrane protein 171",
+
+)
+
+load("amino_acid_starvation_signatures.rdata")
+RAPT_signatures <- bind_rows(RAPT_signatures, aas %>% mutate(type=paste0("Mengshu.", AminoAcid), EntrezID=as.numeric(EntrezID)) %>% select(hugo=Gene, type, EntrezID, name))
+
+
+library(MCPcounter)
+mcp_counter_RAPT <- lapply(sample_sets, function(the_set) {
+		data.here <- raw_tpms[, .SD, .SDcols=the_set] %>% as.data.frame()
+		rownames(data.here) <- raw_tpms$Gene
+		MCPcounter.estimate(data.here, featuresType="HUGO_symbols", genes=RAPT_signatures %>% select(`HUGO symbols`=hugo, `Cell population`=type, ENTREZID=EntrezID)  %>% as.data.frame)
+	})
+
+types <- rownames(mcp_counter_RAPT[[1]])
+types <- case_when(
+	types %in% c("gMDSC","mMDSC","AAS") ~ paste0("Mengshu.", types),
+	types %like% "^Mengshu" ~ types,
+	TRUE ~ paste0("Gene.", types)
+)
+mcp_counter_RAPT <- do.call("cbind",mcp_counter_RAPT) %>% as_tibble() %>% mutate(cell_type=types) %>% select(cell_type, everything())
+rm(types)
+deconv_results <- bind_rows(deconv_results, mcp_counter_RAPT)
+rm(mcp_counter_RAPT)
+
+# Treg
+myTreg <- truncZ(sampleXgeneZFull$FOXP3 * 4 + sampleXgeneZFull$CTLA4 + sampleXgeneZFull$IKZF2 + sampleXgeneZFull$CCR8)
+myTreg  <- tibble(Gene.Treg2 = myTreg, sample=sampleXgeneZFull$Sample) %>% pivot_wider(everything(), names_from="sample", values_from="Gene.Treg2")
+myTreg <- myTreg %>% mutate(cell_type="Gene.Treg2") %>% select(cell_type, everything())
+deconv_results <- bind_rows(deconv_results,myTreg)
+rm(myTreg)
+```
+
+
+
+```{r fig.height=20, fig.width=12}
+library(pheatmap)
+cors <- deconv_results %>%  pivot_longer(-cell_type, names_to="sample", values_to="score") %>% pivot_wider(everything(), names_from="cell_type", values_from="score") %>% select(-sample) %>% cor
+pheatmap(cors, cutree_rows=14)
+```
+
+
+
+# Z-scale all scores 
+```{r}
+deconv_t_z <- deconv_results %>%  pivot_longer(-cell_type, names_to="sample", values_to="score") %>% pivot_wider(everything(), names_from="cell_type", values_from="score") %>% mutate_if(is.numeric, truncZ, low=0.1)
+
+
+cor_for_gene_set_Z <- function(gene, set=NULL) {
+	if (!gene %in% colnames(sampleXgeneZFull)) return(NULL)
+	gene_data <- sampleXgeneZFull[[gene]]
+	results <- deconv_t_z %>% summarize_if(is.numeric, cor, gene_data)  %>% pivot_longer(cols=everything(), names_to="CellType", values_to="Correlation") %>% 
+		arrange(-Correlation)  %>% mutate(gene=gene)
+	if (!is.null(set)) results <- results  %>% filter(CellType %like% set)
+	return(results)
+}
+
+# CD8, CD4, CD3, Treg, B, NK, myeloid
+test_genes <- c("CD8B","CD8A",
+				"ANKRD55","BCL11B",
+				"CD3G","CD3D",
+				"FOXP3", "CTLA4",
+				"CD19",
+				"SH2D1B","S1PR5","NKG7",
+				"ITGAX")
+test_set <- "xcell"
+lapply(test_genes, cor_for_gene_set_Z, set=test_set)
+
+```
+
+
+
+```{r}
+test_set <- "quantiseq"
+lapply(test_genes, cor_for_gene_set_Z, set=test_set)
+
+```
+
+```{r}
+test_set <- "mcp_counter"
+lapply(test_genes, cor_for_gene_set_Z, set=test_set)
+
+```
+
+```{r}
+test_set <- "epic"
+lapply(test_genes, cor_for_gene_set_Z, set=test_set)
+
+```
+```{r}
+test_set <- "timer"
+lapply(test_genes, cor_for_gene_set_Z, set=test_set)
+
+
+```
+
+```{r fig.height=10, fig.width=16}
+library(umap)
+library(ggrepel)
+
+
+deconv_z <- deconv_t_z %>%  pivot_longer(-sample, names_to="algo_celltype", values_to="score") %>% pivot_wider(everything(), names_from="sample", values_from="score")
+
+umap_out <- umap(deconv_z %>% select(-algo_celltype))
+umap_results <- tibble(UMAP1=umap_out$layout[,1], UMAP2=umap_out$layout[,2], algo_cell=deconv_results$cell_type) %>%
+	mutate(algo=sub("\\..*","", algo_cell), cellType=sub("^[^.]+\\.","",algo_cell))
+
+type_map <- tribble(
+	~from, ~to,
+"B cell", "B cell",
+"B cell memory", "B cell",
+"B cell naive", "B cell",
+"B cell plasma", "B cell",
+"Cancer associated fibroblast", "other",
+"Class-switched memory B cell", "B cell",
+"Common lymphoid progenitor", "other",
+"Common myeloid progenitor", "other",
+"cytotoxicity score", "other",
+"Endothelial cell", "other",
+"Eosinophil", "other",
+"Granulocyte-monocyte progenitor", "MDSC",
+"Hematopoietic stem cell", "other",
+"immune score", "other",
+"Macrophage", "Macrophage",
+"Macrophage M1", "Macrophage",
+"Macrophage M2", "Macrophage",
+"Macrophage/Monocyte", "Macrophage",
+"Mast cell", "other",
+"microenvironment score", "other",
+"Monocyte", "Monocyte",
+"Myeloid dendritic cell", "DC",
+"Myeloid dendritic cell activated 1", "DC",
+"Neutrophil", "Neutrophil",
+"NK cell", "NK",
+"Plasmacytoid dendritic cell", "DC",
+"stroma score", "other",
+"T cell", "CD3",
+"T cell CD4+", "CD4",
+"T cell CD4+ (non-regulatory)", "CD4",
+"T cell CD4+ central memory", "CD4",
+"T cell CD4+ effector memory", "CD4",
+"T cell CD4+ memory", "CD4",
+"T cell CD4+ naive", "CD4",
+"T cell CD4+ Th1", "CD4",
+"T cell CD4+ Th2", "CD4",
+"T cell CD8+", "CD8",
+"T cell CD8+ central memory", "CD8",
+"T cell CD8+ effector memory", "CD8",
+"T cell CD8+ naive", "CD8",
+"T cell gamma delta", "CD8",
+"T cell NK", "TNK",
+"T cell regulatory (Tregs)", "Treg",
+"uncharacterized cell", "other",
+"gMDSC", "MDSC",
+"mMDSC", "MDSC",
+"Myeloid dendritic cell activated", "DC",
+"Treg","Treg",
+"Treg2","Treg",
+"CD4+","CD4",
+"AAS","other",
+"Methionine","other",
+"Leucine","other",
+"Histidine","other",
+"Arginine","other",
+"Tryptophan","other",
+"TGFB","other",
+"Hot","other",
+"Merck18","other",
+)
+type_map_list <- type_map$to
+names(type_map_list) <- type_map$from
+umap_results <- umap_results %>% mutate(simpleCell = type_map_list[cellType])
+
+ggplot(umap_results, aes(x=UMAP1, y=UMAP2, color=algo)) + geom_point(size=4) + scale_color_rapt()
+
+ggplot(umap_results, aes(x=UMAP1, y=UMAP2, color=simpleCell, label=paste0(algo,".",simpleCell))) + geom_point(size=4) + geom_text_repel(color="black") + scale_color_rapt(palette="both")
+
+ggplot(umap_results, aes(x=UMAP1, y=UMAP2, color=simpleCell, label=algo_cell)) + geom_point(size=4) + geom_text_repel(color="black") + scale_color_rapt(palette="both")
+```
+```{r fig.height=10, fig.width=16}
+
+yes_no <- c(rapt_colors()["orange"], rapt_colors()["gray"])
+names(yes_no) <- c("TRUE","FALSE")
+
+umap_results %>% mutate(CD4=as.character(cellType %like% "CD4")) %>% ggplot( aes(x=UMAP1, y=UMAP2, color=CD4, label=algo_cell)) + geom_point(size=4) + geom_text_repel(color="black") + scale_color_manual(values=yes_no)
+
+umap_results %>% mutate(Treg=as.character(cellType %like% "Treg")) %>% ggplot( aes(x=UMAP1, y=UMAP2, color=Treg, label=algo_cell)) + geom_point(size=4) + geom_text_repel(color="black") + scale_color_manual(values=yes_no)
+
+
+umap_results %>% mutate(NK=as.character(cellType %like% "NK")) %>% ggplot( aes(x=UMAP1, y=UMAP2, color=NK, label=algo_cell)) + geom_point(size=4) + geom_text_repel(color="black") + scale_color_manual(values=yes_no)
+
+
+umap_results %>% mutate(DC=as.character(cellType %like% "dend")) %>% ggplot( aes(x=UMAP1, y=UMAP2, color=DC, label=algo_cell)) + geom_point(size=4) + geom_text_repel(color="black") + scale_color_manual(values=yes_no)
+```
+
+
+## keep best annotations
+```{r}
+
+best <- deconv_t_z %>% select(SampleID=sample, CD8=`quantiseq.T cell CD8+`, Treg=Gene.Treg2, CD4=`Gene.CD4+`, 
+							  NK=`mcp_counter.NK cell`, B=`mcp_counter.B cell`,
+							  mMDSC=Mengshu.mMDSC, gMDSC=Mengshu.gMDSC, TGF_B=Gene.TGFB,
+							  M1=`xcell.Macrophage M1`, M2=`xcell.Macrophage M2`, Neutrophil=mcp_counter.Neutrophil, 
+							  mDC=`mcp_counter.Myeloid dendritic cell`, 
+							  CAF=`mcp_counter.Cancer associated fibroblast`, Endothelial=`mcp_counter.Endothelial cell`,
+							  Merck18=Gene.Merck18, Hot=Gene.Hot, AAS_Common=Mengshu.AAS, AAS_Met=Mengshu.Methionine, AAS_His=Mengshu.Histidine,
+							  AAS_Leu=Mengshu.Leucine, AAS_Arg=Mengshu.Arginine, AAS_Trp=Mengshu.Tryptophan
+							  )
+
+sampleAnnotation <- allMergedData.SampleInfo %>% as_tibble %>% select(SampleID=Sample, TumorAbr, Dataset, Tumor.Or.Normal=DzNormal, PrimaryDisease, SampleType, Gender, DiagnosisAge, OverallSurvival_Days)
+TCGA_Annotation_Deconv <- left_join(sampleAnnotation, best, by="SampleID")
+save(TCGA_Annotation_Deconv, file="TCGA_Annotation_Deconvolution.20200506.rdata")
+```
+
+
+
+
+# check some more CD4
+```{r}
+cor_for_gene_set_Z <- function(gene, the_set=NULL) {
+	if (!gene %in% colnames(sampleXgeneZFull)) return(NULL)
+	gene_data <- sampleXgeneZFull[[gene]]
+	results <- deconv_t_z %>% summarize_if(is.numeric, cor, gene_data)  %>% pivot_longer(cols=everything(), names_to="CellType", values_to="Correlation") %>% 
+		arrange(-Correlation)  %>% mutate(gene=gene, set=the_set)
+	if (!is.null(set)) results <- results  %>% filter(CellType %like% the_set)
+	return(results)
+}
+
+test_genes <- c("CXorf58","DACT1","AKR1E2","FAM184A","EDAR","TSHZ2","ANKRD55","NT5C1A","CACNA1I", "PCED1B","RNF157") # "CERS3",
+
+test_correlations <- lapply(c("xcell","quantiseq","mcp_counter","epic","timer"), function(the.set){bind_rows(lapply(test_genes, cor_for_gene_set_Z, the_set=the.set))}) %>% bind_rows
+test_correlations %>% arrange(-Correlation)
+```
+
+DACT1 and TSHZ2 associate with CAFS, drop them
+ANKRD55, CACNA1I looks best
+PCED1B
+
+
+
+"CXorf58","AKR1E2","FAM184A","EDAR","ANKRD55","NTFC1A","CACNA1I"

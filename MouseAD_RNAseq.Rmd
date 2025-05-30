@@ -1,0 +1,230 @@
+---
+title: "MouseADRNAseq"
+author: "Mengshu"
+date: "7/24/2019"
+output: html_document
+---
+
+This script is for looking at Mouse AD model bulk RNA sequencing results. 
+This experiment is designed to detect low abundance transcripts of IL22, IL17 etc. which are functional markers of TH2 cells. 
+1ug of total RNA was submitted for library building, with notes to load as much RNA as possible. 
+Each sample was sequenced Illumina HiSeq PE100 at 80 Million reads. 
+Alignment was done with Kallisto to the GRCm38/mm10 transcriptome build fasta file, downloaded from UCSC Table Browser. The exact parameters are recorded in Apple Notes. 
+
+
+```{r}
+library(limma)
+library(tibble)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(ggplot2)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+Load the gene translation table
+
+```{r}
+gencode_symbol <- read.table("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/GRCm38_GENCODE2SYMBOL.txt", header=FALSE)
+colnames(gencode_symbol) <- c("Gene","Symbol")
+```
+
+Load the data
+Select the est_counts for this table
+Merge the data, rename the columns, and tranlate the ENCODE genes to symbols
+
+```{r}
+files <- base::list.files("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_Stranded", pattern="^Mouse")
+data_files <- lapply(files, function(i){read.table(paste0("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_Stranded/",i),header=TRUE)})
+AD_counts <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+#colnames(AD_counts) <- c("Vehicle_ETOH_UTR","Vehicle_ETOH","Vehicle_FITC_UTR","Vehicle_FITC","DEX_ETOH_UTR","DEX_ETOH","DEX_FITC_UTR","DEX_FITC","RPT193_ETOH_UTR","RPT193_ETOH","RPT193_FITC_UTR","RPT193_FITC")
+colnames(AD_counts) <- c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC")
+Genes <- sub("mm10_knownGene_","",data_files[[1]]$target_id)
+AD_counts %<>% mutate(Gene = Genes) %>% dselect(Gene, everything())
+AD_counts <- left_join(AD_counts, gencode_symbol, by="Gene") %>% dselect(Symbol,Gene, everything())
+
+save(AD_counts,file="/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_stranded.rdata")
+``` 
+
+Downsample
+```{r}
+files <- base::list.files("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/kallisto_tsv/downsample", pattern="^2RE_")
+data_files <- lapply(files, function(i){read.table(paste0("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/kallisto_tsv/downsample/",i),header=TRUE)})
+DS_counts <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(est_counts)}))
+DS_TPM <- cbind.data.frame(lapply(data_files, function(j) {j %>% dselect(tpm)}))
+#colnames(AD_counts) <- c("Vehicle_ETOH_UTR","Vehicle_ETOH","Vehicle_FITC_UTR","Vehicle_FITC","DEX_ETOH_UTR","DEX_ETOH","DEX_FITC_UTR","DEX_FITC","RPT193_ETOH_UTR","RPT193_ETOH","RPT193_FITC_UTR","RPT193_FITC")
+colnames(DS_counts) <- c("36M_2RE","50M_2RE","75M_2RE","98M_2RE")
+colnames(DS_TPM) <- c("36M_2RE","50M_2RE","75M_2RE","98M_2RE")
+Genes <- sub("mm10_knownGene_","",data_files[[1]]$target_id)
+DS_counts %<>% mutate(Gene = Genes) %>% dselect(Gene, everything())
+DS_TPM %<>% mutate(Gene = Genes) %>% dselect(Gene, everything())
+DS_counts <- left_join(DS_counts, gencode_symbol, by="Gene") %>% dselect(Symbol,Gene, everything())
+DS_TPM <- left_join(DS_TPM, gencode_symbol, by="Gene") %>% dselect(Symbol,Gene, everything())
+
+save(DS_counts,file="/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_Counts_Downsample2RE.rdata")
+save(DS_TPM,file="/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_TPM_Downsample2RE.rdata")
+``` 
+
+Look at global signals
+```{r}
+boxplot(AD_counts[,3:8])
+boxplot(DS_TPM[,3:6])
+```
+Normalize between arrays
+Skip this downsamples 
+Keep per-transcript signals
+```{r fig.height=4, fig.width=4}
+AD_norm <- normalizeBetweenArrays(AD_counts[,3:8])
+DS_norm <- normalizeBetweenArrays(DS_counts[,3:6])
+boxplot(AD_norm[,3:8])
+#boxplot(DS_norm)
+AD_norm %<>% data.frame %>% mutate(Symbol=AD_counts$Symbol, Gene=AD_counts$Gene) %>% dselect(Symbol, Gene,everything())
+DS_norm %<>% data.frame %>% mutate(Symbol=AD_counts$Symbol, Gene=AD_counts$Gene) %>% dselect(Symbol, Gene,everything())
+```
+Plot graphs for downsampling
+```{r}
+Ccr4_ds <- DS_counts %>% dfilter(Symbol=="Ccr4") %>% mutate(Region = c("3UTR","Exon2","5UTR_Exon1")) %>% dselect(Symbol, Gene, Region, everything())
+Ccr4_ds %>% dselect(-Symbol, -Gene) %>% gather(Condition, Count, -Region) %>% mutate(Region=factor(Region, levels=c("5UTR_Exon1","Exon2","3UTR"))) %>% mutate(Condition= factor(Condition, levels=c("36M_2RE","50M_2RE","75M_2RE","98M_2RE"))) %>% ggplot(aes(x= Condition, y=Count, fill=Condition)) + geom_bar(stat="identity") + facet_wrap(~Region) + scale_fill_brewer(palette="YlGnBu") +
+theme(axis.text.x = element_text(angle=60,size=10, hjust=1)) +
+ggsave("MouseAD_CCR4_Downsample.jpg", width=6, height=4, dpi=600, plot= last_plot(), units = "in")
+
+Ccr4_ds <- DS_TPM %>% dfilter(Symbol=="Ccr4") %>% mutate(Region = c("3UTR","Exon2","5UTR_Exon1")) %>% dselect(Symbol, Gene, Region, everything())
+Ccr4_ds %>% dselect(-Symbol, -Gene) %>% gather(Condition, TPM, -Region) %>% mutate(Region=factor(Region, levels=c("5UTR_Exon1","Exon2","3UTR"))) %>% mutate(Condition= factor(Condition, levels=c("36M_2RE","50M_2RE","75M_2RE","98M_2RE"))) %>% ggplot(aes(x= Condition, y=TPM, fill=Condition)) + geom_bar(stat="identity") + facet_wrap(~Region) + scale_fill_brewer(palette="YlGnBu") +
+theme(axis.text.x = element_text(angle=60,size=10, hjust=1)) +
+ggsave("MouseAD_CCR4_TPM_Downsample.jpg", width=6, height=4, dpi=600, plot= last_plot(), units = "in")
+
+ENSMUST00000054414.4
+AD_counts %>% dfilter(Gene=="ENSMUST00000054414.4") %>% dselect(-Symbol, -Gene) %>% gather(Condition, TPM) %>% mutate(Condition= factor(Condition, levels=c("25M_2RE","50M_2RE","98M_2RE"))) %>% ggplot(aes(x= Condition, y=TPM, fill=Condition)) + geom_bar(stat="identity") + scale_fill_brewer(palette="YlGnBu") +
+theme(axis.text.x = element_text(angle=60,size=10, hjust=1)) +
+ggsave("MouseAD_Ccr4_Downsample.jpg", width=4, height=4, dpi=600, plot= last_plot(), units = "in")
+
+DS_counts %>% dfilter(Symbol=="Il17b") %>% dselect(-Symbol, -Gene) %>% gather(Condition, Counts) %>% mutate(Condition= factor(Condition, levels=c("36M_2RE","50M_2RE","75M_2RE","98M_2RE"))) %>% ggplot(aes(x= Condition, y=Counts, fill=Condition)) + geom_bar(stat="identity") + scale_fill_brewer(palette="YlGnBu") +
+theme(axis.text.x = element_text(angle=60,size=10, hjust=1), title= element_text(size=16)) + ggtitle("Il17b") +
+ggsave("MouseAD_Il17b_Count_Downsample.jpg", width=4, height=4, dpi=600, plot= last_plot(), units = "in")
+
+DS_TPM %>% dfilter(Symbol=="Il17b") %>% dselect(-Symbol, -Gene) %>% gather(Condition, TPM) %>% mutate(Condition= factor(Condition, levels=c("36M_2RE","50M_2RE","75M_2RE","98M_2RE"))) %>% ggplot(aes(x= Condition, y=TPM, fill=Condition)) + geom_bar(stat="identity") + scale_fill_brewer(palette="YlGnBu") +
+theme(axis.text.x = element_text(angle=60,size=10, hjust=1), title= element_text(size=16)) + ggtitle("Il17b") +
+ggsave("MouseAD_Il17b_TPM_Downsample.jpg", width=4, height=4, dpi=600, plot= last_plot(), units = "in")
+
+
+DS_counts %>% dselect(-Gene) %>% gather(Condition, Counts, -Symbol) %>% group_by(Symbol, Condition) %>% summarise_if(is.numeric,sum) %>% mutate(Condition= factor(Condition, levels=c("36M_2RE","50M_2RE","98M_2RE"))) %>% ggplot(aes(x= Condition, y=Counts, group=Symbol)) + geom_line() + theme(axis.text.x = element_text(angle=60,size=10, hjust=1)) + ggtitle("Counts by downsampling")
+ggsave("MouseAD_Il20_Downsample.jpg", width=4, height=4, dpi=600, plot= last_plot(), units = "in")
+
+
+DS_counts %>% dfilter(`36M_2RE` >= 0.01,`98M_2RE` >= 0.01)  %>% ggplot(aes(x=`36M_2RE`, y=`98M_2RE`, colour=`98M_2RE`)) +scale_colour_gradient(trans="log", low = "green", high = "blue")  + geom_point(pch=16, alpha=0.5) + scale_x_log10() + scale_y_log10() 
+
+DS_TPM %>% dfilter(`36M_2RE` >= 0.01,`98M_2RE` >= 0.01)  %>% ggplot(aes(x=`36M_2RE`, y=`98M_2RE`, colour=`98M_2RE`)) +scale_colour_gradient(trans="log", low = "green", high = "blue")  + geom_point(pch=16, alpha=0.5) + scale_x_log10() + scale_y_log10() +
+ggsave("MouseAD_scatter_TPM_25M_Downsample.jpg", width=4, height=4, dpi=600, plot= last_plot(), units = "in")
+# 
+
+DS_counts %>% mutate(Ratio= (`98M_2RE`+ 0.0000001)/(`75M_2RE`+0.0000001)) %>% dfilter(`75M_2RE` <= 10,`75M_2RE` >= 0.001,`98M_2RE` <= 10 ,`98M_2RE` >= 0.001)  %>% ggplot(aes(x=`98M_2RE`, y=Ratio, colour=Ratio)) + geom_point(pch=16, alpha=0.5) +scale_x_log10() + scale_y_log10() 
+
+DS_counts %>% 
+```
+Check markers
+
+```{r}
+AD_norm %>% dfilter(Symbol=="Ccr4")
+DS_norm %>% dfilter(Symbol=="Ccr4")
+DS_counts %>% dfilter(Symbol=="Ccl17")
+```
+
+
+Gene-region specific plots CCR4
+
+```{r fig.height=4, fig.width=10}
+Ccr4 <- AD_norm %>% dfilter(Symbol=="Ccr4") %>% mutate(Region = c("3UTR","Exon2","5UTR_Exon1")) %>% dselect(Symbol, Gene, Region, everything())
+Ccr4 %>% dselect(-Symbol, -Gene) %>% gather(Condition, TPM, -Region) %>% mutate(Region=factor(Region, levels=c("5UTR_Exon1","Exon2","3UTR"))) %>% mutate(Condition= factor(Condition, levels=c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC"))) %>% ggplot(aes(x= Condition, y=TPM, fill=Condition)) + geom_bar(stat="identity") + facet_wrap(~Region, ncol=3) + scale_fill_brewer(palette="Paired") +
+theme(axis.text.x = element_text(angle=60,size=10, hjust=1)) +
+ggsave("MouseAD_CCR4_regions_TPM.jpg", width=10, height=4, dpi=600, plot= last_plot(), units = "in")
+```
+
+Look at the counts for the interleukins
+
+```{r}
+Th2_markers <- c("Ccr4","Ccl22","Il9", "Ccl17","Foxp3")
+AD_norm_gene %>% dfilter(Gene %in% Th2_markers)
+```
+
+There are multiple transcripts per gene. I might need to fix this from the initial FASTA file, but I can fix this by summing by Gene
+```{r}
+AD_norm_gene <- AD_norm %>% group_by(Symbol) %>% summarize_if(is.numeric,sum) 
+save(AD_gene_counts,file="/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_Gene_TPM.rdata")
+load("/Volumes/Enterprise/FLX/Atopic\ Dermatitis/bulk_RNAseq/Kallisto_Gene_TPM.rdata")
+```
+
+Plot
+```{r fig.height=5, fig.width=12}
+AD_gene_norm %>% dfilter(Gene %in% Th2_markers) %>% gather(Condition, TPM, -Gene) %>% mutate(Condition=factor(Condition,levels=c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC"))) %>% 
+  ggplot(aes(x=Condition, y=TPM, fill=Condition)) +
+geom_bar(stat="identity") + 
+  facet_wrap(~Gene, scales="free_y",ncol=5) + 
+  theme(axis.text.x = element_text(angle=45,size=12, hjust=1)) 
+  scale_fill_brewer(palette="Paired") +
+  #ggsave("MouseAD_RNAseq_TPM.jpg", width= 12, height=5, dpi=600, plot= last_plot(), units = "in")
+
+AD_norm_gene %>% dfilter(Symbol %in% Th2_markers) %>% gather(Condition, TPM, -Symbol) %>% mutate(Condition=factor(Condition,levels=c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC"))) %>% 
+  ggplot(aes(x=Condition, y=TPM, fill=Condition)) +
+geom_bar(stat="identity") + 
+  facet_wrap(~Symbol, scales="free_y",ncol=5) + 
+  theme(axis.text.x = element_text(angle=45,size=12, hjust=1)) + 
+  scale_fill_brewer(palette="Paired") 
+  ggsave("MouseAD_RNAseq_TPM.jpg", width= 12, height=5, dpi=600, plot= last_plot(), units = "in")
+```
+
+Plot genes of interest from raw data
+Ccl22
+Foxp3
+Gata3
+Ifnb1
+Ifng
+Il13
+Il17a
+Il17b
+Il17F
+Il22
+Il33
+Il4
+Il5
+Pdcd1
+Tgfb1
+Tgfb2
+Tgfb3
+Tslp
+Il22 was not detected at all
+```{r fig.height=, fig.width=12}
+AD_markers <- c("Cxcr6","Foxp3","Gata3","Dok1","Ifng","Il5","Il6","Il10","Il13","Il17b","Il20","IL22","Il33","Il34","Il35","Il37","Il4","Il5","Pdcd1","Tgfb1","Tgfb2","Tgfb3","Tslp")
+AD_norm %>% dfilter(Symbol %in% AD_markers) %>% gather(Condition, TPM, -Gene, -Symbol) %>% 
+  mutate(Condition=factor(Condition,levels=c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC"))) %>% 
+  ggplot(aes(x=Condition, y=TPM, fill=Condition)) +
+geom_bar(stat="identity") + 
+  facet_wrap(~Symbol, scales="free_y",ncol=6) + 
+  theme(axis.text.x = element_text(angle=45,size=12, hjust=1)) + 
+  scale_fill_brewer(palette="Paired") +
+  ggsave("MouseAD_RNAseq_panel.jpg", width= 12, height=8, dpi=600, plot= last_plot(), units = "in")
+```
+Plot One Gene
+
+```{r fig.height=5, fig.width=4}
+AD_norm %>% dfilter(Symbol =="Il9") %>% gather(Condition, TPM, -Gene, -Symbol) %>% 
+  mutate(Condition=factor(Condition,levels=c("Vehicle_ETOH","Vehicle_FITC","DEX_ETOH","DEX_FITC","RPT193_ETOH","RPT193_FITC"))) %>% 
+  ggplot(aes(x=Condition, y=TPM, fill=Condition)) +
+geom_bar(stat="identity") + 
+  theme(axis.text.x = element_text(angle=60,size=10, hjust=1)) + 
+  scale_fill_brewer(palette="Paired") 
+  ggsave("MouseAD_RNAseq_Ccl22_fix.jpg", width=4, height=5, dpi=600, plot= last_plot(), units = "in")
+```
+
+```{r}
+AD_norm %>% dfilter(Symbol=="Ccl22")
+AD_gene_counts %>% dfilter(Symbol=="Foxp3")
+```
+Differential analysis with DESeq2
+
+```{r}
+BiocManager::install("DESeq2")
+hist(AD_gene_counts$DEX_FITC)
+AD_gene_counts %>% dselect(DEX_FITC) %>% dfilter(DEX_FITC > 0.1) %>% summarise_all(median)
+```
+

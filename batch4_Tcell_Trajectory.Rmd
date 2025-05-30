@@ -1,0 +1,514 @@
+---
+title: "Talmadge_Tcell_Trajectory.Rmd"
+author: "MX"
+date: "8/27/2020"
+output: html_document
+---
+
+
+```{r}
+library(Seurat)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+#library(limma) #quantileNormalization
+library(tibble)
+#library("DESeq2")
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("D:/FLX/Files_from_Gene/R_functions.r")
+install.packages("hdf5r")
+devtools::install_github("hhoeflin/hdf5r")
+```
+
+Load Batch 4 Seurat object and subset to just T cells
+```{r}
+load("/Volumes/Picard/FLX/scRNA_data/MDSC_Talmadge/Cellranger3.1.0_batch4/batch4.Robj")
+batch4_Tcell <- subset(batch4, idents=c(0,1,26,4,18,19))
+save(batch4_Tcell, file="batch4_Tcell.Robj") 
+```
+
+
+#######################
+#######################
+
+Import into Monocle2
+monocle_2.16.0
+This was a disaster previously, but
+Try again on the Mac trash can, Aug 17, 2020
+Monocle 2 has worked out before, in 2018
+#######################
+#######################
+ 
+```{r}
+library(monocle)
+sessionInfo() # monocle 2.16.0
+#load data from line 101, batch4_myeloid
+
+batch4_Tcell[["ident"]] <- batch4_Tcell@active.ident 
+counts.matrix <- as(as.matrix(batch4_Tcell@assays$RNA@counts), 'sparseMatrix') # raw counts data
+pheno <- as(batch4_Tcell@meta.data,"AnnotatedDataFrame") # phenoData where rows are cells, and columns are attributes
+gene_meta <- as(data.frame(gene_short_name = row.names(counts.matrix), row.names = row.names(counts.matrix)), "AnnotatedDataFrame")
+#fd <- new('AnnotatedDataFrame', data = fData)
+
+
+#Construct monocle cds
+batch4_Tcell_monocle2 <- newCellDataSet(counts.matrix,
+                         phenoData = pheno,
+                         featureData = gene_meta,
+                         expressionFamily=negbinomial.size()) 
+
+save(batch4_Tcell_monocle2,file="batch4_Tcell_monocle2.rdata") # current saved version has CITE data as meta data in pData
+save(batch4_Tcell_monocle2_CITE,file="batch4_Tcell_monocle2_CITE.rdata")
+```
+ 
+```{r}
+#Add in CITE data
+
+CITE_Tcell <- FetchData(batch4_Tcell, vars= c("CD4-CITE","CCR4-CITE","CCR6-CITE","CD11b-CITE","CD11c-CITE","CD14-CITE","CD15-CITE","CD33-CITE" ,"CD34-CITE","CD45RA-CITE", "CD45RO-CITE", "CSF-1R-CITE","CXCR3-CITE","LAG-3-CITE","PD-1-CITE","PD-L1-CITE"), cells = T_monocle) # Get CITE markers from the Seurat object, for the cells in the Monocle T cell object
+
+colnames(CITE_Tcell) <- c("CD4_CITE","CCR4_CITE","CCR6_CITE","CD11b_CITE","CD11c_CITE","CD14_CITE","CD15_CITE","CD33_CITE" ,"CD34_CITE","CD45RA_CITE", "CD45RO_CITE", "CSF_1R_CITE","CXCR3_CITE","LAG_3_CITE","PD_1_CITE","PD_L1_CITE")
+
+CITE_t <- as(as.matrix(CITE_Tcell %>% t), 'sparseMatrix') 
+
+counts.matrix.CITE <- rbind(exprs(batch4_Tcell_monocle2),CITE_t)
+
+matrix.CITE <- rbind(exprs(batch4_Tcell_monocle2),CITE_t) # merge the existing raw data with CITE data
+matrix.CITE.dense <- as.matrix(matrix.CITE)
+
+batch4_Tcell_monocle2_CITE
+str(matrix.CITE.dense)
+batch4_Tcell_monocle2@assayData <- matrix.CITE.dense # put the merged data back into the assayData slot
+
+gene_meta <- as(data.frame(gene_short_name = row.names(matrix.CITE), row.names = row.names(counts.matrix)), "AnnotatedDataFrame")
+pheno <- as(pData(batch4_Tcell_monocle2), "AnnotatedDataFrame")
+#Construct monocle cds with CITE data
+batch4_Tcell_monocle2_CITE <- newCellDataSet(matrix.CITE,
+                         phenoData = pheno,
+                         featureData = gene_meta,
+                         expressionFamily=negbinomial.size()) 
+
+save(batch4_Tcell_monocle2,file="batch4_Tcell_monocle2.rdata") # current saved version has CITE data as meta data in pData
+save(batch4_Tcell_monocle2_CITE,file="batch4_Tcell_monocle2_CITE.rdata")
+
+grep("CITE",row.names(batch4_Tcell_monocle2_CITE), value=TRUE)
+```
+
+Pre-Process
+Process
+```{r}
+batch4_Tcell_monocle2 <- estimateSizeFactors(batch4_Tcell_monocle2)
+batch4_Tcell_monocle2 <- estimateDispersions(batch4_Tcell_monocle2)
+
+batch4_Tcell_monocle2_CITE <- estimateSizeFactors(batch4_Tcell_monocle2_CITE)
+batch4_Tcell_monocle2_CITE <- estimateDispersions(batch4_Tcell_monocle2_CITE)
+
+disp_table <- dispersionTable(batch4_Tcell_monocle2_CITE)
+unsup_clustering_genes <- subset(disp_table, mean_expression >= 0.01)
+length(unsup_clustering_genes$gene_id) #7568 genes # 8779 cells #10902 CITE
+batch4_Tcell_monocle2_CITE  <- setOrderingFilter(batch4_Tcell_monocle2_CITE , unsup_clustering_genes$gene_id)
+plot_ordering_genes(batch4_Tcell_monocle2_CITE)
+```
+This is the PCA analysis step, can take quite a while
+```{r}
+# HSMM@auxClusteringData[["tSNE"]]$variance_explained <- NULL
+plot_pc_variance_explained(batch4_Tcell_monocle2, return_all = F,max_components = 15) # norm_method='log'
+
+plot_pc_variance_explained(batch4_Tcell_monocle2_CITE, return_all = F,max_components = 9) # norm_method='log'
+```
+reduceDimension(cds, max_components = 2, reduction_method = c("DDRTree",
+  "ICA", "tSNE", "SimplePPT", "L1-graph", "SGL-tree"), norm_method = c("log",
+  "vstExprs", "none"), residualModelFormulaStr = NULL, pseudo_expr = 1,
+  relative_expr = TRUE, auto_param_selection = TRUE, verbose = FALSE,
+  scaling = TRUE, ...)
+
+```{r fig.height=8, fig.width=12}
+batch4_Tcell_monocle2  <- reduceDimension(batch4_Tcell_monocle2 , max_components = 2, num_dim = 9,
+                reduction_method = 'tSNE', verbose = T,residualModelFormulaStr = "~orig.ident")
+batch4_Tcell_monocle2  <- clusterCells(batch4_Tcell_monocle2 , num_clusters = 10) #Distance cutoff calculated to 5.928387 
+
+
+batch4_Tcell_monocle2_CITE  <- reduceDimension(batch4_Tcell_monocle2_CITE , max_components = 2, num_dim = 9,
+                reduction_method = 'tSNE', verbose = T, residualModelFormulaStr = "~orig.ident")
+batch4_Tcell_monocle2_CITE  <- clusterCells(batch4_Tcell_monocle2_CITE , num_clusters = 10) #Distance cutoff calculated to 5.928387 
+
+plot_cell_clusters(batch4_Tcell_monocle2_CITE , 1, 2, color = "CellType",
+    markers = c("CD4","CD8A","FOXP3","IFNG","CXCR3","IL17","LAG3","TOX","EOMES","CCR7","SELL","TNF","TGFB","HAVCR2","CD274","CD69","GZMA","KLRG1","PRF1","PDCD1","CCL5","TCF7","BAX","CCNA2","CCNB1","MKI67","NR4A1","IL2","IL4","IL6","IL25","CCR4"),cell_size = 0.5)
+```
+
+
+Clusters
+
+```{r fig.height=5, fig.width=6}
+plot_cell_clusters(batch4_Tcell_monocle2_CITE, color_by = 'as.factor(Cluster)',cell_size=0.3)
+```
+
+
+Clusters by orig.ident
+```{r fig.height=7, fig.width=8}
+
+plot_cell_clusters(batch4_Tcell_monocle2_CITE, color_by = 'as.factor(Cluster)', cell_size=0.3) + facet_wrap(~orig.ident)
+```
+
+ I see cells cluster by the original donor: regress out this contribution in the next block of code
+```{r fig.height=6, fig.width=8}
+plot_cell_clusters(batch4_Tcell_monocle2_CITE, 1, 2, color = "orig.ident",cell_size = 0.5)
+plot_cell_clusters(batch4_Tcell_monocle2_CITE, 1, 2, color = "nFeature_RNA",cell_size = 0.5)
+plot_cell_clusters(batch4_Tcell_monocle2_CITE, 1, 2, color = "seurat_clusters",cell_size = 0.5) # the seurat clusters are better
+
+```
+
+CITE markers
+
+```{r fig.height=8, fig.width=12}
+plot_cell_clusters(batch4_Tcell_monocle2_CITE, 1, 2, color = "CellType",
+    markers = c("CD4_CITE","CCR4_CITE","CCR6_CITE","CD11b_CITE","CD11c_CITE","CD14_CITE","CD15_CITE","CD33_CITE" ,"CD34_CITE","CD45RA_CITE", "CD45RO_CITE", "CSF_1R_CITE","CXCR3_CITE","LAG_3_CITE","PD_1_CITE","PD_L1_CITE"),cell_size = 0.5)
+
+
+grep("PD_L1_CITE",rownames(batch4_Tcell_monocle2_CITE), value=TRUE)
+```
+
+
+Filter out high MT cells, which form a portion of AML3 CD8 cells that cluster with themselves
+```{r}
+batch4_Tcell_monocle2 <- batch4_Tcell_monocle2[,pData(batch4_Tcell_monocle2)$percent.mt < 15]
+```
+
+
+Monocle 2 Trajectory
+
+
+1. Try trajectory along clusters
+Select genes with min expression of 0.1, and expressed in > 5% of cells
+```{r}
+batch4_Tcell_monocle2_CITE <- detectGenes(batch4_Tcell_monocle2_CITE, min_expr = 0.1)
+fData(batch4_Tcell_monocle2_CITE)$use_for_ordering <-
+    fData(batch4_Tcell_monocle2_CITE)$num_cells_expressed > 0.05 * ncol(batch4_Tcell_monocle2_CITE)
+```
+PCA
+```{r}
+plot_pc_variance_explained(batch4_Tcell_monocle2_CITE, return_all = F,max_components = 9)
+```
+tSNE Add the ,residualModelFormulaStr = "~orig.ident" term here too to regress of the second arm of CD8 T cells
+```{r}
+batch4_Tcell_monocle2 <- reduceDimension(batch4_Tcell_monocle2,
+                              max_components = 2,
+                              norm_method = 'log',
+                              num_dim = 12,
+                              reduction_method = 'tSNE',
+                              verbose = T,
+                              residualModelFormulaStr = "~orig.ident")
+
+batch4_Tcell_monocle2_CITE <- reduceDimension(batch4_Tcell_monocle2_CITE,
+                              max_components = 2,
+                              norm_method = 'log',
+                              num_dim = 9,
+                              reduction_method = 'tSNE',
+                              verbose = T,
+                              residualModelFormulaStr = "~orig.ident")
+```
+
+```{r}
+batch4_Tcell_monocle2_CITE <- clusterCells(batch4_Tcell_monocle2_CITE, verbose = F, num_clusters=10)
+```
+
+```{r fig.height=8, fig.width=10}
+plot_cell_clusters(batch4_Tcell_monocle2_CITE, color_by = 'as.factor(Cluster)')
+```
+Check markers
+```{r fig.height=8, fig.width=12}
+plot_cell_clusters(batch4_Tcell_monocle2_CITE , 1, 2, color = "CellType",
+    markers = c("CD4", "CD8A","FOXP3","IFNG","CXCR3","IL17","LAG3","TOX","EOMES","CCR7","SELL","TNF","TGFB","HAVCR2","CD274","CD69","GZMA","KLRG1","PRF1","PDCD1","CCL5","TCF7","BAX","CCNA2","CCNB1","MKI67","NR4A1","IL2","IL4","IL6","IL25","CCR4"),cell_size = 0.5)
+```
+
+
+Check some parameters
+Rho p is the local cell density, while delta is the nearest distance to another cell 
+```{r}
+plot_rho_delta(batch4_Tcell_monocle2_CITE, rho_threshold = 5, delta_threshold = 5 )
+
+```
+
+Re-run with Delta and Rho_sigma
+rho 2
+sigma 5
+```{r}
+batch4_Tcell_monocle2 <- clusterCells(batch4_Tcell_monocle2,
+                 rho_threshold = 5,
+                 delta_threshold = 5,
+                 skip_rho_sigma = T,
+                 verbose = F)
+```
+
+
+Check markers
+```{r fig.height=8, fig.width=12}
+plot_cell_clusters(batch4_Tcell_monocle2_CITE , 1, 2, color = "CellType",
+    markers = c("CD4_CITE","CD8A","State"),cell_size = 0.5)
+```
+
+
+DE analysis between clusters
+differentialGeneTest takes a while, set cores=1 because cores=6 threw an error
+For T cells: taking a long time
+This takes a long time!!!
+```{r}
+Tcell_expressed_genes <-  row.names(subset(fData(batch4_Tcell_monocle2_CITE),
+num_cells_expressed >= 10))
+
+clustering_DEG_genes <-
+    differentialGeneTest(batch4_Tcell_monocle2_CITE[Tcell_expressed_genes,],
+          fullModelFormulaStr = '~Cluster',
+          cores = 1)
+
+save(clustering_DEG_genes, file="clustering_Tcell_DEG_genes.rdata")
+
+clustering_DEG_genes %>% arrange(qval) %>% dfilter(qval >1e-45)
+```
+
+
+Set the top 2000 significant genes as the ordering genes and run DDRTree
+
+
+```{r}
+Tcell_ordering_genes <-
+    row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:2000]
+
+batch4_Tcell_monocle2_CITE <-
+    setOrderingFilter(batch4_Tcell_monocle2_CITE,
+        ordering_genes = Tcell_ordering_genes)
+
+batch4_Tcell_monocle2_CITE <-
+    reduceDimension(batch4_Tcell_monocle2_CITE, method = 'DDRTree')
+
+batch4_Tcell_monocle2_CITE <-
+    orderCells(batch4_Tcell_monocle2_CITE)
+
+#batch4_Tcell_monocle2 <-
+#    orderCells(batch4_Tcell_monocle2, root_state = GM_state(batch4_Tcell_monocle2))
+```
+
+
+```{r fig.height=6, fig.width=6}
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, color_by = "State",cell_size = 1)
+```
+
+
+Plot scatter
+```{r fig.height=8, fig.width=9}
+library(viridis)
+markers = c("CD4", "CD8A","FOXP3","IFNG","CXCR3","IL17","LAG3","TOX","EOMES","CCR7","SELL","TNF","TGFB","HAVCR2","CD274","CD69","GZMA","KLRG1","PRF1","PDCD1","CCL5","TCF7","BAX","CCNA2","CCNB1","MKI67","NR4A1","IL2","IL4","IL6","IL25")
+
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, markers = c("CD8A","CD4","CCL5","CCL6","CCL12","GZMA","CCR7","KLRG1","PRF1","SELL","IFNG","TOX","FOXP3","TCF7"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE, show_branch_points = FALSE) + scale_color_viridis(option="B",begin=0, end=1, direction= 1, limit = c(0,0.8),oob=squish) + theme(panel.background = element_rect(fill = "grey90"))
+```
+Plot by State
+
+```{r fig.height=5, fig.width=5}
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, colour_by= "State", cell_size=0.5)
+batch4_Tcell_monocle2_CITE$State %>% table
+```
+
+
+Put CITE markers into the Object as Metadata
+```{r}
+T_monocle <- colnames(batch4_Tcell_monocle2) # get the cells in the T cell object
+
+CITE_Tcell <- FetchData(batch4_Tcell, vars= c("CD4-CITE","CCR4-CITE","CCR6-CITE","CD11b-CITE","CD11c-CITE","CD14-CITE","CD15-CITE","CD33-CITE" ,"CD34-CITE","CD45RA-CITE", "CD45RO-CITE", "CSF-1R-CITE","CXCR3-CITE","LAG-3-CITE","PD-1-CITE","PD-L1-CITE"), cells = T_monocle) # Get CITE markers from the Seurat object, for the cells in the Monocle T cell object
+
+colnames(CITE_Tcell) <- c("CD4_CITE","CCR4_CITE","CCR6_CITE","CD11b_CITE","CD11c_CITE","CD14_CITE","CD15_CITE","CD33_CITE" ,"CD34_CITE","CD45RA_CITE", "CD45RO_CITE", "CSF_1R_CITE","CXCR3_CITE","LAG_3_CITE","PD_1_CITE","PD_L1_CITE")
+
+CITE_Tcell
+
+
+pData(batch4_Tcell_monocle2) <- cbind(pData(batch4_Tcell_monocle2)[,1:30] , CITE_Tcell)
+pData(batch4_Tcell_monocle2)$CD4_CITE
+```
+
+Plot CITE markers
+```{r fig.height=8, fig.width=8}
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, markers = c("CD4_CITE","CCR4_CITE","CCR6_CITE","CD11b_CITE","CD11c_CITE","CD14_CITE","CD15_CITE","CD33_CITE" ,"CD34_CITE","CD45RA_CITE", "CD45RO_CITE", "CSF_1R_CITE","CXCR3_CITE","LAG_3_CITE","PD_1_CITE","PD_L1_CITE"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE, show_branch_points = FALSE) + scale_color_viridis(option="B",begin=0, end=1, direction= 1, limit = c(0,0.3),oob=squish) + theme(panel.background = element_rect(fill = "grey90"))
+
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, markers = c("CD4_CITE","CCR4_CITE","CCR6_CITE","CD15_CITE","CD33_CITE" ,"CD45RA_CITE", "CD45RO_CITE","CXCR3_CITE","PD_1_CITE","PD_L1_CITE"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE, show_branch_points = FALSE) + scale_color_viridis(option="B",begin=0, end=1, direction= 1, limit = c(0,0.8),oob=squish) + theme(panel.background = element_rect(fill = "grey90"))
+
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, markers = c("CD14_CITE","CD34_CITE","LAG_3_CITE","CD11b_CITE","CD11c_CITE"),use_color_gradient = TRUE, cell_size=0.5,markers_linear= FALSE, show_branch_points = FALSE) + scale_color_viridis(option="B",begin=0, end=1, direction= 1, limit = c(0,0.8),oob=squish) + theme(panel.background = element_rect(fill = "grey90"))
+```
+
+
+nFeature_RNA
+```{r fig.height=10, fig.width=10}
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, color = "nFeature_RNA",use_color_gradient =FALSE, cell_size=0.75) + scale_color_continuous(type="viridis", limit = c(0,3000),oob=squish) 
+
+plot_cell_trajectory(batch4_Tcell_monocle2, 1, 2, color = "percent.ribo",use_color_gradient =FALSE, cell_size=0.75) + scale_color_continuous(type="viridis", limit = c(0,50),oob=squish) 
+
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, color = "percent.mt",use_color_gradient =FALSE, cell_size=0.75) + scale_color_continuous(type="viridis", limit = c(0,50),oob=squish) 
+
+plot_cell_trajectory(batch4_Tcell_monocle2, 1, 2, color = "RNA.Per.Feature",use_color_gradient =FALSE, cell_size=0.75) + scale_color_continuous(type="viridis", limit = c(0,5),oob=squish) 
+
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, color = "nCount_RNA",use_color_gradient =FALSE, cell_size=0.75) + scale_color_continuous(type="viridis", limit = c(0,14000),oob=squish) 
+
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, markers = c("nCount_RNA","CD8A","CD4","CCL5","GZMA","CCR7","KLRG1","PRF1","SELL","IFNG","TOX","LAG3","FOXP3","CCR4","PDCD1","CD274","TCF7"),use_color_gradient = TRUE, cell_size=0.2,markers_linear= FALSE, show_branch_points = FALSE) + scale_color_viridis(option="B",begin=0, end=1, direction= 1, limit = c(0,0.8),oob=squish) + theme(panel.background = element_rect(fill = "grey90"))
+
+```
+
+```{r fig.height=8, fig.width=8}
+library(scales)
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, 1, 2, color_by = "orig.ident",use_color_gradient =FALSE, cell_size=0.75) + nolegend() +  scale_color_manual(values=c("darkorchid1","darkorchid1","turquoise3","turquoise3","turquoise3","orchid2","orchid2","orchid2")) + facet_wrap(~orig.ident)
+```
+
+
+Semi-supervised Trajectory
+
+```{r}
+CD4_id <-
+    row.names(subset(fData(batch4_Tcell_monocle2_CITE), gene_short_name == "CD4_CITE")) #  pData(batch4_Tcell_monocle2)$CD4_CITE
+CD8_id <-
+    row.names(subset(fData(batch4_Tcell_monocle2_CITE), gene_short_name == "CD8A"))
+
+cth <- newCellTypeHierarchy()
+
+cth <- addCellType(cth,
+                   "CD4 T cell",
+                   classify_func = function(x) { x[CD4_id,] >= 1 })
+
+cth <- addCellType(cth,
+                   "CD8 T cell",
+                   classify_func = function(x) { x[CD8_id,] >= 1 })
+
+batch4_Tcell_monocle2_CITE <- classifyCells(batch4_Tcell_monocle2_CITE, cth)
+```
+
+Select genes that covary with CD4 and CD8
+
+Does not work, there are no markers, everything is not significant
+```{r}
+marker_diff <- markerDiffTable(batch4_Tcell_monocle2_CITE[Tcell_expressed_genes,],
+                       cth,
+                       cores = 1)
+marker_diff %>% arrange(qval) %>% dfilter(gene_short_name=="CD4_CITE")
+
+semisup_clustering_genes <-
+    row.names(marker_diff)[order(marker_diff$qval)][1:1000]
+```
+
+Trajectory from CD4 CD8 and covarying genes
+```{r}
+batch4_Tcell_monocle2_CITE <- setOrderingFilter(batch4_Tcell_monocle2_CITE, semisup_clustering_genes)
+#plot_ordering_genes(HSMM_myo)
+batch4_Tcell_monocle2_CITE <- reduceDimension(batch4_Tcell_monocle2_CITE, max_components = 2,
+    method = 'DDRTree', norm_method = 'log')
+batch4_Tcell_monocle2_CITE <- orderCells(batch4_Tcell_monocle2_CITE)
+batch4_Tcell_monocle2_CITE <- orderCells(batch4_Tcell_monocle2_CITE, root_state = GM_state(batch4_Tcell_monocle2_CITE))
+plot_cell_trajectory(batch4_Tcell_monocle2_CITE, color_by = "CellType") +
+    theme(legend.position = "right")
+```
+
+
+
+Count cells by State by Donor
+```{r fig.height=4, fig.width=10}
+data.frame(State= batch4_Tcell_monocle2@phenoData$State, source = batch4_Tcell_monocle2@phenoData@data$orig.ident) %>% table %>% data.frame %>% group_by(source) %>% mutate(Group_sum= sum(Freq)) %>% ungroup %>% mutate(T_Cell_percent =Freq/Group_sum) %>% mutate(source=as.character(source)) %>% mutate(Type=substr(source,1,nchar(source)-1)) %>% left_join(key,by="State") %>% left_join(key2,by="source") %>% mutate(Total_cell_percent = Freq/Total_cell) %>% dselect(source, Freq, Identity) %>% dfilter(!is.na(Identity)) %>% ggplot(aes(x=source,y=Freq)) + geom_bar(stat="identity") + facet_wrap(~Identity)
+
+key <- data.frame(State=as.factor(c(1,3)),Identity=c("CD8","CD4"))
+key2 <- data.frame(source=c("pbmc1","pbmc2","pbmc3","pdac1","pdac2","pdac3","aml1","aml3"),Total_cell=c(2460,3464,4699,5110,4108,2611,6436,2418))
+my_counts <- data.frame(State= batch4_Tcell_monocle2_CITE@phenoData$State, Donor = batch4_Tcell_monocle2_CITE@phenoData@data$orig.ident) %>% mutate(Type=substr(Donor,1,nchar(Donor)-1)) %>% count(Donor)
+
+data.frame(State= batch4_Tcell_monocle2@phenoData$State, Donor = batch4_Tcell_monocle2@phenoData@data$orig.ident) %>% mutate(Type=substr(Donor,1,nchar(Donor)-1)) %>% left_join(my_counts,by="Donor") %>% mutate(T_Cell_percent =Freq/n) %>% left_join(key,by="State") %>% left_join(key2,by="Donor") %>% mutate(Total_cell_percent = Freq/Total_cell) %>% ggplot(aes(x=Type, y=Total_cell_percent, group=Type)) + geom_point() + facet_wrap(~Identity, ncol=5)
+
+data.frame(State= batch4_Tcell_monocle2@phenoData$State, source = batch4_Tcell_monocle2@phenoData@data$orig.ident) %>% table %>% data.frame %>% group_by(source) %>% mutate(Group_sum= sum(Freq)) %>% ungroup %>% mutate(T_Cell_percent =Freq/Group_sum) %>% mutate(source=as.character(source)) %>% mutate(Type=substr(source,1,nchar(source)-1)) %>% left_join(key,by="State") %>% left_join(key2,by="source") %>% mutate(Total_cell_percent = Freq/Total_cell) %>% ggplot(aes(x=Identity, y=Total_cell_percent, group=Type)) + geom_point()+ facet_wrap(~Type,ncol=3)
+
+data.frame(State= batch4_Tcell_monocle2@phenoData$State, source = batch4_Tcell_monocle2@phenoData@data$orig.ident) %>% table %>% data.frame %>% group_by(source) %>% mutate(Group_sum= sum(Freq)) %>% ungroup %>% mutate(T_Cell_percent =Freq/Group_sum) %>% mutate(source=as.character(source)) %>% mutate(Type=substr(source,1,nchar(source)-1)) %>% left_join(key,by="State") %>% left_join(key2,by="source") %>% mutate(Total_cell_percent = Freq/Total_cell) %>% ggplot(aes(x=Type, y=Total_cell_percent, group=Type)) + geom_point()+ facet_wrap(~Identity,ncol=5)
+
+data.frame(State= batch4_Tcell_monocle2@phenoData$State, source = batch4_Tcell_monocle2@phenoData@data$orig.ident) %>% table %>% data.frame %>% group_by(source) %>% mutate(Group_sum= sum(Freq)) %>% ungroup %>% mutate(T_Cell_percent =Freq/Group_sum) %>% mutate(source=as.character(source)) %>% mutate(Type=substr(source,1,nchar(source)-1)) %>% left_join(key,by="State") %>% left_join(key2,by="source") %>% mutate(Total_cell_percent = Freq/Total_cell) %>% ggplot(aes(x=Type, y=T_Cell_percent, group=Type, colour=source)) + geom_point()+ facet_wrap(~Identity,ncol=5)    
+```
+
+
+
+Plot cells by State
+
+```{r fig.height=6, fig.width=6.5}
+plot_cell_trajectory(batch4_Tcell_monocle2, color_by = "State",cell_size = 1)
+
+plot_cell_trajectory(batch4_Tcell_monocle2, color_by = "State",cell_size = 0.5) + facet_wrap(~State, nrow=2)
+```
+Pseudotime DE
+VGAM
+
+DE analysis between States
+
+Took 1 hour
+This doesn't record the state of the marker either!!!!
+```{r}
+
+Expressed_genes <-  row.names(subset(fData(batch4_Tcell_monocle2_CITE),
+num_cells_expressed >= 10))
+
+Tcell_State_DEG_genes <-
+    differentialGeneTest(batch4_Tcell_monocle2_CITE[Tcell_expressed_genes,],
+          fullModelFormulaStr = '~State',
+          cores = 1)
+
+Tcell_State_DEG_genes %<>% tibble::rownames_to_column("Gene")
+save(Tcell_State_DEG_genes, file="Tcell_clustering_DEG_genes.rdata")
+
+Tcell_markers <- Tcell_State_DEG_genes %>% dfilter(qval < 1e-100, num_cells_expressed > 500) %>% arrange(qval) %>% pull(Gene) #300+
+
+Tcell_State_DEG_genes %>% dfilter(Gene =="CD8A")
+
+
+cluster_heatmap <- plot_pseudotime_heatmap(batch4_Tcell_monocle2_CITE[Tcell_markers,],
+                num_clusters = 3,
+                cores = 1, return_heatmap = TRUE,
+                show_rownames = T)
+```
+
+BEAM Branched expression amalysis modeling
+
+```{r}
+
+BEAM_res <- BEAM(batch4_Tcell_monocle2_CITE, branch_point = 1, cores = 1)
+BEAM_res <- BEAM_res[order(BEAM_res$qval),]
+BEAM_res <- BEAM_res[,c("gene_short_name", "pval", "qval")]
+
+plot_genes_branched_heatmap(batch4_Tcell_monocle2_CITE[row.names(subset(BEAM_res,
+                                          qval < 1e-16)),],
+                                          branch_point = 1,
+                                          num_clusters = 4,
+                                          cores = 1,
+                                          use_gene_short_name = T,
+                                          show_rownames = T)
+```
+
+Lineage scatter
+
+```{r fig.height=7, fig.width=5}
+Tcell_genes <- row.names(subset(fData(batch4_Tcell_monocle2_CITE),
+          gene_short_name %in% c("CD8A", "KLRG1", "LAG_3_CITE","TOX","TIGIT","HAVCR2","PD_1_CITE")))
+
+HPK1_genes <- row.names(subset(fData(batch4_Tcell_monocle2_CITE),
+          gene_short_name %in% c("MAP4K1", "LCP2", "ZAP70","PTGER2","IL2")))
+
+CD4_genes <- row.names(subset(fData(batch4_Tcell_monocle2_CITE),
+          gene_short_name %in% c("CD4_CITE","CCR4_CITE","CCR6_CITE","CXCR3_CITE","CCL22","FOXP3")))
+
+plot_genes_branched_pseudotime(batch4_Tcell_monocle2_CITE[CD4_genes,],
+                       branch_point = 1,
+                       color_by = "State",
+                       ncol = 1)
+```
+
+
+Here is where the cell order and cell state information are stored
+```{r}
+
+batch4mye_monocle2@phenoData$Pseudotime
+colnames(batch4mye_monocle2)
+pseudotime_cell <- data.frame(Cell=colnames(batch4mye_monocle2), Pseudotime=batch4mye_monocle2@phenoData$Pseudotime) %>% arrange(Pseudotime) %>% pull(Cell)
+batch4mye_monocle2@phenoData$State
+
+batch4mye_monocle2@featureData@data$gene_short_name
+batch4mye_monocle2@assayData$exprs # this is a sparse matrix
+
+batch4mye_monocle2@assayData$exprs[cluster_DEG,pseudotime_cell] %>% data.frame %>% tibble::rownames_to_column("Gene") %>% write.table(file="Pseudotime_myeloid.txt",quote=FALSE,row.names = FALSE, sep="\t")
+```

@@ -1,0 +1,103 @@
+---
+title: "ImmProt"
+author: "Mengshu"
+date: "7/25/2019"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+detach_package("tidyverse")
+library(tibble)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+```
+
+```{r}
+detach_package <- function(pkg, character.only = FALSE)
+{
+  if(!character.only)
+  {
+    pkg <- deparse(substitute(pkg))
+  }
+  search_item <- paste("package", pkg, sep = ":")
+  while(search_item %in% search())
+  {
+    detach(search_item, unload = TRUE, character.only = TRUE)
+  }
+}
+```
+
+Check expression in ImmProt
+gather() requires tidyverse loaded
+```{r fig.height=20, fig.width=10}
+immprot <- read.delim("/Volumes/Picard/FLX/Reference_tables/ImmProt_Table S1.txt", sep="\t", header=TRUE, fill=TRUE)
+imm_protein <- immprot %>% dselect(Gene.names, contains("Intensity"), -contains("LFQ")) #176 cols
+
+imm_protein %>% dfilter(Gene.names =="CYP11A1") %>% gather(Cell, Protein_expression, -Gene.names) %>% ggplot(aes(Cell,Protein_expression)) + geom_bar(stat="identity") +coord_flip()
+
+imm_protein %>% arrange(desc(Intensity_T8.EM_04_activated))
+write.table(imm_protein,file="ImmProt_Intensity.txt",row.names = FALSE)
+??arrange()
+protimm <- read.delim("/Volumes/Enterprise/FLX/Reference tables/ImmProt_TableS6.txt", sep="\t", header=TRUE, fill=TRUE)
+#protimm <- read.delim("D:/FLX/Reference tables/ImmProt_TableS6.txt", sep="\t", header=TRUE, fill=TRUE)
+protimm %<>% dselect(-Majority.protein.IDs) #176 cols
+protimm %<>% rename_at(vars(starts_with("CopyNumber_")), funs(str_replace(.,"CopyNumber_","")))
+save(protimm, file="ImmProtS6_filter.rdata")
+#dselect(protimm, starts_with("T8.EM_")) %>% dselect(ends_with("activated"))
+#protimm %<>% mutate(T8.EM_act_mean = mean(dplyr::select(c(starts_with("T8.EM"),ends_with("activated")))), T8.EM_ss_mean= mean(dplyr::select(c(starts_with("T8.EM"),ends_with("steady.state")))))
+protimm <- mutate(protimm,T8.EM_act_mean = rowMeans(dselect(protimm, starts_with("T8.EM_")) %>% dselect(ends_with("activated"))))
+protimm <- mutate(protimm,T8.EM_ss_mean = rowMeans(dselect(protimm, starts_with("T8.EM_")) %>% dselect(ends_with("steady.state"))))
+protimm <- mutate(protimm,T8.EM_delta = T8.EM_act_mean/T8.EM_ss_mean)
+protimm %>% dselect(T8.EM_act_mean,T8.EM_ss_mean,T8.EM_delta)
+protimm %>% dfilter(T8.EM_01_activated > 1000 & T8.EM_02_activated > 1000 & T8.EM_03_activated > 1000 & T8.EM_04_activated > 1000) %>% dselect(Gene.names, T8.EM_ss_mean,T8.EM_act_mean,T8.EM_delta, everything()) %>% mutate_if(is.integer,my_log) %>% arrange(desc(T8.EM_delta))
+
+protimm %>% dselect(Gene.names,starts_with("T")) %>% dfilter(T8.EM_01_activated >= 1000 & T8.EM_02_activated >= 1000 & T8.EM_03_activated >= 1000 & T8.EM_04_activated >= 1000 & T8.EM_delta > 4) %>% dselect(Gene.names, T8.EM_ss_mean,T8.EM_act_mean,T8.EM_delta, everything()) %>% mutate_if(is.integer,my_log) %>%  arrange(desc(T8.EM_delta)) %>% 
+  mutate(Gene2=Gene.names) %>% dselect(Gene.names,Gene2,everything()) %>% write.table(sep="\t", file="CD8.EM_delta_immProt_log_Tonly.cdt", row.names=FALSE)
+
+T_ind <- protimm %>% dselect(Gene.names,starts_with("T")) %>% dfilter(T8.EM_01_activated >= 1000 & T8.EM_02_activated >= 1000 & T8.EM_03_activated >= 1000 & T8.EM_04_activated >= 1000 & T8.EM_delta > 4 & !is.na(T8.EM_delta)) %>% dselect(Gene.names, T8.EM_ss_mean,T8.EM_act_mean,T8.EM_delta, everything()) %>% mutate_if(is.integer,my_log) 
+jurkat_prot <- read.table("/Volumes/Enterprise/FLX/Reference tables/Jurkat_Surface_Proteins.txt")
+all_prot <- read.table("/Volumes/Enterprise/FLX/Reference tables/Jurkat_Surface_Proteins.txt")
+colnames(jurkat_prot) <- "Gene.names"
+All_Surface_Proteins.txt
+T_ind %>% dfilter(Gene.names %in% jurkat_prot[,1]) %>% arrange(desc(T8.EM_delta)) %>% mutate(Gene2=Gene.names) %>% dselect(Gene.names,Gene2,everything()) %>% write.table(sep="\t", file="CD8.EM_ImmProt_Surface.cdt", row.names=FALSE)
+#heatmaps
+mean
+my_log <- function(x) {log10(x+0.00001)}
+my_log(0)
+
+protimm %>% dfilter(Gene.names %in% "NLRP3") %>% mutate_if(is.numeric, my_log) %>% mutate(Gene2=Gene.names) %>% dselect(Gene.names, Gene2, everything()) %>% write.table(sep="\t", file="gMDSC_immProt_log_NLRP3.cdt", row.names=FALSE)
+protimm %>% dfilter(Gene.names %in% mMDSC_sig) %>% mutate_if(is.numeric, my_log) %>% mutate(Gene2=Gene.names) %>% dselect(Gene.names, Gene2, everything()) %>% write.table(sep="\t", file="mMDSC_immProt_log.cdt", row.names=FALSE)
+
+protimm %>% dfilter(Gene.names %in% mMDSC_sig) %>% gather('celltype','Protein_level' ,-Gene.names) %>% mutate(cell=sub("^CopyNumber_","", celltype), cell=sub("_steady.state","_s", cell), cell=sub("_activated","_a",cell)) %>% dselect(-celltype) %>% mutate_if(is.numeric, my_log) %>% ggplot(aes(x=cell, y=Protein_level)) + geom_bar(stat = "identity") + facet_wrap(~Gene.names, scales="free", ncol=5) +theme(panel.grid.major = element_line(colour = "grey", size = 0.2),axis.text.y = element_text(size=16),axis.text.x = element_text(angle=45,size=20), strip.text.x=element_text(size=20),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) + coord_flip() +ylim(0,6) +
+ggsave("mMDSC_sig_immProt.jpg", width=30, height=30, dpi=600, plot= last_plot(), units = "in")
+
+protimm %>% dfilter(Gene.names %in% "NLRP3") %>% gather('celltype','Protein_level',-Gene.names) %>% mutate(cell=sub("^CopyNumber_","", celltype), cell=sub("_steady.state","_s", cell), cell=sub("_activated","_a",cell)) %>% dselect(-celltype) %>% mutate_if(is.numeric, my_log) %>% ggplot(aes(x=cell, y=Protein_level)) + geom_bar(stat = "identity") + facet_wrap(~Gene.names, scales="free", ncol=5) +theme(panel.grid.major = element_line(colour = "grey", size = 0.2),axis.text.y = element_text(size=8),axis.text.x = element_text(size=8, angle=90), strip.text.x=element_text(size=16),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) + ylim(0,6) +
+ggsave("Protimm_NLRP3.jpg", width=20, height=6, dpi=600, plot= last_plot(), units = "in")
+
+imm_protein %>% dfilter(Gene.names %in% "NLRP3") %>% gather('celltype','Protein_level' ,-Gene.names) %>% mutate(cell=sub("^Intensity_","", celltype)) %>% dselect(-celltype) %>% ggplot(aes(x=cell, y=Protein_level)) + geom_bar(stat = "identity") + facet_wrap(~Gene.names, scales="free", ncol=6) +theme(panel.grid.major = element_line(colour = "grey", size = 0.2),axis.text.y = element_text(size=10), axis.text.x = element_text(angle=45,size=24,just=1), strip.text.x=element_text(size=24),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) + coord_flip() 
+```
+AD markers
+
+First, groom the data table
+Take the median signal for biological replicates for each cell type and state
+```{r}
+protimm <- read.delim("/Volumes/Enterprise/FLX/Reference tables/ImmProt_TableS6.txt", sep="\t", header=TRUE, fill=TRUE)
+protimm %<>% dselect(-Majority.protein.IDs) %>% rename_at(vars(starts_with("CopyNumber_")), funs(str_replace(.,"CopyNumber_","")))
+Immprot_gather <- protimm %>% dfilter(!is.na(Gene.names), Gene.names != '') %>% group_by(Gene.names) %>% summarise_if(is.numeric,sum) %>% tibble::column_to_rownames("Gene.names") %>% t %>% data.frame %>% tibble::rownames_to_column("Cell") %>% mutate(cell_type=str_replace(Cell,"_0[1-4].*$","") ,cell_state=str_replace(Cell,"_0[1-4]_","_"),State=ifelse(endsWith(Cell,"activated"),"activated","basal")) %>% dselect(Cell,cell_state,cell_type,State,everything()) %>% gather(Protein,Protein_count,-Cell,-cell_type,-State,-cell_state) %>% mutate(State=factor(State, levels=c("activated","basal")))
+```
+
+
+
+
+```{r fig.height=10, fig.width=20}
+
+AD_markers_h <- c("CXCR6","FOXP3","GATA3","DOK1","IFNG","IL5","IL6","IL9","IL10","IL13","IL17B","IL20","IL22","IL33","IL34","IL35","IL37","IL4","IL5","PDCD1","TGFB1","TGFB2","TGFB3","TSLP")
+
+Immprot_gather %>% dfilter(Protein %in% AD_markers_h) %>% ggplot(aes(x=cell_type, y=Protein_count, colour=State)) + geom_boxplot() + geom_point(size=1, position=position_jitterdodge(jitter.width=0)) + facet_wrap(~Protein, scales="free_x", ncol=11) + theme(panel.grid.major = element_line(size = 0.2),axis.text.y = element_text(size=12),axis.text.x = element_text(size=14, angle=90), strip.text.x=element_text(size=16),plot.margin = unit(c(1,1,1,1), "cm")) + coord_flip() +
+ggsave("ImmProt_AD_markers.jpg", width=18, height=10, dpi=600, plot= last_plot(), units = "in")
+pch=18,size=3,position=position_jitterdodge(jitter.width=0)
+```
+

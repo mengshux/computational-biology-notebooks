@@ -1,0 +1,100 @@
+---
+title: "Azizi_merge_csv"
+author: "Mengshu"
+date: "12/18/2018"
+output: html_document
+---
+
+```{r}
+library(SAVER)
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(readr) # contains write_tsv()
+library(magrittr)
+library(data.table)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+The Azizi tumor data is split into 32 csv files, 4 per patient for 8 patients. 
+Each csv file has a different number of columns, as not all genes are detected in each dataset
+Each file has genes as columns, and cells as rows
+
+Strategy:
+Transpose each file so that cells are cols and genes are rows
+Then use the datatable/dlyr function to merge tables together
+
+```{r}
+########### Join table with a loop ##########
+my_files <- read.table("files.txt")
+my_files <- my_files$V1 #just get the data col as a vector
+
+#make this first file out of the loop to have something to merge to
+test_2  <- read.csv("GSM3148591_BC01_TUMOR1_counts.csv", header=TRUE) #read into data.frame
+test_2 <- t(test_2)
+total_cols <- ncol(test_2)
+colnames(test_2) <- (1:total_cols)
+test_2 <- test_2[-1,]
+test_2df <- as.data.frame(test_2)
+test_2df %<>% mutate(Gene=rownames(test_2df))
+#Move the Gene column to the beginning
+test_2df %<>% dselect(Gene,1:total_cols)
+merge_file <- test_2df
+
+for (eachfile in my_files)  {
+csv_file <- read.csv(eachfile, header=TRUE) 
+csv_file <- t(csv_file) # transpose file
+my_cols <- ncol(csv_file) #get number of columns
+curr_cols <- total_cols  # the starting col number (-1)
+total_cols <- total_cols + my_cols # the ending col number
+colnames(csv_file) <- ((curr_cols+1):total_cols)
+csv_file <- csv_file[-1,] # get rid of the old ID numbers, which were meaningless and non-unique
+df <- as.data.frame(csv_file) # convert to data.frame so we can full_join
+df %<>% mutate(Gene=rownames(df)) # convert the rownames to a Gene column, becuase full_join cannot join by colnames.  
+merge_file <- full_join(merge_file,df,by="Gene")  ##The "by"" parameter has to be specified with text quotes
+}
+```
+
+merge_file is 35487 observations of 46643 variables: 35487 genes of 46643 cells 
+Check that all of the genes are unique
+Check that data looks right
+```{r}
+nrow(distinct(merge_file,Gene))
+merge_file[100:110,1:10]
+merge_file %>% summarize(medianCount=median(merge_file[,8],na.rm=TRUE), maxCount=max(merge_file[,8],na.rm=TRUE), minCount=min(merge_file[,8]))
+ncol(merge_file)
+```
+
+###############
+Considering the size of the data matrix, it might make sense to read it straight into Seurat and make a sparse matrix, in addition to exporting it as a normal csv file: 4.82 GB file
+################
+read_csv ignores row names, use read.csv/write.csv instead
+```{r}
+write.csv(merge_file,"Azizi_tumor_46K_pbmc.csv", row.names=TRUE) 
+merge_file <- read.csv("Azizi_tumor_46K_pbmc.csv", header=TRUE, row.names=1)
+
+```
+##########################
+Load data into Seurat
+#Error message:
+Error in base::colSums(x, na.rm = na.rm, dims = dims, ...) : 'x' must be numeric
+Try changing the first Gene column back into rownames
+#Seurat takes data as a matrix, merge_file is a data.frame, convert with as.matrix()
+Error in (function (cl, name, valueClass)  : 
+  assignment of an object of class “NULL” is not valid for @‘cell.names’ in an object of class “seurat”; is(value, "vector") is not TRUE
+#Assigning numbers as colnames does not help with this error message. 
+#####################
+```{r}
+rownames(merge_file) <- merge_file[,1]
+merge_file <- merge_file[,-1]
+matrix_file <-as.matrix(merge_file)
+colnames(matrix_file) <- (1:46642)
+azizi <- CreateSeuratObject(matrix_file, min.cells=3, min.genes=200,is.expr=0)
+str(azizi)
+saveRDS(azizi, file="Azizi_46K_Seurat.rds") # done
+
+```
+##############
+There is a more user-friendly csv file available on GSE, it has what looks like actual rwa counts. Use that one instead.
+
+

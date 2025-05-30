@@ -1,0 +1,483 @@
+---
+title: "RAPT_CD3_Gene_scRNA"
+author: "Mengshu Xu"
+date: "3/18/2020"
+output: html_document
+---
+
+Load packages
+
+```{r}
+library(Seurat)
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tibble)
+#source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+source("D:/FLX/Files_from_Gene/R_functions.r")
+theme_set(theme_rapt())
+theme_set(theme_bw())
+```
+
+Load Seurat object
+This didn't work: Gene's rdata loaded into a bunch of files but no Seurat object
+```{r}
+load("D:/FLX/scRNA_data/RAPT_CD3/seurat.rdata")
+CD3 <- UpdateSeuratObject()
+str(tf)
+saveRDS(CD3,file="D:/FLX/scRNA_data/RAPT_CD3/CD3_seurat3.rds")
+```
+
+
+Save and Load files
+```{r}
+saveRDS(CD3,file="D:/FLX/scRNA_data/RAPT_CD3/CD3_seurat3.rds")
+CD3 <- readRDS(file="D:/FLX/scRNA_data/RAPT_CD3/CD3_seurat3.rds") #CD3
+```
+
+
+Load in h5 data files
+Create Seurat objects with filter
+Merge with tags
+```{r}
+install.packages("hdf5r")
+library(hdf5r)
+
+cntrl_D1_20K <- Read10X_h5("D:/FLX/scRNA_data/RAPT_CD3/control-20k-filtered_gene_bc_matrices_h5.h5") 
+cntrl_D1_33K <- Read10X_h5("D:/FLX/scRNA_data/RAPT_CD3/control-33k-filtered_gene_bc_matrices_h5.h5") 
+cntrl_D1_46K <- Read10X_h5("D:/FLX/scRNA_data/RAPT_CD3/control-46k-filtered_gene_bc_matrices_h5.h5")
+NoTrp_D1 <- Read10X_h5("D:/FLX/scRNA_data/RAPT_CD3/treatment-A-filtered_gene_bc_matrices_h5.h5")
+NoArg_D1 <- Read10X_h5("D:/FLX/scRNA_data/RAPT_CD3/treatment-B-filtered_gene_bc_matrices_h5.h5")
+cntrl_D2 <- Read10X_h5("D:/FLX/scRNA_data/RAPT_CD3/treatment-C-filtered_gene_bc_matrices_h5.h5")
+NoArg_D2 <- Read10X_h5("D:/FLX/scRNA_data/RAPT_CD3/treatment-D-filtered_gene_bc_matrices_h5.h5")
+NoTrp_D2 <- Read10X_h5("D:/FLX/scRNA_data/RAPT_CD3/treatment-E-filtered_gene_bc_matrices_h5.h5")
+
+ctrl_20k  <- CreateSeuratObject(counts= cntrl_D1_20K, project= "Ctrl_1", min.cells=1, min.features=200, assay="RNA")
+ctrl_33k  <- CreateSeuratObject(counts= cntrl_D1_33K, project= "Ctrl_1", min.cells=1, min.features=200, assay="RNA")
+ctrl_46k  <- CreateSeuratObject(counts= cntrl_D1_46K, project= "Ctrl_1", min.cells=1, min.features=200, assay="RNA")
+NoTrp_1  <- CreateSeuratObject(counts= NoTrp_D1, project= "NoTrp_1", min.cells=1, min.features=200, assay="RNA")
+NoArg_1  <- CreateSeuratObject(counts= NoArg_D1, project= "NoArg_1", min.cells=1, min.features=200, assay="RNA")
+Ctrl_2  <- CreateSeuratObject(counts= cntrl_D2, project= "Ctrl_2", min.cells=1, min.features=200, assay="RNA")
+NoArg_2  <- CreateSeuratObject(counts= NoArg_D2, project= "NoArg_2", min.cells=1, min.features=200, assay="RNA")
+NoTrp_2  <- CreateSeuratObject(counts= NoTrp_D2, project= "NoTrp_2", min.cells=1, min.features=200, assay="RNA")
+
+CD3 <- merge(x=ctrl_20k,y=c(ctrl_33k,ctrl_46k,NoTrp_1,NoArg_1,Ctrl_2,NoArg_2,NoTrp_2),add.cell.ids = c("Ctrl_1","Ctrl_1","Ctrl_1","NoTrp_1","NoArg_1","Ctrl_2","NoArg_2","No_Trp2"), merge.data= TRUE, project = "CD3")
+CD3$orig.ident %>% table
+CD3@active.ident %>% table
+```
+
+
+######################
+QC Biological state of cells
+  Mitochondrial gene expression
+  Check Apoptosis
+    nCount_RNA is # of unique UMIs I think
+    Cut off percent.mt at < 30
+mt genes are not being found here?? How did this work before??
+#######################
+```{r fig.height=3, fig.width=10}
+CD3[["percent.mt"]] <- PercentageFeatureSet(CD3, pattern = "MT-")
+CD3[["percent.HLA"]] <- PercentageFeatureSet(CD3, pattern = "HLA-") #HLA-D in mouse
+CD3[["RNA.Per.Feature"]] <- CD3[["nCount_RNA"]] / CD3[["nFeature_RNA"]]
+CD3[["percent.ribo"]] <- PercentageFeatureSet(CD3, pattern = c("^RP[LS]"))
+
+CD3@assays$RNA@data@Dimnames[[1]][grepl("^MT-",CD3@assays$RNA@data@Dimnames[[1]])]
+CD3@assays$RNA@data@Dimnames[[1]][grepl("^RP[LS]",CD3@assays$RNA@data@Dimnames[[1]])]
+
+VlnPlot(CD3, features=c("nFeature_RNA","nCount_RNA","RNA.Per.Feature","percent.mt","percent.ribo"),ncol =3,pt.size = 0.1,log=TRUE) + 
+  ggsave("CD3_QC_violin_cell_clusters.jpeg", width= 10, height=10, dpi=150, plot=last_plot(), units = "in")
+VlnPlot(CD3, features=c("nCount_RNA"),ncol =4,pt.size = 0.1, y.max=20000)
+VlnPlot(CD3, features=c("nCount_RNA","nFeature_RNA","percent.mt"),ncol =3,pt.size = 0.1, log=TRUE)
+
+VlnPlot(CD3, features=c("BCL2","BAX","MLKL","HMGB1"),ncol=4,pt.size = 0.1, log=TRUE) +
+  ggsave("CD3_QC_Apoptosis_Necrosis.jpeg", width= 10, height=5, dpi=150, plot=last_plot(), units = "in")
+
+VlnPlot(CD3, features=c("BCL2_norm","BAX_norm","MLKL_norm","HMGB1_norm"),ncol=4,pt.size = 0.1, log=TRUE) +
+  ggsave("CD3_norm_QC_Apoptosis_Necrosis.jpeg", width= 10, height=5, dpi=150, plot=last_plot(), units = "in")
+
+CD3[["BCL2_norm"]] <- PercentageFeatureSet(CD3, pattern = "BCL2")
+CD3[["BAX_norm"]] <- PercentageFeatureSet(CD3, pattern = "BAX")
+CD3[["MLKL_norm"]] <- PercentageFeatureSet(CD3, pattern = "MLKL")
+CD3[["HMGB1_norm"]] <- PercentageFeatureSet(CD3, pattern = "HMGB1")
+  
+#VlnPlot(CT26_immunome, features=c("Cd63","Fcgr3b","Ltf","S100a9","percent.ribo"),ncol =5,pt.size = 0.1, log=TRUE)
+## Cell cycle
+
+VlnPlot(CD3, features=c("MKI67","CCNA2","CCNB1","GAPDH"),ncol =4,pt.size = 0.1, log=TRUE) + ggsave("CD3_QC_Cell_Cycle.jpeg", width= 15, height=5, dpi=150, plot=last_plot(), units = "in")
+
+```
+
+######################
+Normalize data
+#######################
+By default, we employ a global-scaling normalization method “LogNormalize” that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. Normalized values are stored in pbmc[["RNA"]]@data
+```{r}
+CD3 <- NormalizeData(CD3,normalization.method = "LogNormalize",scale.factor=10000) # this goes into the @data slot
+```
+######################
+Feature Selection
+#######################
+Top variable genes: 
+ [1] "Jchain"  "Igkc"    "Hba-a1"  "Car2"    "Col3a1"  "Ighm"    "Hbb-bs"  "Col1a1"  "Car1"    "Hba-a2"  "Rarres2" "Col5a2"  "Hbb-bt"  "Igfbp7" 
+[15] "Ccl8"    "Meg3"    "Pf4"     "Fstl1"   "Ccl11"   "Bgn"  
+```{r fig.height=5, fig.width=12}
+CD3 <- FindVariableFeatures(CD3, selection.method = "vst", nfeatures = 2000)
+top10 <- head(VariableFeatures(CD3),30)
+
+plot1 <- VariableFeaturePlot(CD3)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+```
+
+######################
+Data scaling to median = 0
+Z-score
+Stored in @scale.data
+#######################
+```{r}
+all.genes <- rownames(CD3)
+CD3 <- ScaleData(CD3,features = all.genes, assay = "RNA")
+```
+
+####################################
+PCA analysis
+UMAP
+FindClusters
+####################################
+
+```{r}
+CD3 <- RunPCA(CD3,features =c(VariableFeatures(object=CD3)))
+```
+
+
+Heapmap of PCs
+Cut off should be at 12 PCs from this plot
+```{r fig.height=25, fig.width=25}
+DimHeatmap(CD3, dims=1:24, cells=500, balanced = TRUE)
+```
+
+
+####################################
+DimHeatMap shows first ~12 are distinguishible as groups
+Elbowplot shows first ~12 are significant
+####################################
+```{r}
+ElbowPlot(CD3)
+```
+
+###################################
+KNN Clustering
+###################################
+
+Based on marker clusters, 15 clusters is too many. Reduce resolution 
+```{r}
+CD3 <- FindNeighbors(CD3, dims=1:12)
+CD3 <- FindClusters(CD3, resolution=0.5) #Resolution 1.2 > 17 clusters, Resolution 1.0 > 15 clusters, 0.5 > 8
+table(Idents(CD3))
+
+```
+
+UMAP 
+
+Looks better than TSNE
+```{r fig.height=5, fig.width=7}
+CD3 <- RunUMAP(CD3, dims=1:12, min.dist=0.6, verbose=FALSE)
+DimPlot(CD3,reduction="umap", label=TRUE, pt.size=1.5, label.size = 5) + NoLegend() + ggsave("CD3_UMAP_numbers.jpg", width=7, height=5, dpi=150, plot= last_plot(), units = "in")
+```
+
+Find Top markers of each cluster
+```{r}
+cd3.markers <- FindAllMarkers(CD3, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.8)
+save(cd3.markers, file="D:/FLX/scRNA_data/RAPT_CD3/CD3_all_vs_all_DE.rdata")
+write.table(cd3.markers, file="D:/FLX/scRNA_data/RAPT_CD3/CD3_all_vs_all_DE.txt", sep="\t")
+
+cd3.markers %>% group_by(cluster) %>% top_n(n=15)
+#Cluster
+# 0: CD79 B Cells Coronin high, motility
+# 1: B cells
+# 2: LBT, SELL high
+# 3: Ribo high
+# 4: 
+# 5 
+# 6: 
+# 7: CD8 T exh CCL3 CCL5 PRF1 LAG3 NKG7 GNLY
+# 8: CEN TOP2A highly dividing
+# 9: S100A4 Myeloid or T
+# 10: NK TIGIT T or NK cells
+# 11: NK XCL1 positive
+# 12: S100A11
+# 13: 
+# 15:
+# 16: 
+```
+
+
+Plot Features
+Not expressed: ,"CCR6"
+```{r fig.height=9, fig.width=15}
+FeaturePlot(CD3,slot = "data", cols=c("grey","red"),features=c("PTPRC","CD3D","CD4","CD8A","NKG7","GZMB","PRF1","FOXP3","CXCR3","LAG3","SELL","TOP2A"))
+FeaturePlot(CD3,slot = "data", cols=c("grey","red"),features=c("HPGD"))
+```
+Non-CD3 call types
+
+```{r fig.height=6, fig.width=13}
+FeaturePlot(CD3,slot = "data", cols=c("grey","red"),features=c("PTPRC","CD3D","HLA-DRA","IDO1","CD14","ITGAM","FCGR3A","BDCA1","BDCA3","CD141","ADGRE1","ITGAX","MARCO","S100A9"),ncol=4)
+```
+
+Sample of origin
+
+```{r fig.height=9, fig.width=17}
+Ctrl <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("Ctrl_1")),cols.highlight="#0A95A7", pt.size=0.1) + NoLegend()
+noArg <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("NoArg_1")),cols.highlight="purple", pt.size=0.1) + NoLegend()
+noTrp <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("NoTrp_1")),cols.highlight="red", pt.size=0.1) + NoLegend()
+Ctrl2 <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("Ctrl_2")),cols.highlight="#0A95A7", pt.size=0.1) + NoLegend()
+noArg2 <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("NoArg_2")),cols.highlight="purple", pt.size=0.1) + NoLegend()
+noTrp2 <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("NoTrp_2")),cols.highlight="red", pt.size=0.1) + NoLegend()
+
+#This below doesn't work. The groups can't be combined
+Ctrl_all <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("Ctrl_1","Ctrl_2")),cols.highlight="#0A95A7", pt.size=0.1) + NoLegend()
+Trp_all <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("NoTrp_1","NoTrp_2")),cols.highlight="red", pt.size=0.1) + NoLegend()
+Arg_all <- DimPlot(CD3, cells.highlight = WhichCells(CD3,expression= orig.ident ==c("NoArg_1","NoArg_2")),cols.highlight="purple", pt.size=0.1) + NoLegend()
+
+library(gridExtra)
+grid.arrange(Ctrl,noArg,noTrp,Ctrl2,noArg2,noTrp2, nrow = 2)  
+grid.arrange(Ctrl_all,Trp_all,Arg_all, nrow = 1)  
+CD3$orig.ident %>% table
+```
+
+
+####################
+Signatures
+#####################
+
+Export and check data
+
+```{r}
+rna_matrix <- as.matrix(CD3$RNA@scale.data)
+save(rna_matrix,file = "CD3_counts_matrix.rdata")
+load("rna_scale.data_matrix.rdata")
+rna_matrix[1:5,1:5] #looks normalized
+boxplot(rna_matrix[,1:50])
+```
+
+To put data back into batch1, the data has to be a data.frame, with cells as rowsnames and a single column with a name 
+dataframe changes the cell name from Ctrl_1_AAACCGTGCCTCCA-1_1 to Ctrl_1_AAACCGTGCCTCCA.1_1, so 
+```{r}
+rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Trp_AAS) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% summarise_all(median) %>% t %>% data.frame
+
+
+CD3[["GCN2_pathway"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% GCN2_h) %>% summarize_if(is.numeric,sum_mx) %>% t %>% data.frame %>% tibble::rownames_to_column("Cell") %>%  mutate(Cell= sub("\\.","-",Cell)) %>% tibble::column_to_rownames("Cell") 
+CD3[["PERK_pathway"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% PERK_h) %>% summarize_if(is.numeric,sum_mx) %>% t %>% data.frame %>% tibble::rownames_to_column("Cell") %>%  mutate(Cell= sub("\\.","-",Cell)) %>% tibble::column_to_rownames("Cell") 
+CD3[["HRI_pathway"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% HRI_h) %>% summarize_if(is.numeric,sum_mx) %>% t %>% data.frame %>% tibble::rownames_to_column("Cell") %>%  mutate(Cell= sub("\\.","-",Cell)) %>% tibble::column_to_rownames("Cell") 
+CD3[["ISR_pathway"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% c("DDIT3","TRIB3","PPP1R15A","ASNS","ATF4")) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame  %>% tibble::rownames_to_column("Cell") %>%  mutate(Cell= sub("\\.","-",Cell)) %>% tibble::column_to_rownames("Cell") 
+CD3[["AAS"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% aas_sig) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame  %>% tibble::rownames_to_column("Cell") %>%  mutate(Cell= sub("\\.","-",Cell)) %>% tibble::column_to_rownames("Cell") 
+CD3[["Arg_AAS"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Arg_AAS_h) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame  %>% tibble::rownames_to_column("Cell") %>%  mutate(Cell= sub("\\.","-",Cell)) %>% tibble::column_to_rownames("Cell") 
+
+CD3[["Trp_AAS"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% Trp_AAS) %>% summarize_if(is.numeric,sum) %>% t %>% data.frame  %>% tibble::rownames_to_column("Cell") %>%  mutate(Cell= sub("\\.","-",Cell)) %>% tibble::column_to_rownames("Cell") 
+
+CD3[["Hypoxia"]] <- rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% hypoxia) %>% summarize_if(is.numeric,sum_mx) %>% t %>% data.frame  %>% tibble::rownames_to_column("Cell") %>%  mutate(Cell= sub("\\.","-",Cell)) %>% tibble::column_to_rownames("Cell") 
+
+
+Arg_AAS_h <- Arg_Sig %>% pull(Gene.Symbol)
+Arg_AAS_h <- Arg_Sig %>% pull(Gene.Symbol)
+Trp_AAS <- read_tsv("D:/FLX/Reference_tables/Trp_sig_h.txt") %>% pull(x)
+hypoxia <- read.table("D:/FLX/GCN2/ISR_data/RNA_seq/GSEA_hypoxia.txt",sep="\n", header=TRUE) %>% pull(HALLMARK_HYPOXIA)
+
+```
+
+```{r fig.height=4, fig.width=15}
+FeaturePlot(CD3,slot = "data", cols=c("grey","red"),features=c("GCN2_pathway","AAS","ISR_pathway","Hypoxia"), ncol=4, max.cutoff=80, label=TRUE,label.size=4)
+```
+
+Signature correlations
+
+```{r}
+CD3[["GCN2_pathway"]] %>% 
+  cbind(CD3[["AAS"]]) %>% 
+  cbind(CD3$orig.ident) %>% dfilter(CD3$orig.ident != "NoTrp_2") %>% data.frame %>%
+  ggplot(aes(GCN2_pathway,AAS, colour=CD3.orig.ident, group=NA)) + 
+  geom_point(size=1.5, alpha=0.7) +
+  scale_color_rapt() +
+  geom_smooth(method="lm", size=0.25) +
+  #annotate("text", x=25,y=1500, label = "paste(italic(R) ^ 2, \" = 0.86\")", parse = TRUE) # +
+  ggsave("GCN2_vs_Arg_AAS.jpg", width=7, height=5, dpi=150, plot= last_plot(), units = "in")
+  
+CD3[["Arg_AAS"]] %>% 
+  cbind(CD3[["AAS"]]) %>% 
+  cbind(CD3$orig.ident) %>% dfilter(CD3$orig.ident != "NoTrp_2") %>% data.frame %>%
+  ggplot(aes(Arg_AAS,AAS, colour=CD3.orig.ident, group=NA)) + 
+  geom_point(size=3, alpha=0.5) +
+  scale_color_rapt() +
+  geom_smooth(method="lm", size=0.25) +
+  #annotate("text", x=25,y=1500, label = "paste(italic(R) ^ 2, \" = 0.86\")", parse = TRUE) # +
+  ggsave("GCN2_vs_Arg_AAS.jpg", width=7, height=5, dpi=150, plot= last_plot(), units = "in")
+
+CD3[["ISR_pathway"]] %>% 
+  cbind(CD3[["AAS"]]) %>% 
+  cbind(CD3$orig.ident) %>% dfilter(CD3$orig.ident != "NoTrp_2") %>% data.frame %>%
+  ggplot(aes(ISR_pathway,AAS, colour=CD3.orig.ident, group=NA)) + 
+  geom_point(size=3, alpha=0.5) +
+  scale_color_rapt() +
+  geom_smooth(method="lm", size=0.25) +
+  annotate("text", x=10,y=200, label = "paste(italic(R) ^ 2, \" = 0.90\")", parse = TRUE) +
+  ggsave("GCN2_vs_Arg_AAS.jpg", width=7, height=5, dpi=150, plot= last_plot(), units = "in")
+
+CD3[["Arg_AAS"]] %>% 
+  cbind(CD3[["GCN2_pathway"]]) %>% 
+  cbind(CD3$orig.ident) %>% cbind(CD3@active.ident) %>% dfilter(CD3$orig.ident != "NoTrp_2")  %>% data.frame %>%
+  ggplot(aes(Arg_AAS,GCN2_pathway, colour=CD3.orig.ident, group=NA)) + 
+  geom_point(size=3, alpha=0.5) +
+  scale_color_rapt() +
+  geom_smooth(method="lm", size=0.25) +
+  annotate("text", x=200,y=22, label = "paste(italic(R) ^ 2, \" = 0.39\",\"; Pearson = 0.63\")", parse = TRUE) +
+  ggsave("GCN2_vs_Arg_AAS.jpg", width=7, height=5, dpi=150, plot= last_plot(), units = "in")
+  
+CD3[["Arg_AAS"]] %>% 
+  cbind(CD3[["GCN2_pathway"]]) %>% 
+  cbind(CD3$orig.ident) %>% cbind(CD3@active.ident) %>% dfilter(CD3@active.ident == "Macrophage")  %>% data.frame %>%
+  ggplot(aes(Arg_AAS,GCN2_pathway, colour=CD3.active.ident, group=NA)) + 
+  geom_point(size=3, alpha=0.5) +
+  scale_color_rapt() +
+  geom_smooth(method="lm", size=0.25) +
+  annotate("text", x=200,y=22, label = "paste(italic(R) ^ 2, \" = 0.43\",\"; Pearson = 0.66\")", parse = TRUE) +
+  ggsave("GCN2_vs_Arg_AAS_macrophage.jpg", width=7, height=5, dpi=150, plot= last_plot(), units = "in")
+
+#AAS correlates less well
+
+
+cor(CD3[["Arg_AAS"]],CD3[["GCN2_pathway"]]) #0.63
+
+mac <- CD3[["Arg_AAS"]] %>% 
+  cbind(CD3[["GCN2_pathway"]]) %>% 
+  cbind(CD3$orig.ident) %>% cbind(CD3@active.ident) %>% dfilter(CD3@active.ident == "Macrophage") 
+
+all <- CD3[["Arg_AAS"]] %>% 
+  cbind(CD3[["GCN2_pathway"]]) %>% 
+  cbind(CD3$orig.ident) %>% cbind(CD3@active.ident) 
+  
+cor(mac[["Arg_AAS"]],mac[["GCN2_pathway"]]) #0.66
+
+cor(CD3[["AAS"]],CD3[["ISR_pathway"]]) # 0.90
+
+cor(CD3[["AAS"]],CD3[["ISR_pathway"]]) # 0.90
+
+lm <- lm(GCN2_pathway ~ Arg_AAS, data= all )
+summary(lm) 
+```
+
+
+
+
+Split data by donor
+ Ctrl_1  Ctrl_2 NoArg_1 NoArg_2 NoTrp_1 NoTrp_2 
+   1449     326     731     406     666    1001 
+```{r}
+Ctrl1 <- subset(CD3, subset= orig.ident=="Ctrl_1")
+Ctrl2 <- subset(CD3, subset= orig.ident=="Ctrl_2")
+Arg_Starve_1 <- subset(CD3, subset= orig.ident=="NoArg_1")
+Arg_Starve_2 <- subset(CD3, subset= orig.ident=="NoArg_2")
+Trp_Starve_1 <- subset(CD3, subset= orig.ident=="NoTrp_1")
+Trp_Starve_2 <- subset(CD3, subset= orig.ident=="NoTrp_2")
+#CD3_2 <- subset(CD3, idents=c("Ctrl_1","Ctrl_2","NoArg_1","NoArg_2","NoTrp_1"))
+CD3_2$orig.ident %>% table
+```
+
+```{r fig.height=4, fig.width=16}
+FeaturePlot(Ctrl2,slot = "data", cols=c("grey","red"),features=c("GCN2_pathway","PERK_pathway","HRI_pathway","ISR_pathway"), ncol=4, max.cutoff=15)
+FeaturePlot(Arg_Starve_2,slot = "data", cols=c("grey","red"),features=c("GCN2_pathway","PERK_pathway","HRI_pathway","ISR_pathway"), ncol=4, max.cutoff=15)
+FeaturePlot(Trp_Starve_2,slot = "data", cols=c("grey","red"),features=c("GCN2_pathway","PERK_pathway","HRI_pathway","ISR_pathway"), ncol=4, max.cutoff=15)
+```
+
+RidgePlot
+```{r fig.height=3, fig.width=6}
+RidgePlot(CD3,features = c("GCN2_pathway"),slot="counts", group.by="orig.ident", idents=c("Ctrl_1","NoTrp_1","NoArg_1","Ctrl_2","NoTrp_2","NoArg_2"),ncol=4) + NoLegend() + ggsave("All_GCn2_ridge.jpg", width=6, height=3, dpi=150, plot= last_plot(), units = "in")
+
+RidgePlot(CD3,features = c("AAS"),slot="counts", group.by="orig.ident",sort="increasing", idents=c("Ctrl_1","NoTrp_1","NoArg_1","Ctrl_2","NoTrp_2","NoArg_2"),ncol=4) + NoLegend() + ggsave("All_GCn2_ridge.jpg", width=6, heigh=3, dpi=150, plot= last_plot(), units = "in")
+# 
+RidgePlot(CD3,features = c("ISR_pathway"),slot="counts", group.by="orig.ident",sort="increasing", idents=c("Ctrl_1","NoTrp_1","NoArg_1","Ctrl_2","NoTrp_2","NoArg_2"),ncol=4) + NoLegend() #+ ggsave("All_GCn2_ridge.jpg", width=6, height=3, dpi=150, plot= last_plot(), units = "in")
+
+#,cols=c("orange","chartreuse3","dodgerblue2","orange","chartreuse3","dodgerblue2")
+
+RidgePlot(CD3,features = c("HRI_pathway"),slot="counts", group.by="orig.ident",sort="increasing", idents=c("Ctrl_1","NoTrp_1","NoArg_1","Ctrl_2","NoTrp_2","NoArg_2"),ncol=4) + NoLegend() # ggsave("All_GCn2_ridge.jpg", width=23, height=3, dpi=150, plot= last_plot(), units = "in")
+
+,cols=c("orange","chartreuse3","dodgerblue2","orange","chartreuse3","dodgerblue2")
+
+CD3$orig.ident %>% table
+```
+Plot Ridge
+```{r fig.height=7, fig.width=15}
+install.packages("ggridges")
+library(ggridges)
+CD3[["GCN2_pathway"]] %>% cbind(CD3$orig.ident) %>% data.frame %>% arrange(desc(CD3.orig.ident)) %>% dfilter(CD3.orig.ident != "NoTrp_2") %>% ggplot(aes(y=CD3.orig.ident,x=GCN2_pathway, fill=CD3.orig.ident)) + geom_density_ridges() + xlim(-2.5,15) + NoLegend() + theme(axis.title.y = element_blank(), axis.text= element_text(size=14))
+
+CD3[["ISR_pathway"]] %>% cbind(CD3$orig.ident) %>% data.frame %>% arrange(desc(CD3.orig.ident)) %>% dfilter(CD3.orig.ident != "NoTrp_2") %>% ggplot(aes(y=CD3.orig.ident,x=ISR_pathway, fill=CD3.orig.ident)) + geom_density_ridges(alpha=0.8) + xlim(-5,30) + NoLegend() + theme(axis.title.y = element_blank(), axis.text= element_text(size=12))
+
+CD3[["AAS"]] %>% cbind(CD3$orig.ident) %>% data.frame %>% arrange(desc(CD3.orig.ident)) %>% dfilter(CD3.orig.ident != "NoTrp_2") %>% ggplot(aes(y=CD3.orig.ident,x=AAS, fill=CD3.orig.ident)) + geom_density_ridges(alpha=0.8) + xlim(-5,150) + NoLegend() + theme(axis.title.y = element_blank(), axis.text= element_text(size=12))
+
+sigs <- CD3[["AAS"]] %>% cbind(CD3$orig.ident,CD3$GCN2_pathway,CD3$Arg_AAS,CD3$Trp_AAS,CD3$ISR_pathway,CD3$PERK_pathway,CD3$HRI_pathway) 
+colnames(sigs) <- new_colnames
+sigs %>% data.frame %>% dfilter(orig.ident != "NoTrp_2") %>% dselect(-GCN2_pathway,-HRI_pathway,-PERK_pathway) %>% mutate(orig.ident= factor(orig.ident, levels=c("Ctrl_1","NoArg_1","NoTrp_1","Ctrl_2","NoArg_2"))) %>% gather(Signature, Score, -orig.ident) %>% ggplot(aes(y=orig.ident,x=Score, fill=orig.ident))  + geom_density_ridges(alpha=0.7, rel_min_height=0.01) + facet_wrap(~Signature, scale="free_x") + NoLegend() + theme(axis.title.y = element_blank(), axis.text= element_text(size=12)) + scale_fill_manual(values=c("#5B666F","#0A95A7","#E5541B","#5B666F","#0A95A7")) + ggsave("All_Sigs_ridge.jpg", width=15, height=6, dpi=150, plot= last_plot(), units = "in")
+
+sigs %>% data.frame %>% dfilter(orig.ident != "NoTrp_2") %>% dselect(-AAS,-Arg_AAS,-Trp_AAS,-ISR_pathway) %>% mutate(orig.ident= factor(orig.ident, levels=c("Ctrl_1","NoArg_1","NoTrp_1","Ctrl_2","NoArg_2"))) %>% gather(Signature, Score, -orig.ident) %>% ggplot(aes(y=orig.ident,x=Score, fill=orig.ident))  + geom_density_ridges(alpha=0.7, rel_min_height=0.01) + facet_wrap(~Signature, scale="free_x") + xlim(-2,18) + NoLegend() + theme(axis.title.y = element_blank(), axis.text= element_text(size=12)) + scale_fill_manual(values=c("#5B666F","#0A95A7","#E5541B","#5B666F","#0A95A7")) + ggsave("All_Sigs_ridge2.jpg", width=15, height=6, dpi=150, plot= last_plot(), units = "in")
+
+my_colnames <- sigs %>% colnames
+new_colnames <- gsub("macrophage.","",my_colnames)
+
+#blue="#0A95A7", orange="#E5541B", gray="#5B666F", yellow="#FE9F33", green="#4DA167", lilac="#947EB0"
+```
+
+
+
+Ridgeplot for Myeloid clusters 6 and 8
+```{r fig.height=4, fig.width=16}
+RidgePlot(CD3,features = c("GCN2_pathway"),group.by="orig.ident", idents="Macrophage",ncol=4) + NoLegend() # + ggsave("All_GCn2_ridge.jpg", width=6, height=3, dpi=150, plot= last_plot(), units = "in")
+RidgePlot(CD3,features = c("GCN2_pathway","AAS","ISR_pathway"),group.by="orig.ident",slot="counts", idents="Macrophage") + NoLegend()
+
+sigs <- macrophage[["AAS"]] %>% cbind(macrophage$orig.ident,macrophage$GCN2_pathway,macrophage$Arg_AAS,macrophage$ISR_pathway,macrophage$PERK_pathway,macrophage$HRI_pathway) 
+
+new_colnames <- gsub("macrophage.","",my_colnames)
+colnames(sigs) <- new_colnames
+
+sigs %>% data.frame %>% dfilter(!grepl("_2",orig.ident)) %>% dselect(-GCN2_pathway,-HRI_pathway,-PERK_pathway) %>% mutate(orig.ident= factor(orig.ident, levels=c("Ctrl_1","NoArg_1","NoTrp_1","Ctrl_2","NoArg_2"))) %>% gather(Signature, Score, -orig.ident) %>% ggplot(aes(y=orig.ident,x=Score, fill=orig.ident))  + geom_density_ridges(alpha=0.7, rel_min_height=0.01) + facet_wrap(~Signature, scale="free_x") + NoLegend() + theme(axis.title.y = element_blank(), axis.text= element_text(size=12)) + theme(strip.text = element_text(size=15)) + scale_fill_manual(values=c("#5B666F","#0A95A7","#E5541B","#5B666F","#0A95A7")) + ggsave("All_Sigs_macrophage_ridge.jpg", width=15, height=3, dpi=150, plot= last_plot(), units = "in")
+
+sigs %>% data.frame %>% dfilter(!grepl("_2",orig.ident)) %>% dselect(-AAS,-Arg_AAS,-ISR_pathway) %>% mutate(orig.ident= factor(orig.ident, levels=c("Ctrl_1","NoArg_1","NoTrp_1","Ctrl_2","NoArg_2"))) %>% gather(Signature, Score, -orig.ident) %>% ggplot(aes(y=orig.ident,x=Score, fill=orig.ident))  + geom_density_ridges(alpha=0.7, rel_min_height=0.01) + facet_wrap(~Signature, scale="free_x") + xlim(-15,200) + NoLegend() + theme(axis.title.y = element_blank(), axis.text= element_text(size=12)) + theme(strip.text = element_text(size=15)) + scale_fill_manual(values=c("#5B666F","#0A95A7","#E5541B","#5B666F","#0A95A7")) + ggsave("All_Sigs_macrophage_ridge2.jpg", width=15, height=3, dpi=150, plot= last_plot(), units = "in")
+
+```
+Subset Macrophages
+
+```{r fig.height=3, fig.width=4}
+macrophage <- subset(CD3, idents="Macrophage")
+DimPlot(macrophage,group.by="orig.ident")
+
+rna_matrix <- as.matrix(macrophage$RNA@counts)
+
+rna_matrix %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% GCN2_h) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% summarise_all(median) %>% t %>% data.frame %>% count(.data$.)
+macrophage$orig.ident %>% table
+```
+
+
+
+#################################
+Name the clusters for now
+
+Ctrl1: 0
+No Arg 1: 4
+No Trp 1 : 3, 7
+Ctrl 2: 1, 0 ,5
+No Arg 2: 1, 4, 5
+No Trp 2: 2
+###################################
+
+```{r}
+
+mRNA_ident <- c("Ctrl_1",1,"NoTrp_2","NoTrp_1","NoArg_1",5,"Macrophage","NoTrp_1","Macrophage")
+#make the quivalency of the old labels to the new label names
+
+names(mRNA_ident) <- levels(CD3) # 0 to 8
+CD3 <- RenameIdents(CD3,mRNA_ident)
+CD3@active.ident %>% table
+CD3[["Cell_type_call"]] <- CD3@active.ident
+
+```

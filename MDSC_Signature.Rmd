@@ -1,0 +1,1528 @@
+---
+title: "MDSC_Signature"
+author: "Mengshu"
+date: "6/20/2019"
+output: html_document
+---
+
+Using data sources that Silpa has already collected, and adapting her analysis schema, I am attempting to find mMDSC and gMDSC markers that would form 2 signatures for inferring mMDSC and gMDSC content in bulk RNA seq data of human tumor samples.
+
+I am attempting two signatures because mMDSCs and gMDSCs have diverging markers that would make a merged signature suboptimal for estimating either subtype. I expect the two signatures would share markers. 
+
+Myeloid lineage suppressor cell types exist on a plastic continuum, and share both lineage and functional markers, therefore we will not attempt to differentiate MDSCs from TAMs (M2), N2, regDCs, and Macrophages in general. From TCGA analysis using QuantiSeq we know that most TAMs have a M2 phenotype, as opposed to M1.  
+
+Since the samples will contain all cells types: normal immune, cancer-associated immune, cancer cells, and other cell types, we can't use negative markers, since they are expected to be in the sample. We can only use MDSC-high markers. However, since each marker is only a component of the signature, the markers don't have to be exclusive to MDSCs. 
+
+```{r}
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+#library(limma) #quantileNormalization
+library(tibble)
+library(DESeq2)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+#source("D:/FLX/Files_from_Gene/R_functions.r")
+
+#Code file in D:/FLX/Gabrilovich_data/
+# Enterprise/FLX/Gabrilovich_Data/
+```
+New packages
+```{r}
+#install.packages("broom") # This contains tidy
+library(broom)
+#install.packages("Hmisc") #contains %nin%
+library(Hmisc)
+```
+
+ImmQ = BluePrint and In-house data that has been normalized
+Merging the BluePrint cell type replicates and FLX celltype triplicates: reduced the number of columns from 150 to 64
+"Quantile normalized and batch normalized"
+```{r}
+load("immQ.batchCorrected.rdata")
+immQ_col <- data.frame(colnames(immQ))
+head(colnames(immQ)) #replicates are separated in FLX data, and Blueprint samples are in code, and replicates are separated
+load("immuneSample.rdata") #These are the samples keys for each sample
+immuneSample$CellType #these are the consolidating names for Blueprint samples only
+name_blueprint <- immuneSample %>% dselect(Sample,CellType)
+immD <- left_join(immQ_col,name_blueprint, by=c("colnames.immQ."="Sample"))
+immD #this in the joint sample table, $CellType contains the consolidating name for summarise_all()
+#save the old colnames just in case, and the gene names column
+imm_cols <- colnames(immQ)
+genes <- immQ$Gene
+t_imm <- immQ %>% dselect(-Gene) #getting ready to transpose, remove text col so all data types are doubles
+# Data.frame doens't like columns with the same names. Transpose and take the median. Apparently it doesn't like duplicate rownames either, add as a col
+t_imm <- data.frame(t(t_imm)) #transpose
+t_imm %<>% mutate(sample_redundant= immD$CellType[1:250])
+#13:10 to 13:15
+t_imm_median <- t_imm %>% group_by(sample_redundant) %>% summarise_all(median)
+celltypes_consolidated <- t_imm_median$sample_redundant #down to 64 cell types
+t_imm_median %<>% dselect(-sample_redundant)
+immQ_median <- t(t_imm_median)
+dim(immQ_median)
+colnames(immQ_median) <- celltypes_consolidated
+rownames(immQ_median) <- genes
+head(immQ_median)
+```
+ImmQ consolidated data load
+```{r}
+save(immQ_median,file="immQ_median_June2019.rdata")
+immQ_df <- data.frame(immQ_median)
+head(immQ_df)
+immQ_df %<>% tibble::rownames_to_column() %>% dplyr::rename(Gene = rowname)
+save(immQ_df,file="FLX_BluePrint_ImmuneCells_June2019.rdata")
+load("FLX_BluePrint_ImmuneCells_June2019.rdata")
+```
+Is the immQ data zero centered? No, Not sure what the signal is centered on: it's ~-5
+Signal is log2 scaled; RPS10 counts are in the 8-10 range, RPL10 is 10-12
+I can still calculate the z-score from this. 
+64 columns by 44200 genes
+```{r}
+colnames(immQ_df)
+head(immQ_df)
+boxplot(immQ_df)
+```
+
+Gabrilovich Data
+mMDSC and Monocyte RNAseq
+RNAseq mMDSC_counts is a matrix with FPKM? interger counts
+```{r}
+load("MONOMDSC.dds.rdata") #dds
+load("MDSCMONO.SampleInfo.rdata")
+sampleInfo #Meta data for the MDSC MONOCYTE set
+dds
+colnames(dds)
+colData(dds) #this is the meta data within the dds object
+assays(dds) #different measurement: counts avgTxLength normalizationFactors mu cooks
+mMDSC_counts <- counts(dds)
+mMDSC_counts <- data.frame(mMDSC_counts)
+save(mMDSC_counts, file="mMDSC_Mono_counts.rdata")
+
+load("mMDSC_Mono_counts.rdata")
+head(mMDSC_counts)
+mMDSC_counts %<>% tibble::rownames_to_column() %>% dplyr::rename(Gene = rowname)
+```
+Look at the mMDSC data
+```{r}
+boxplot(mMDSC_counts, log2="y")
+```
+
+PMN-MDSC and PMN Microarray
+PMN-MDSC data is not available in our databases as raw data: but it's published
+Downloaded from GSE79404 repository
+Microarray data Human v4
+```{r}
+
+sample_pmn <- c("PMN.hd.1", "pval", "PMN.hd.2", "pval", "PMN.hd.3", "pval", "PMN.hd.4", "pval", "PMN.HNC.4", "pval",  "PMN.HNC.5", "pval",  "PMN.HNC.6", "pval",  "PMN.HNC.7", "pval",  "PMN.NSCLC.2", "pval",  "PMN.NSCLC.3", "pval",  "PMN-MDSC.HNC.4", "pval",   "PMN-MDSC.HNC.5", "pval",   "PMN-MDSC.HNC.6", "pval",   "PMN-MDSC.HNC.7", "pval",   "PMN-MDSC.NSCLC.2", "pval", "PMN-MDSC.NSCLC.3", "pval", "LOX1-.NSCLC.1", "pval",  "LOX1-.NSCLC.2", "pval",  "LOX1-.CC.1", "pval",  "LOX1-.CC.2", "pval",  "LOX1+.NSCLC.1", "pval",  "LOX1+.NSCL
+C.2", "pval",  "LOX1+.CC.1", "pval",  "LOX1+.CC.2")
+
+gse <- c("GSM2094831", "pval",  "GSM2094832", "pval",  "GSM2094833", "pval",  "GSM2094834", "pval",  "GSM2094835", "pval",  "GSM2094836", "pval",  "GSM2094837", "pval",  "GSM2094838", "pval",  "GSM2094839", "pval",  "GSM2094840", "pval",  "GSM2094841", "pval",  "GSM2094842", "pval",  "GSM2094843", "pval",  "GSM2094844", "pval",  "GSM2094845", "pval",  "GSM2094846", "pval",  "GSM2094847", "pval",  "GSM2094848", "pval",  "GSM2094849", "pval",  "GSM2094850", "pval",  "GSM2094851", "pval",  "GSM2094852", "pval",  "GSM2094853", "pval",  "GSM2094854")
+
+PMN_MetaData <- cbind(sample_pmn,gse)
+PMN_MetaData <- PMN_MetaData[1:16,]
+Cell_type <- c(rep("PMN", "pval", 10),rep("PMN-MDSC", "pval", 6))
+PMN_MetaData <- cbind(PMN_MetaData, Cell_type)
+
+save(PMN_MetaData,file="PMN_MetaData.rdata")
+write.table(PMN_MetaData,file="PMN_MetaData.txt", sep="\t")
+
+PMN_MDSC <- read.table(file="GSE79404_non-normalized.txt", "pval",  skip =5, header = TRUE, sep="\t")
+dim(PMN_MDSC) #48106
+PMN_MDSC %<>% dplyr::select(1:33)
+PMN_MDSC
+rownames(PMN_MDSC) <- PMN_MDSC$X
+colnames(PMN_MDSC) <-  c("Probe", "PMN.hd.1", "pval1", "PMN.hd.2", "pval2", "PMN.hd.3", "pval3", "PMN.hd.4", "pval4", "PMN.HNC.4", "pval5",  "PMN.HNC.5", "pval6",  "PMN.HNC.6", "pval7",  "PMN.HNC.7", "pval8",  "PMN.NSCLC.2", "pval9",  "PMN.NSCLC.3", "pval10",  "PMN-MDSC.HNC.4", "pval11",   "PMN-MDSC.HNC.5", "pval12",   "PMN-MDSC.HNC.6", "pval13",   "PMN-MDSC.HNC.7", "pval14",   "PMN-MDSC.NSCLC.2", "pval15", "PMN-MDSC.NSCLC.3", "pval16")
+
+# Filter for genes that are detected. Not sure this is necessary
+PMN_MDSC_filter <- PMN_MDSC %>% dplyr::filter(pval11 < 0.01, pval12 < 0.01, pval13 < 0.01,pval11 < 0.01,pval14 < 0.01,pval15 < 0.01,pval16 < 0.01) #10327
+PMN_MDSC_filter
+dim(PMN_MDSC_filter) #10327 33
+
+probeIlmn <- as.vector(PMN_MDSC_filter$Probe)
+
+
+source("https://bioconductor.org/biocLite.R")
+biocLite("illuminaHumanv4.db")
+library(illuminaHumanv4.db)
+
+#select(hgu95av2.db,keys= PROBES,columns=c("SYMBOL","GENENAME","ENSEMBL","ENSEMBLPROT"))
+OUT <- AnnotationDbi::mapIds(illuminaHumanv4.db, keys=probeIlmn, column="SYMBOL", keytype = "PROBEID", multiVals="first")
+length(probeIlmn)
+length(OUT)
+PMN_MDSC_filter %<>% dplyr::mutate(Gene = OUT) %>% dselect(Gene,-Probe,everything()) %>% dplyr::filter(!is.na(Gene))
+PMN_MDSC_filter %<>% dplyr::select(-Probe,-pval1,-pval2,-pval3,-pval4,-pval5,-pval6,-pval7,-pval8,-pval9,-pval10,-pval11,-pval12,-pval13,-pval14,-pval15,-pval16)
+PMN_MDSC_filter #16 by 9689 genes
+#remove duplicates
+length(PMN_MDSC_filter$Gene[duplicated(PMN_MDSC_filter$Gene)]) #2606
+PMN_MDSC_unique <- PMN_MDSC_filter[!duplicated(PMN_MDSC_filter$Gene),]
+dim(PMN_MDSC_unique) #7083 by 17
+
+save(PMN_MDSC_unique,file="PMN_MDSC_microarray_unique_filter.rdata")
+load("/Volumes/Picard/FLX/Gabrilovich_data/PMN_MDSC_microarray_unique_filter.rdata")
+
+``` 
+
+DE analysis with DESeq2
+```{r}
+load("/Volumes/Picard/FLX/Gabrilovich_data/PMN_MDSC_microarray_unique_filter.rdata")
+PMN_MDSC_unique
+
+round_mx <- function(i) {round(i,digits=0)}
+
+pmn_matrix <- PMN_MDSC_unique %>% remove_rownames() %>% mutate_if(is.numeric,round_mx) %>% tibble::column_to_rownames("Gene")  %>% as.matrix
+meta_pmn <- cbind(Sample=colnames(PMN_MDSC_unique)[2:17], Condition=c(rep("PMN",10),rep("PMN-MDSC",6)))
+
+pmn <- DESeqDataSetFromMatrix(countData=pmn_matrix,
+                              colData=meta_pmn,
+                              design= ~Condition)
+pmn$Condition <- relevel(pmn$Condition, ref="PMN")
+pmn <- DESeq(pmn)
+
+results(pmn, name="Condition_PMN.MDSC_vs_PMN") %>% data.frame %>% tibble::rownames_to_column("Gene") %>% dfilter(padj < 0.1) %>% dfilter(log2FoldChange >= 0.5 | log2FoldChange <= -0.5) %>% dfilter(!grepl("Gm|Rik",Gene)) %>% arrange(-log2FoldChange) %>% write.table("Gabrilovich_PMN_MDSC_vs_PMN_Padj0.1.txt", quote=FALSE, row.names = FALSE,sep="\t")
+```
+Volcano plot
+
+```{r fig.height=10, fig.width=8}
+BiocManager::install("EnhancedVolcano")
+library(EnhancedVolcano)
+
+pdf("Volcanoplot_PMN-MDSC_vs_PMN.pdf",width = 8, height = 10)
+EnhancedVolcano(results(pmn),
+                 lab = rownames(results(pmn)),
+                 x = 'log2FoldChange',
+                 y = 'padj',
+                 ylim = c(0,30),
+                 xlim = c(-1.5,NA),
+                 ylab = bquote(~-Log[10]~~italic(P)),
+                 title = 'PMN-MDSC_vs_PMN',
+                 pCutoff = 0.1,
+                 FCcutoff = 0.5,col=c('grey75', 'grey50', 'grey25', 'darkorange1'),
+                 colAlpha = 1)
+dev.off()
+#turquoise3
+```
+
+
+"New"Lung cancer data: PMN-MDSC and mMDSC RNAseq
+20062 genes by 4 samples Raw RPKM
+```{r}
+load("PMN_vs_MONO.MDSC.dds.rdata")
+dds
+New_MDSC <- counts(dds)
+New_MDSC
+colnames(New_MDSC) <- c("PMN.MDSC1","mMDSC1","PMN.MDSC2","mMDSC2")
+colData(dds) #this is the meta data within the dds object
+assays(dds) #different measurement: counts avgTxLength normalizationFactors mu cooks
+New_MDSC <- data.frame(New_MDSC)
+save(New_MDSC,file="New_MDSC.rdata")
+load("New_MDSC.rdata")
+New_MDSC["ARG1",]
+New_MDSC %<>% tibble::rownames_to_column() %>% dplyr::rename(Gene = rowname)
+```
+
+Merge All datasets
+
+Full_merge PMN and mMDSC and New_MDSC
+Then, left merge other Immune cell types
+Make sure genes are a column in all datasets
+25853 genes by 96 conditions. Gene name is a column
+```{r}
+New_MDSC #28459
+PMN_MDSC_unique #17 by 7083 genes
+mMDSC_counts
+immQ_df
+
+MDSC <- full_join(New_MDSC, mMDSC_counts, by= "Gene")
+MDSC <- full_join(MDSC, PMN_MDSC_unique, by= "Gene")
+MDSC <- left_join(MDSC, immQ_df, by="Gene")
+save(MDSC,file="MDSC_immQ.rdata")
+load("MDSC_immQ.rdata") #MDSC
+dim(MDSC)
+MDSC$Gene[duplicated(MDSC$Gene)] #Check to make sure no duplicated genes
+```
+
+Normalize data columns using Limma:
+Just for the raw data columns 1:32. The last 64 columns are already quantile norm and log2 transformed
+Duplicate gene names were found: There are 2 "GST01"line 9857 and 9858, which are identical, except in the PMN, PMN-MDSC dataset
+There are 25853 unique genes and 28459 lines, so there are 6 duplications. I think these are all from PMN microarray dataset: :this is confirmed TRUE
+```{r}
+load("MDSC_immQ.rdata") #MDSC
+MDSC %<>% tibble::column_to_rownames("Gene")
+MDSC_norm <- normalizeBetweenArrays(MDSC[,1:32]) #default is quantile
+MDSC_norm <- data.frame(MDSC_norm)
+dim(MDSC_norm) #25853 by 32
+boxplot(MDSC[,1:32])
+boxplot(MDSC[,33:96])
+MDSC_norm_combine <- cbind(MDSC_norm,MDSC[,33:96])
+boxplot(MDSC_norm_combine)
+
+MDSC_norm_all <- data.frame(normalizeBetweenArrays(MDSC)) 
+boxplot(MDSC_norm_all)
+
+rownames(MDSC_norm_all) <- rownames(MDSC)
+rownames(MDSC_all_z) <- rownames(MDSC)
+```
+
+Replace all the missing data with zeros
+```{r}
+MDSC_norm_all[is.na(MDSC_norm_all)] <- 0
+MDSC_norm_all
+```
+
+Batch normalize with sva
+The ComBat function of sva directly removes the batch effects
+Make sure there are no NAs in the data, and the data has to be a matrix
+```{r}
+BiocManager::install("sva")
+library(sva)
+colnames(MDSC_norm_all)
+batches <- as.factor(c(rep(1,4),rep(2,12),rep(3,16),rep(4,64))) # 1 = new (4) 2=mMDSC(12) 3= PMN-MDSC (16) 4=ImmQ (64) #pheno
+#pheno <- as.factor(c(rep("MDSC",16),rep("other",16),rep("MDSC",7),rep("other",57)))
+sample <- seq(1,96)
+pheno <- data.frame(cbind(sample,batches))
+model_combat <- model.matrix(~batches, data=pheno)
+model_combat
+
+MDSC_batchcorr <- sva::ComBat(dat=as.matrix(MDSC_norm_all), batch=batches, mod=model_combat, par.prior = TRUE,prior.plots=TRUE)  #, par.prior= TRUE, prior.plots = TRUE 
+MDSC_batchcorr <- data.frame(MDSC_batchcorr)
+genes <- rownames(MDSC_batchcorr)
+
+write.table(MDSC_batchcorr,file="MDSC_batchcorr.cdt",row.names=FALSE, sep="\t")
+save(MDSC_batchcorr,file="MDSC_batchcorr.rdata")
+load("MDSC_batchcorr.rdata")
+MDSC_batchcorr <- read.table("MDSC_batchcorr.cdt",header=TRUE, sep="\t")
+colnames(MDSC_batchcorr)
+```
+
+
+Convert all values to z-scores
+z=(x-pop_mean)/stdev
+the immQ data is already Quantile and log2 normalized, but if I leave them out of the limma normalization, the data distribution looks very different after z-score transformation
+"MDSC_zscore"is version where immQ was left out of limma norm, and then z-scored
+"MDSC_all_zscore"is version when all cols were limma normalized, then z-scored
+```{r}
+#install.packages("mosaic")
+#library(mosaic)
+
+mx_zscore <- function(x) {result <- (x-mean(x,na.rm=TRUE)) / sd(x,na.rm=TRUE) 
+                          return(result)}
+MDSC_zscore <- MDSC_batchcorr %>% mutate_all(mx_zscore)
+boxplot(MDSC_zscore)
+hist(MDSC_zscore$Th1)
+hist(MDSC_zscore$PMN.MDSC1)
+
+MDSC_zscore %<>% mutate(Gene = genes, Gene2=genes) %>% dselect(Gene, Gene2, everything())
+MDSC_zscore %<>% dselect("Gene","Gene2","PMN.MDSC1","PMN.MDSC2","mMDSC1","mMDSC2","X11_GDHD298.MDSC_S11","X1_GDTB17.97.MDSC_S1","X3_GDTB17.139.MDSC_S3","X5_GDHD110.MDSC_S5","X7_GDTB16.311.MDSC_S7","X9_GDHD276.MDSC_S9",
+  "PMN.MDSC.HNC.5","PMN.MDSC.HNC.4","PMN.MDSC.HNC.7","PMN.MDSC.HNC.6","PMN.MDSC.NSCLC.3","PMN.MDSC.NSCLC.2", 
+  "PMN.hd.1","PMN.hd.2","PMN.hd.3","PMN.hd.4","PMN.HNC.4","PMN.HNC.5","PMN.HNC.6","PMN.HNC.7","PMN.NSCLC.2","PMN.NSCLC.3", 
+  "X10_GDHD276.MONO_S10","X12_GDHD298.MONO_S12","X2_GDTB17.97.MONO_S2","X4_GDTB17.139.MONO_S4","X6_GDHD110.MONO_S6","X8_GDTB16.311.MONO_S8",
+   "alternatively.activated.macrophage","mMDSC","gMDSC","common.myeloid.progenitor","granulocyte.monocyte.progenitor.cell","macrophage","Macrophage","band.form.neutrophil","segmented.neutrophil.of.bone.marrow","mature.neutrophil","neutrophilic.metamyelocyte","neutrophilic.myelocyte",everything())
+
+save(MDSC_zscore,file="MDSC_limma_batch_zscore.rdata")
+load("MDSC_limma_batch_zscore.rdata")
+
+write.table(MDSC_zscore, file="MDSC_limma_batch_zscore.txt", sep="\t", quote= FALSE, row.names = FALSE)
+MDSC_z <- read.table("MDSC_limma_batch_zscore.txt", sep= "\t",header=TRUE)
+
+```
+Heatmap
+```{r fig.height=30, fig.width=30}
+MDSC_all_z <- as.matrix(MDSC_all_zscore)
+MDSC_z <- as.matrix(MDSC_zscore)
+heatmap(MDSC_all_z,Colv = NA, Rowv = NA, scale="column", na.rm = TRUE)
+heatmap(MDSC_all_z,Colv = NA, Rowv = NA,na.rm = TRUE, density.info)
+??heatmap
+```
+
+```{r fig.height=10, fig.width=15}
+my_palette <- colorRampPalette(c("purple", "grey", "green"))(n = 299)
+col_breaks = c(seq(-5,-1,length=100), # for purple
+seq(-0.99,0.99,length=100),  # for grey
+seq(1,5,length=100)) # for green
+heatmap(MDSC_z,Colv = NA, Rowv = NA,na.rm = TRUE,col = my_palette)
+
+```
+
+Filter away pseudo genes and unknowns
+17918 and 96 cols
+```{r}
+MDSC_filter <- MDSC_zscore  %>% dplyr::filter(!grepl("^A[CPL][0-9]{6}",Gene, perl=TRUE)) %>% dplyr::filter(!grepl("^C[0-9]{1,2}orf",Gene,perl=TRUE)) %>% dplyr::filter(!grepl("^CT[ABCD]-[0-9]*",Gene,perl=TRUE)) %>% 
+dplyr::filter(!grepl("^LINC",Gene,perl=TRUE)) %>% 
+dplyr::filter(!grepl("^RP[0-9]{1,2}-",Gene,perl=TRUE))
+
+MDSC_filter %<>% tibble::column_to_rownames("Gene")
+save(MDSC_filter,file="MDSC_filter.rdata")
+load("MDSC_filter.rdata")
+MDSC_filter %<>% tibble::rownames_to_column("Gene")
+write.table(MDSC_filter, file="MDSC_filterB.cdt", sep="\t", quote= FALSE, row.names = FALSE)
+
+```
+
+Cluster the samples
+
+To cluster the samples, I have to transpose the whole matrix so the samples are rows
+```{r fig.height=10, fig.width=25}
+MDSC_filter_m <- as.matrix(MDSC_filter %>% dselect(-Gene,-Gene2))
+MDSC_t <- t(MDSC_filter_m)
+MDSC_dist <- dist(MDSC_t, method="euclidian",p=6)
+str(MDSC_dist)
+MDSC_hc <- hclust(MDSC_dist,method="complete")
+plot(MDSC_hc)
+```
+ 
+Filter down the matrix for genes that are expressed in MDSC cells
+This is not really necessary
+Average of MDSC cols > 0: 4747 genes left
+Average of MDSC cols > -0.5: 17909 genes left
+Average of MDSC cols > -2.5: 17918 genes left
+
+```{r}
+hist(MDSC_batchcorr$CD8.pos)
+MDSC_pos <- MDSC_batchcorr %>% dfilter((PMN.MDSC1+PMN.MDSC2+mMDSC1+mMDSC2+X11_GDHD298.MDSC_S11+X1_GDTB17.97.MDSC_S1+X3_GDTB17.139.MDSC_S3+X5_GDHD110.MDSC_S5+X7_GDTB16.311.MDSC_S7+X9_GDHD276.MDSC_S9)/10 >= -0.5)
+save(MDSC_pos,file="MDSC_positive.rdata")
+write.table(MDSC_pos,file="MDSC_pos.txt",row.names=FALSE, sep="\t")
+```
+
+Plot Silpa's PMN-MDSC signature
+```{r}
+MDSC_signature <- c("DEFA1", "DEFA3", "LTF", "DEFA1B", "MMP8", "OLFM4", "DEFA4", "CEACAM8", "ABCA13", "CRISP3", "ELANE", "CAMP", "CTSG", "PGLYRP1", "RNASE3", "HP", "MPO", "BPI", "MS4A3", "RNASE2", "RETN", "F13A1", "PPBP", "GP9", "TUBB1", "CMTM2", "PROK2", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "S100A12", "CR1")
+MDSC_signature_genes <- MDSC_filter %>% dfilter(Gene %in% MDSC_signature) %>% arrange(match(Gene,MDSC_signature))
+
+write.table(MDSC_signature_genes, file= "MDSC_signature_silpa_B.cdt", row.names= FALSE, sep="\t")
+```
+
+Handpicked MDSC signature genes
+Check them by eye
+If they look good, take the median signature of these genes as the "model"signature gene, and perform correlation analysis to find the closest matching gene profiles
+```{r}
+MDSC_MX <- c("NCF2", "IVNS1ABP", "UBE2R2", "ARHGAP30", "ARHGAP26", "JUNB","CXCL8","CSF3R", "DENND3", "DENND5A","ATG16L2","ADGRG3",  "BAZ2B","CYP1B1", "FAM198B", "KCTD12","THBS1","NLRP3")
+MDSC_signature_MX <- MDSC_filter %>% dfilter(Gene %in% MDSC_MX) %>% arrange(match(Gene,MDSC_MX))
+write.table(MDSC_signature_MX, file= "MDSC_signature_MX_B.cdt", row.names= FALSE, sep="\t")
+```
+
+
+Using the Handpicked MDSC gene signatures find more genes like them by correlation
+The genes have to be the columns
+rcorr(matrix, vector,type=c("spearman"))
+```{r}
+library(Hmisc) #contains rcorr()
+#Or just use cor, which is a lot faster
+MDSC_t <- t(as.matrix(MDSC_filter %>% dselect(-Gene,-Gene2)))
+genes_t <- as.vector(MDSC_filter$Gene)
+MDSC_t[1:5,1:5]
+str(MDSC_t)
+colnames(MDSC_t) <- genes_t
+# DEFA1 gMDSC, F13A1 mMDSC
+# IVNS1ABP, ADGRG3, THBS1
+MDSC_t <- as.matrix(MDSC_t) #this has to be matrix
+DEFA1 <- as.vector(MDSC_t[,"DEFA1"]) 
+F13A1 <- as.vector(MDSC_t[,"F13A1"]) 
+C5AR1 <- as.vector(MDSC_t[,"C5AR1"])
+
+MDSC_cor <- stats::cor(MDSC_t,DEFA1, method=c("pearson")) 
+DEFA1_cor <- data.frame(sort(MDSC_cor[,1],decreasing=TRUE))
+DEFA1_like <- MDSC_filter %>% dfilter(Gene %in% rownames(DEFA1_cor)[1:100]) %>% arrange(match(Gene,rownames(DEFA1_cor)[1:100])) %>% dfilter(PMN.MDSC1 >= 0.1 | PMN.MDSC2 >= 0.1)
+
+write.table(DEFA1_like, file= "DEFA1_like_genes_B.cdt", row.names= FALSE, sep="\t")
+MDSC_batchcorr
+DEFA1_like
+```
+
+Correlate to Ideal Gene profiles
+```{r}
+my_MDSC <- (c(rep(1,16),rep(0,16),0,rep(2,2),rep(0,7),rep(-0.2,54)))
+my_gMDSC <- as.numeric(c(rep(1,2),rep(0.5,2),rep(0.3,6),rep(1,6),rep(-0.3,10),rep(0,6),0,0.5,1,rep(0.5,7),rep(-0.2,54)))
+my_mMDSC <- as.numeric(c(rep(0.5,2),rep(1,2),rep(1,6),rep(0.5,6),rep(0,10),rep(-0.3,6),0,1,0.5,rep(0.5,7),rep(-0.2,54)))
+models <- data.frame(rbind(my_MDSC, my_gMDSC, my_mMDSC))
+models %<>% mutate(Gene = c("MDSC","gMDSC","mMDSC"), Gene2= c("MDSC","gMDSC", "mMDSC")) %>% dselect(Gene, Gene2, everything())
+write.table(models, file= "my_MDSC_models.cdt", row.names= FALSE, sep="\t")
+#my_models <- rbind(my_MDSC,my_gMDSC,my_mMDSC)
+#heatmap(as.matrix(my_models),Colv = NA, Rowv = NA,col=my_palette, scale=c("row"))
+#my_palette <- colorRampPalette(c("green","white","purple"))(n = 299)
+
+my_MDSC_cor <- stats::cor(MDSC_t,my_MDSC, method=c("pearson")) 
+my_mMDSC_cor <- stats::cor(MDSC_t,my_mMDSC, method=c("pearson"))
+my_gMDSC_cor <- stats::cor(MDSC_t,my_gMDSC, method=c("pearson")) 
+models <- rbind(my_MDSC_cor, my_gMDSC)
+
+myMDSC_cor <- data.frame(sort(my_MDSC_cor[,1],decreasing=TRUE))
+myMDSC_like <- MDSC_filter %>% dfilter(Gene %in% rownames(myMDSC_cor)[1:100]) %>% arrange(match(Gene,rownames(myMDSC_cor)[1:100])) %>% dfilter(PMN.MDSC1 >= 0.1 | PMN.MDSC2 >= 0.1) #match(col_this df, order)
+myMDSC_like <- rbind(myMDSC_like,c("Model_MDSC","Model_MDSC",my_MDSC))
+write.table(myMDSC_like, file= "my_MDSC_like_genesB.cdt", row.names= FALSE, sep="\t")
+
+my_mMDSC_cor <- data.frame(sort(my_mMDSC_cor[,1],decreasing=TRUE))
+my_mMDSC_like <- MDSC_filter %>% dfilter(Gene %in% rownames(my_mMDSC_cor)[1:100]) %>% arrange(match(Gene,rownames(my_mMDSC_cor)[1:100])) %>% dfilter(PMN.MDSC1 >= 0.1 | PMN.MDSC2 >= 0.1) 
+rbind()
+#my_mMDSC_like <- rbind(my_mMDSC_like,c("Model_MDSC","Model_MDSC",as.numeric(my_mMDSC)))
+write.table(my_mMDSC_like, file= "my_mMDSC_like_genesB.cdt", row.names= FALSE, sep="\t")
+write.table(my_mMDSC_like, file= "my_mMDSC_like_genesB.txt", row.names= FALSE, sep="\t")
+
+my_gMDSC_cor <- data.frame(sort(my_gMDSC_cor[,1],decreasing=TRUE))
+my_gMDSC_like <- MDSC_filter %>% dfilter(Gene %in% rownames(my_gMDSC_cor)[1:100]) %>% arrange(match(Gene,rownames(my_gMDSC_cor)[1:100]))  %>% dfilter(PMN.MDSC1 >= 0.1 | PMN.MDSC2 >= 0.1) 
+my_gMDSC_like <- rbind(my_gMDSC_like,c("Model_MDSC","Model_MDSC",my_gMDSC))
+write.table(my_gMDSC_like, file= "my_gMDSC_like_genesB.cdt", row.names= FALSE, sep="\t")
+my_gMDSC_like
+```
+
+CCLE data
+
+Consolidate 1076 cells lines by tissue into 17 tissue groups, putting reproductive, GI, and nervous system cells together
+
+```{r}
+CCLE <- read.table("CCLE_DepMap_18Q2_RNAseq_RPKM_20180502.txt", sep="\t", header=TRUE)
+colnames(CCLE)
+Ensembl <- CCLE[,"Name"]
+ENSG_Gene <- read.table("Ensembl2Gene.txt", sep="\t", header=TRUE)
+head(ENSG_Gene)
+Ensembl <- data.frame(substring(Ensembl,1,15))
+colnames(Ensembl) <- "Name"
+tl <- left_join(data.frame(Ensembl),data.frame(ENSG_Gene), by=c("Name"="Gene.stable.ID"))
+new_name <- tl$Gene.name # these are the gene names
+CCLEdf <- data.frame(CCLE)
+CCLEdf %<>% dplyr::select(-Name) %>% mutate(Gene = new_name) 
+
+CCLE_unique <- CCLEdf[!duplicated(CCLEdf$Gene),]
+CCLE_unique  %<>% dplyr::filter(!is.na(Gene)) %>% tibble::column_to_rownames("Gene")
+CCLE_t <- t(CCLE_unique)
+CCLE_t[1:25,1:5]
+#Make the rowname cell types a column to manipulate
+CCLE_t <- data.frame(CCLE_t)
+CCLE_t %<>% tibble::rownames_to_column("cell")
+
+CCLE_t %<>% mutate(
+  Tissue = case_when(
+    cell %like% "STOMACH"~ "GI",
+    cell %like% "URINARY"~ "URINARY",
+    cell %like% "HAEMATOPOIETIC"~ "HAEMATOPOIETIC",
+    cell %like% "KIDNEY"~ "KIDNEY",
+    cell %like% "THYROID"~ "THYROID",
+    cell %like% "SKIN"~ "SKIN",
+    cell %like% "NERVOUS"~ "NERVOUS_SYSTEM",
+    cell %like% "OVARY"~ "REPRODUCTIVE",
+    cell %like% "LUNG"~ "LUNG",
+    cell %like% "PLEURA"~ "PLEURA",
+    cell %like% "STOMACH"~ "GI",
+    cell %like% "DIGESTIVE"~ "GI",
+    cell %like% "BREAST"~ "BREAST",
+    cell %like% "INTESTINE"~ "GI",
+    cell %like% "BONE"~ "BONE",
+    cell %like% "PANCREAS"~ "PANCREAS",
+    cell %like% "GANGLIA"~ "NERVOUS_SYSTEM",
+    cell %like% "ENDOMETRIUM"~ "REPRODUCTIVE",
+    cell %like% "FIBROBLAST"~ "FIBROBLAST",
+    cell %like% "OESOPHAGUS"~ "GI",
+    cell %like% "SOFT_TISSUE"~ "SOFT_TISSUE",
+    cell %like% "LIVER"~ "LIVER",
+    cell %like% "BILIARY"~ "LIVER",
+    cell %like% "PROSTATE"~ "PROSTATE",
+    cell %like% "SALIVARY"~ "GI",
+    cell %like% "CERVIX"~ "REPRODUCTIVE"
+  )
+)
+
+CCLE_t %<>% dplyr::select(cell, Tissue, everything())
+CCLE_group <- CCLE_t %>% dplyr::select(-cell) %>% group_by(Tissue) %>% summarize_all(median)
+save(CCLE_t,"CCLE_t.rdata")
+load("CCLE_t.rdata")
+save(CCLE_group,file="CCLE_grouped.rdata")
+load("CCLE_grouped.rdata")
+#CCLE_t %>% dfilter(is.na(Tissue))
+#head(CCLE_t)
+CCLE_tissue <- t(CCLE_group %>% dselect(-Tissue))
+colnames(CCLE_tissue) <- CCLE_group$Tissue
+head(CCLE_tissue)
+genes_CCLE <- rownames(CCLE_tissue)
+boxplot(CCLE_tissue)
+
+CCLE_tissue_norm <- normalizeBetweenArrays(CCLE_tissue)
+boxplot(CCLE_tissue_norm)
+
+mx_zscore <- function(x) {result <- (x-mean(x,na.rm=TRUE)) / sd(x,na.rm=TRUE) 
+                          return(result)}
+CCLE_zscore <- data.frame(CCLE_tissue_norm) %>% mutate_all(mx_zscore)
+CCLE_zscore %<>% mutate(Gene= genes_CCLE) %>% dselect(Gene,everything())
+save(CCLE_zscore, file="CCLE_zscore.rdata")
+load("CCLE_zscore.rdata")
+boxplot(CCLE_tissue_norm)
+boxplot(CCLE_zscore)
+hist(CCLE_zscore$BONE)
+
+```
+
+Merge Matrix of selected MDSC markers with CCLE data
+
+```{r}
+gMDSC_sig <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "DEFA1", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C", "LTF", "F13A1", "PPBP", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "CD24", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1")
+# 42
+
+mMDSC_sig <- c("CSF3R", "SLC6A6", "TREM1", "CLEC4E", "PLBD1")
+
+gMDSC_imm$Gene == sort(gMDSC_sig)
+
+
+gMDSC_imm <- MDSC_filter %>% dfilter(Gene %in% gMDSC_sig) #42
+gMDSC_imm_CCLE <- left_join(gMDSC_imm, CCLE_zscore, by=c("Gene"))
+write.table(gMDSC_imm_CCLE, file= "gMDSC_imm_CCLE.cdt", row.names= FALSE, sep="\t")
+
+mMDSC_imm <- MDSC_filter %>% dfilter(Gene %in% mMDSC_sig)
+mMDSC_imm_CCLE <- left_join(mMDSC_imm, CCLE_zscore, by=c("Gene"))
+write.table(mMDSC_imm_CCLE, file= "mMDSC_imm_CCLE.cdt", row.names= FALSE, sep="\t")
+```
+
+UMAP
+```{r fig.height=10, fig.width=10}
+library(umap)
+??umap
+MDSC_filter
+MDSC_UMAP <- MDSC_filter %>% dselect(-Gene, -Gene2)
+MDSC_UMAP_Genes <- MDSC_filter$Gene
+#MDSC_UMAP_Genes <- as.list(MDSC_UMAP_Genes)
+MDSC_umap <- umap(MDSC_UMAP)
+save(MDSC_umap, file="MDSC_UMAP.rdata")
+head(MDSC_umap$layout)
+my_MDSC_umap_all <- data.frame(MDSC_umap$layout)
+rownames(my_MDSC_umap_all) <- MDSC_UMAP_Genes
+my_MDSC_umap_all["DEFA1",] #-2.408303  3.504352
+
+gMDSC_umap <- my_MDSC_umap_all %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% gMDSC_sig) %>% tibble::column_to_rownames("Gene")
+mMDSC_umap <- my_MDSC_umap_all %>% tibble::rownames_to_column("Gene") %>% dfilter(Gene %in% mMDSC_sig) %>% tibble::column_to_rownames("Gene")
+
+dim(my_umap) #17918 2
+length(gMDSC_UMAP_Genes)
+??graphics::plot
+
+plot.default(my_MDSC_umap_all,cex= 0.5,pch=20) + #pch are shapes represented by number
+points(gMDSC_umap, col="red", pch=20) +
+points(mMDSC_umap, col="orange", pch=20) +
+points(my_MDSC_umap_all["DEFA1",], col="green", pch=15)
+
+
+```
+Find the genes in the area around DEFA1
+```{r fig.height=10, fig.width=10}
+points(my_MDSC_umap_all["DEFA1",], col="green", pch=15)
+#-2.408303  3.504352
+my_MDSC_umap_all <- data.frame(my_MDSC_umap_all)
+DEFA1_umap_area <- my_MDSC_umap_all %>% tibble::rownames_to_column("Gene") %>% dfilter(X1 > -9, X1 < -4.5, X2 <= 3.2, X2 >=2.9) %>% tibble::column_to_rownames("Gene")
+DEFA1_umap_area <- as.matrix(DEFA1_umap_area)
+dim(DEFA1_umap_area) #54
+plot.default(my_MDSC_umap_all,cex= 0.5,pch=20) + #pch are shapes represented by number
+points(gMDSC_umap, col="red", pch=20) +
+points(mMDSC_umap, col="orange", pch=20) +
+points(DEFA1_umap_area, col="blue", pch=20) +
+points(my_MDSC_umap_all["DEFA1",], col="green", pch=15) 
+
+DEFA_like_umap <- rownames(DEFA1_umap_area)
+```
+
+Look at the genes close to DEFA1 on the UMAP by heatmap
+```{r}
+write.table(MDSC_filter %>% dfilter(Gene %in% DEFA_like_umap), file="gMDSC_marker_like_UMAP.cdt", sep="\t", row.names= FALSE)
+
+```
+
+Check expression in ImmProt
+gather() requires tidyverse loaded
+```{r fig.height=6, fig.width=20}
+immprot <- read.delim("/Volumes/Enterprise/FLX/Reference tables/ImmProt_Table S1.txt", sep="\t", header=TRUE, fill=TRUE)
+imm_protein <- immprot %>% dselect(Gene.names, contains("Intensity"), -contains("LFQ")) #176 cols
+colnames(immprot)
+
+protimm <- read.delim("D:/FLX/Reference tables/ImmProt_TableS6.txt", sep="\t", header=TRUE, fill=TRUE)
+protimm %<>% dselect(-Majority.protein.IDs) #176 cols
+
+#heatmaps
+my_log <- function(x) {log10(x+0.00001)}
+my_log(0)
+
+protimm %>% dfilter(Gene.names %in% "NLRP3") %>% mutate_if(is.numeric, my_log) %>% mutate(Gene2=Gene.names) %>% dselect(Gene.names, Gene2, everything()) %>% write.table(sep="\t", file="gMDSC_immProt_log_NLRP3.cdt", row.names=FALSE)
+protimm %>% dfilter(Gene.names %in% mMDSC_sig) %>% mutate_if(is.numeric, my_log) %>% mutate(Gene2=Gene.names) %>% dselect(Gene.names, Gene2, everything()) %>% write.table(sep="\t", file="mMDSC_immProt_log.cdt", row.names=FALSE)
+
+protimm %>% dfilter(Gene.names %in% mMDSC_sig) %>% gather('celltype','Protein_level' ,-Gene.names) %>% mutate(cell=sub("^CopyNumber_","", celltype), cell=sub("_steady.state","_s", cell), cell=sub("_activated","_a",cell)) %>% dselect(-celltype) %>% mutate_if(is.numeric, my_log) %>% ggplot(aes(x=cell, y=Protein_level)) + geom_bar(stat = "identity") + facet_wrap(~Gene.names, scales="free", ncol=5) +theme(panel.grid.major = element_line(colour = "grey", size = 0.2),axis.text.y = element_text(size=16),axis.text.x = element_text(angle=45,size=20), strip.text.x=element_text(size=20),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) + coord_flip() +ylim(0,6) +
+ggsave("mMDSC_sig_immProt.jpg", width=30, height=30, dpi=600, plot= last_plot(), units = "in")
+
+protimm %>% dfilter(Gene.names %in% "NLRP3") %>% gather('celltype','Protein_level',-Gene.names) %>% mutate(cell=sub("^CopyNumber_","", celltype), cell=sub("_steady.state","_s", cell), cell=sub("_activated","_a",cell)) %>% dselect(-celltype) %>% mutate_if(is.numeric, my_log) %>% ggplot(aes(x=cell, y=Protein_level)) + geom_bar(stat = "identity") + facet_wrap(~Gene.names, scales="free", ncol=5) +theme(panel.grid.major = element_line(colour = "grey", size = 0.2),axis.text.y = element_text(size=8),axis.text.x = element_text(size=8, angle=90), strip.text.x=element_text(size=16),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) + ylim(0,6) +
+ggsave("Protimm_NLRP3.jpg", width=20, height=6, dpi=600, plot= last_plot(), units = "in")
+
+imm_protein %>% dfilter(Gene.names %in% "NLRP3") %>% gather('celltype','Protein_level' ,-Gene.names) %>% mutate(cell=sub("^Intensity_","", celltype)) %>% dselect(-celltype) %>% ggplot(aes(x=cell, y=Protein_level)) + geom_bar(stat = "identity") + facet_wrap(~Gene.names, scales="free", ncol=6) +theme(panel.grid.major = element_line(colour = "grey", size = 0.2),axis.text.y = element_text(size=10), axis.text.x = element_text(angle=45,size=24,just=1), strip.text.x=element_text(size=24),legend.position = "none",plot.margin = unit(c(1,1,1,1), "cm")) + coord_flip() 
+```
+
+Check intersect of my signatures with other MDSC signatures
+xcell_NK sig is BLUEPRINT2 version
+
+```{r}
+
+load("D:/FLX/Reference\ tables/mouse_human_gene.rdata")
+mouseAnnot %>% dfilter(GENE.SYMBOL %in% ISR_sig_m) %>% dselect(HumanName) %>% .[,1]
+sMDSC_sig <- c("DEFA1", "DEFA3", "LTF", "DEFA1B", "MMP8", "OLFM4", "DEFA4", "CEACAM8", "ABCA13", "CRISP3", "ELANE", "CAMP", "CTSG", "PGLYRP1", "RNASE3", "HP", "MPO", "BPI", "MS4A3", "RNASE2", "RETN", "F13A1", "PPBP", "GP9", "TUBB1", "CMTM2", "PROK2", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "S100A12", "CR1")
+
+
+gMDSC_sig <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "DEFA1", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C", "LTF", "F13A1", "PPBP", "VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "CD24", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1")
+
+gMDSC_sig_n <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C","F13A1","VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1") # removed DEFA1, LTF, BBPB, CD24
+
+mMDSC_sig <- c("CSF3R", "SLC6A6", "TREM1", "CLEC4E", "PLBD1")
+
+xcell_NK_sig <- c("FASLG", "CX3CR1", "GZMB", "GZMM", "IL2RB", "KLRD1", "KPNB1", "MED1", "PRF1", "MAPK1", "PTGDR", "PTPN4", "BRD2", "XCL1", "MAP3K7", "TKTL1", "TNFSF11", "IL18RAP", "ZNF264", "NCR1", "STX8", "PJA2", "HELZ", "GNLY", "STAG2", "ZMYND11", "ZBTB1", "SACM1L", "TBX21", "RAB14", "CD244", "AGK", "DNAJB14", "FIP1L1", "ARPC5L", "HIPK1")
+
+aas_sig <- c("CLIC4","YARS","SARS","PHGDH","C6orf48","GARS","ASNS","SAT1","SLC3A2","DDIT3","WARS","CHAC1","HERPUD1","PYCR1","TRIB3","CEBPB","PPP1R15A","ATF4")
+
+inflammasome_sig <- c("Il1B","IL33") #,"IL37","IL36","IL38"
+
+Hotness_sig <- c("CD8A","GZMB","IFNG","PRF1")
+
+Merck18 <- c("CCL5","CD27","CD274","CD276","CD8A","CMKLR1","CXCL9","CXCR6","HLA-DQA1","HLA-DRB1","HLA-E","IDO1","LAG3","NKG7","PDCD1LG2","PSMB10","STAT1","TIGIT")
+
+Common <- c("DDIT3","TRIB3","PPP1R15A","ASNS")
+GCN2 <- c("HSPA5","SLC3A2","HSPA13","DCT")
+PKR <- c("IFIT1","ISG15","USP18")
+#PERK <- c("P4hb", "Xbp1")
+PERK_try <- c("ATF3","TNFRSF12A") #"Try10","Prss2","Sycn","Ccl27b","Timm9","Foxf1","Ccl27a",
+#HRI <- c("Adm2","Slc7a11","Grb10","Nupr1","Soat2","Lrrc1","Glipr2","Arl14ep","Pycr1")
+HRI_sub <-c("SLC7A11","SOAT2","ARL14EP","PYCR1") 
+
+ISR_sig_m <- c(Common,GCN2,PKR,PERK_try,HRI_sub)
+
+combo_sig <- unique(c(gMDSC_sig,mMDSC_sig,xcell_NK_sig,aas_sig,Hotness_sig))
+
+MDSC_aa_sig <- unique(c(gMDSC_sig,mMDSC_sig,aas_sig))
+
+
+intersect(gMDSC_sig,aas_sig) #none
+intersect(MDSC_signature,gMDSC_sig)
+intersect(MDSC_signature,mMDSC_sig)
+intersect(gMDSC_sig,mMDSC_sig)
+MDsig <- cbind(data.frame(MDSC_signature),data.frame(gMDSC_sig),data.frame(mMDSC_sig))
+
+left_join(data.frame(MDSC_signature),data.frame(gMDSC_sig), by=c("MDSC_signature","gMDSC_sig"))
+
+vennDiagram(MDSC_signature, gMDSC_sig, mMDSC_sig)
+
+```
+
+
+
+
+Updated Signatures Jan 2020
+GCN2, PERK, HRI signatures are from in-house MEF experiments
+gMDSC signature is updated: removed Neutrophil markers 
+
+```{r}
+#GCN2_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_Seq/GCN2_markers20.txt", header=TRUE, sep="\t") %>% .[,1]
+#PERK_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/PERK_signature22.txt", header=TRUE, sep="\t") %>% .[,1]
+#HRI_pathway <- read.table(file="/Volumes/Enterprise/FLX/GCN2/ISR_data/RNA_seq/HRI_markers.txt", header=TRUE, sep="\t") %>% .[,1]
+
+gMDSC_sig_n <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C","F13A1","VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1") # removed DEFA1, LTF, BBPB, CD24
+mMDSC_sig <- c("CSF3R", "SLC6A6", "TREM1", "CLEC4E", "PLBD1")
+
+GCN2_m <-c( "Cep85l","Txnrd1","Angptl4","Antxr2","Tcim", "Ptgs1", "Bdkrb2", "Prune2","Rbpj","Wdr45","Znrf2","Cnnm4","Grem1","Tnfaip2","Gpr137b-ps", "Car8", "Wipi2","Tmem171","Ndst3","Foxl1")
+PERK_m <- c("Mrgprf","Lzts1","Wnt1","Ptpn5","Gem","Slc2a6","Snx32","Gm11331","Prob1","Ccl7","Dbhos","Mir99ahg","Trpm6","N4bp2os","Glis1","Mmp19","Lrrc73","Cd74","Pkdcc","Osr2")
+
+
+load("/Volumes/Enterprise/FLX/Silpa_data/mouseAnnot.rdata")
+load("D:/FLX/Silpa_data/mouseAnnot.rdata")
+ISR_h <- c("DDIT3","TRIB3","PPP1R15A","ASNS","ATF4")
+HRI_h <- c("ATF5","GLIPR2","GRB10","LRRC1","SLC7A11")
+
+PERK_h <- mouseAnnot %>% dfilter(GENE.SYMBOL %in% PERK_m) %>% pull(HumanName)
+PERK_h <- PERK_h[,1]
+save(PERK_h, file="/Volumes/Picard/FLX/Reference_tables/PERK_human_sig.rdata")
+HRI_h <- c("ATF5","GLIPR2","GRB10","LRRC1","SLC7A11")
+GCN2_h <- mouseAnnot %>% dfilter(GENE.SYMBOL %in% GCN2_m) %>% pull(HumanName)
+GCN2_h <- c(GCN2_h[,1],"TCIM")
+save(GCN2_h,file="/Volumes/Picard/FLX/Reference_tables/GCN2_human_sig.rdata")
+```
+
+
+Load TCGA (and other) data
+17921 samples
+Log2 of TPMs, not zero-centered
+GSE102349: Nasopharyngial
+GSE68799: Chinese Nasopharyngial
+ICGC: International Cancer Genome Consortium
+
+    GSE102349      GSE68799          ICGC        TARGET          TCGA TreeHouseUCSC 
+           34            45           602           614         10534           640 
+           
+        Cancer     Metastatic Normal/Control      Recurrent 
+         11162            396            751            160 
+```{r fig.height=5, fig.width=5}
+load("/Volumes/Picard/FLX/TCGA/allMergedData.quantileNorm.rdata")
+load("D:/FLX/TCGA/allMergedData.quantileNorm.rdata")
+load("/Volumes/Picard/FLX/TCGA/allMergedData.SampleInfo.rdata")
+load("D:/FLX/TCGA/allMergedData.SampleInfo.rdata")
+allMergedData.SampleInfo$DzNormal %>% table
+allMergedData.SampleInfo$Dataset %>% table
+cancer_t <- allMergedData.SampleInfo %>% dselect(Sample,DzNormal,PrimaryDisease,Dataset,TumorAbr)
+boxplot(allMergedData.quantileNorm[,2:190])
+allMergedData.quantileNorm[1:10,1:10]
+
+allMergedData.quantileNorm %>% dfilter(Gene %in% c("RHOQ","MYRIP","EXOSC8","MUS81")) %>% gather(Sample,Expression, -Gene) %>% ggplot(aes(x=Gene,y=Expression)) + geom_point()
+#geom_beeswarm()
+#library(ggbeeswarm)
+```
+Calculate Z-scores
+
+ I used to take the z-score across samples: which is like formalizing between experiments
+ I should be taking z-scores across genes, which makes the weight of each marker equivalent regardless of its mRNA abundance
+ 
+ !!!! The TCGA names in Cancers_gene_score colnames contain only . and not -. This is due to two tranposes. For later left_join with cancer_t, have to reconcile the differences
+ %>% mutate(Cell= sub("\\.","-",Cell)) 
+```{r}
+mx_zscore <- function(x) {(x-mean(x,na.rm=TRUE)) / sd(x,na.rm=TRUE)}
+Cancers_zscore <- allMergedData.quantileNorm %>% mutate_if(is.numeric,mx_zscore2)
+Cancers_gene_zscore <- allMergedData.quantileNorm %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2) %>% tibble::column_to_rownames("Sample") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene")
+
+Cancers_gene_zscore %>% dselect(contains("TCGA"))
+cancer_t %>% dfilter(grepl("TCGA",Sample))
+#Cancers_zscore1 <- allMergedData.quantileNorm %>% mutate_if(is.numeric,mx_zscore)
+save(Cancers_zscore,file="allMergedData.quantileNormZscore2.rdata")
+save(Cancers_gene_zscore,file="allMergedData.quantile.gene.NormZscore2.rdata")
+load("allMergedData.quantileNormZscore.rdata")
+boxplot(Cancers_zscore[,2:190])
+boxplot(Cancers_zscore1[,2:190])
+```
+
+
+Calculate gMDSC and mMDSC and sMDSC (Silpa's MDSC) scores for all TCGA samples
+Calculate MDSC scores
+Calculate xcell NK cell score
+Calculate Silpa's common 18 gene a.a. starvation score (intersect of Tang et al, and in-house Trp and Arg starvation data in cell lines)
+
+
+```{r fig.height=5, fig.width=7}
+
+gMDSC_sig_score <- Cancers_zscore %>% dfilter(Gene %in% gMDSC_sig_n) %>% summarize_if(is.numeric,sum)
+mMDSC_sig_score <- Cancers_zscore %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,sum)
+#sMDSC_sig_score <- Cancers_zscore %>% dfilter(Gene %in% sMDSC_sig) %>% summarize_if(is.numeric,sum)
+xcell_NK_sig_score <- Cancers_zscore %>% dfilter(Gene %in% xcell_NK_sig) %>% summarize_if(is.numeric,sum)
+Inflammasome_score <- Cancers_zscore %>% dfilter(Gene %in% inflammasome_sig) %>% summarize_if(is.numeric,sum)
+AAS_score <- Cancers_zscore %>% dfilter(Gene %in% aas_sig) %>% summarize_if(is.numeric,sum)
+Hotness_score <- Cancers_zscore %>% dfilter(Gene %in% Hotness_sig) %>% summarize_if(is.numeric,sum)
+Merck18_score <- Cancers_zscore %>% dfilter(Gene %in% Merck18) %>% summarize_if(is.numeric,sum)
+GCN2_score <-  Cancers_zscore %>% dfilter(Gene %in% GCN2_h) %>% summarize_if(is.numeric,sum)
+PERK_score <-  Cancers_zscore %>% dfilter(Gene %in% PERK_h) %>% summarize_if(is.numeric,sum)
+HRI_score <-  Cancers_zscore %>% dfilter(Gene %in% HRI_h) %>% summarize_if(is.numeric,sum)
+Arg_sig_score <- Cancers_zscore %>% dfilter(Gene %in% Arg_sig_u) %>% summarize_if(is.numeric,sum)
+hypoxia_sig_score <- Cancers_zscore %>% dfilter(Gene %in% hypoxia) %>% summarize_if(is.numeric,sum)
+pyruvate_sig_score <- Cancers_zscore %>% dfilter(Gene %in% pyruvate_meta) %>% summarize_if(is.numeric,sum) 
+
+gMDSC_sig_score2 <- Cancers_gene_zscore %>% dfilter(Gene %in% gMDSC_sig_n) %>% summarize_if(is.numeric,sum)
+mMDSC_sig_score2 <- Cancers_gene_zscore %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,sum)
+TWIK2_zscore <- Cancers_gene_zscore %>% dfilter(Gene =="KCNK6") %>% summarize_if(is.numeric,sum)
+#CD8A <- Cancers_zscore %>% dfilter(Gene == "CD8A") %>% summarize_if(is.numeric,sum)
+#NLRP3 <- Cancers_zscore %>% dfilter(Gene == "NLRP3") %>% summarize_if(is.numeric,sum)
+#ARG1 <- Cancers_zscore %>% dfilter(Gene == "ARG1") %>% summarize_if(is.numeric,sum)
+#PPBP <- Cancers_zscore %>% dfilter(Gene == "PPBP") %>% summarize_if(is.numeric,sum)
+#GAPDH <- Cancers_zscore %>% dfilter(Gene == "GAPDH") %>% summarize_if(is.numeric,sum)
+#IL1B <- Cancers_zscore %>% dfilter(Gene =="IL1B") %>% summarize_if(is.numeric,sum)
+#IL33 <- Cancers_zscore %>% dfilter(Gene =="IL33") %>% summarize_if(is.numeric,sum)
+
+#this is a set of old signatures bound together
+save(MDSC_score, file="MDSC_scores_Cancers.rdata")
+load("MDSC_scores_Cancers.rdata")
+
+# Feb 2020 update with hypoxia and pyruvate metabolism scores
+Signature_zscores <- rbind(hypoxia_sig_score,GCN2_score,PERK_score,HRI_score,gMDSC_sig_score,mMDSC_sig_score,xcell_NK_sig_score,Hotness_score,Merck18_score,Arg_sig_score,AAS_score,Inflammasome_score,pyruvate_sig_score)
+rownames(Signature_zscores) <- c("Hypoxia","GCN2","PERK","HRI","gMDSC","mMDSC","NK","Hotness","Merck18","ARG_AAS","AAS","Inflammasome","Pyruvate_metabolism")
+save(Signature_zscores,file="Signature_zscores_Feb2020.rdata")
+load("Signature_zscores_Feb2020.rdata")
+
+#New signatures have gMDSC score updated to exclude neutrophil markers, updated GCN2, PERK, and HRI signatures
+Signature_zscores_Jan2020 <- rbind(GCN2_score,PERK_score,HRI_score,gMDSC_sig_score,mMDSC_sig_score,xcell_NK_sig_score,Hotness_score,Merck18_score,Arg_sig_score,AAS_score,Inflammasome_score)
+rownames(Signature_zscores_Jan2020) <- c("GCN2","PERK","HRI","gMDSC","mMDSC","NK","Hotness","Merck18","ARG_AAS","AAS","Inflammasome")
+save(Signature_zscores_Jan2020,file="Signature_zscores_Jan2020.rdata")
+load("Signature_zscores_Jan2020.rdata")
+## THESE CORRELATIONS INCLUDE THE BLOOD CANCERS: THE CORRELATIONS INCREASE A LOT WHEN BLOOD CANCERS ARE EXCLUDED, SEE THE PLOTS
+Sig_t <- Signature_zscores_Jan2020 %>% t 
+stats::cor(Sig_t[,"gMDSC"], Sig_t[,"GCN2"], method=c("pearson")) #0.26
+stats::cor(Sig_t[,"mMDSC"], Sig_t[,"GCN2"], method=c("pearson")) #0.27
+stats::cor(Sig_t[,"GCN2"], Sig_t[,"GCN2"], method=c("pearson")) # 1
+stats::cor(Sig_t[,"ARG_AAS"], Sig_t[,"GCN2"], method=c("pearson")) #0.54
+#Compare gMDSC signature scores to sMDSC scores for all Tumor-Norm samples. 
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=gMDSC_sig_score,y=sMDSC_sig_score, colour = DzNormal)) + geom_point(size=0.5) +
+ggsave("Tumor_gMDSC_vs_sMDSC.jpg", width=9, height=8, dpi=600, plot= last_plot(), units = "in")
+
+
+stats::cor(MDSC_score_t[,"gMDSC_sig_score"], MDSC_score_t[,"NLRP3"], method=c("pearson")) #0.40
+stats::cor(MDSC_score_t[,"gMDSC_sig_score"], MDSC_score_t[,"CD8A"], method=c("pearson")) #0.35
+stats::cor(MDSC_score_t[,"gMDSC_sig_score"], MDSC_score_t[,"PPBP"], method=c("pearson")) #0.5
+stats::cor(MDSC_score_t[,"gMDSC_sig_score"], MDSC_score_t[,"GAPDH"], method=c("pearson")) #-0.0
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% gather(Score, -DzNormal, -TumorAbr) %>% ggplot(aes(x=DzNormal,y=Score)) + geom_point()
+
+MDSC_transpose <- as.matrix(MDSC_score %>% t)
+stats::cor(MDSC_transpose[,"gMDSC_sig_score"], MDSC_transpose[,"mMDSC_sig_score"], method=c("pearson")) #0.78
+stats::cor(MDSC_transpose[,"gMDSC_sig_score"], MDSC_transpose[,"sMDSC_sig_score"], method=c("pearson")) #0.81
+stats::cor(MDSC_transpose[,"mMDSC_sig_score"], MDSC_transpose[,"sMDSC_sig_score"], method=c("pearson")) #0.62
+MDSC_t$gMDSC_sig_score
+
+
+```
+
+Plot ISR
+```{r fig.height=4, fig.width=5}
+Common_score <- Cancers_zscore %>% dfilter(Gene %in% Common) %>% summarize_if(is.numeric,sum)
+#GCN2_score <- Cancers_zscore %>% dfilter(Gene %in% GCN2) %>% summarize_if(is.numeric,sum)
+HRI_score <- Cancers_zscore %>% dfilter(Gene %in% HRI_sub) %>% summarize_if(is.numeric,sum)
+PERK_score <- Cancers_zscore %>% dfilter(Gene %in% PERK_try) %>% summarize_if(is.numeric,sum)
+PKR_score <- Cancers_zscore %>% dfilter(Gene %in% PKR) %>% summarize_if(is.numeric,sum)
+#Combo_Score <- Patient_score
+
+Patient_score <- rbind(gMDSC_sig_score,mMDSC_sig_score,xcell_NK_sig_score,Inflammasome_score,AAS_score,Hotness_score,Merck18_score,Common_score,HRI_score,PERK_score,PKR_score)
+rownames(Patient_score) <- c("gMDSC","mMDSC","NK","Inflammasome","AAS","Hotness","Merck18","Common_ISR","HRI_s","PERK_s","PKR_s")
+Patient_score_t <- Patient_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")
+Patient_score %>% dselect('TCGA-2J-AAB9-01')
+
+Patient_ISR <- Patient_score_t %>% mutate(PKRi= ifelse(PKR_s<0,0,PKR_s), PERKi=ifelse(PERK_s <0,0,PERK_s), HRIi=ifelse(HRI_s<0,0,HRI_s)) %>% mutate(GCN2_specific_s = Common_ISR - PKRi - PERKi - HRIi) %>% dselect(-PKRi,-PERKi,-HRIi)
+## Take the Z-score across columns before adding the scores because some signature scores have higher numbers than others
+Combo_score <- Patient_ISR %>% mutate_if(is.numeric,mx_zscore2) %>% mutate(Combo_zscore= gMDSC * Merck18 * AAS * GCN2_specific)
+
+save(Patient_ISR,file="Patient_ISR_signature_Scores_Cancers.rdata")
+save(Patient_score,file="Patient_score_signature_Scores_Cancers.rdata")
+load("Patient_ISR_signature_Scores_Cancers.rdata")
+save(Combo_score,file="Score_signature_Scores_Cancers.rdata")
+
+Patient_ISR  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=gMDSC,y=GCN2_specific, colour = DzNormal)) + geom_point(size=0.5) 
+ggsave("Tumor_gMDSC_vs_sMDSC.jpg", width=9, height=8, dpi=600, plot= last_plot(), units = "in")
+
+Patient_ISR %>% ggplot(aes(x=GCN2_s,y=GCN2_specific)) + geom_point(size=0.5,alpha=0.5)
+Patient_ISR %>% ggplot(aes(x=Common_ISR,y=GCN2_specific)) + geom_point(size=0.5,alpha=0.5)
+Patient_ISR %>% ggplot(aes(x=AAS,y=GCN2_specific)) + geom_point(size=0.5,alpha=0.5)
+Patient_ISR %>% ggplot(aes(x=AAS,y=Common_ISR)) + geom_point(size=0.5,alpha=0.5)
+Patient_ISR %>% ggplot(aes(x=Merck18,y=Hotness)) + geom_point(size=0.5,alpha=0.5)
+```
+
+
+
+Find the correlations between immune metrics
+Correlate between individual samples
+TAKE OUT THE BLOOD CANCERS FIRST, THEY WILL SKEW ALL CORRELATIONS
+```{r fig.height=8, fig.width=8}
+Sig_zscores_noBlood <- Signature_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG")
+
+Sig_zscores_noBlood <- Patient_ISR %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG")
+library(reshape)
+corr_sig <- round(cor(Sig_zscores_noBlood %>% tibble::column_to_rownames("Sample") %>% dselect(Hypoxia,GCN2,PERK,HRI,gMDSC,mMDSC,NK,Hotness,Merck18,ARG_AAS,AAS,Inflammasome,Pyruvate_metabolism,-DzNormal,-TumorAbr)),2)
+corr_sig <- get_upper_tri(corr_sig)
+melt_corr_sig <- melt(corr_sig)
+head(melt_corr_sig)
+
+# Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+
+melt_corr_sig %>%  mutate(X1= factor(X1,levels=colnames(corr_sig)),X2= factor(X2,levels=colnames(corr_sig))) %>% ggplot(aes(x=X1, y=X2, fill=value, label=value)) + geom_tile(color = "white")+
+    geom_text(aes(X1, X2, label = value), color = "grey30", size = 3) +
+ scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(0,0.9),oob=squish, space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+    scale_x_discrete(position = "top") +
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 0))+
+ coord_fixed() +
+ggsave("GCN2_MDSC_AAS_hypoxia_heatmap_Feb2020.jpg", width=8, height=8, dpi=150, plot= last_plot(), units = "in")  
+```
+
+Plot the different scores as rectangular heatmap
+Equalize the different z-scores within each signature into- z-score of z-scoress so the heatmap scales are the same
+```{r fig.height=3.5, fig.width=12}
+med_sig <- Signature_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% group_by(TumorAbr) %>% summarize_if(is.numeric, median) %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG") %>% mutate_if(is.numeric,mx_zscore2) %>% mutate(TumorAbr= fct_reorder(TumorAbr,Hotness, .fun = median))
+
+library(scales)
+med_sig %>% gather(Signature, Score,-TumorAbr) %>% mutate(Signature=factor(Signature, levels=rev(c("Hotness","Merck18","NK","mMDSC","gMDSC","Hypoxia","GCN2","ARG_AAS","AAS","PERK","HRI","Inflammasome","Pyruvate_metabolism")))) %>% ggplot(aes(y=Signature, x=TumorAbr, fill=Score)) + geom_tile() + scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(-4,4), name="Score",oob=squish) + scale_x_discrete(position = "top") +
+theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 0, size=14),axis.text.y = element_text(size=14)) + ggsave("TCGA_signatures_heatmap_Hotness_hypoxia_order.jpg", width=12, height=3.5, dpi=150, plot= last_plot(), units = "in")
+
+cor(med_sig$GCN2,med_sig$gMDSC) # 0.57
+cor(med_sig$GCN2,med_sig$mMDSC) # 0.51
+cor(med_sig$GCN2,med_sig$AAS) # 0.24
+cor(med_sig$gMDSC,med_sig$mMDSC) # 0.77
+
+
+```
+Correlate the Tumor-level data:
+```{r}
+med_sig_cor <- round(cor(med_sig %>% tibble::column_to_rownames("TumorAbr")),2)
+med_sig_cor <- get_upper_tri(med_sig_cor)
+
+med_sig_cor %>% data.frame %>% tibble::rownames_to_column("Signature") %>% gather(Signatures, Correlation,-Signature) %>% mutate(Signatures=factor(Signatures,levels=c(rownames(med_sig_cor)))) %>% mutate(Signature=factor(Signature,levels=c(rownames(med_sig_cor)))) %>% ggplot(aes(x=Signature, y=Signatures, fill=Correlation)) + geom_tile() +
+    geom_text(aes(x=Signature, y=Signatures, label = Correlation), color = "grey30", size = 3) +
+ scale_fill_gradient2(low = "blue2", high = "red", na.value="white", limit = c(0,0.9),oob=squish, space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+    scale_x_discrete(position = "top") +
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 0))+
+ coord_fixed() +
+ggsave("GCN2_Sig_corr_median_heatmap.jpg", width=6, height=6, dpi=600, plot= last_plot(), units = "in")  
+
+```
+
+UMAP the samples
+
+UMAP on the sample level: excluding blood cancers doesn't do anything --> still looks crazy
+```{r fig.height=4, fig.width=5}
+install.packages("umap")
+library(umap)
+median_imm_umap <- umap(med_sig  %>% dselect(-GCN2_s) %>% tibble::column_to_rownames("TumorAbr") %>% t %>% data.table, n_neighbors=4, metric="manhattan", min_dist=0.1)
+med_sig_names <- colnames(med_sig  %>% dselect(-GCN2_s))[2:13]
+rownames(median_imm_umap$layout) <- med_sig_names
+median_imm_umap$layout %>% data.frame %>% tibble::rownames_to_column("Imm_Sig") %>% ggplot(aes(x=X1, y=X2, colour=Imm_Sig, label=Imm_Sig)) + geom_label(alpha=0.5, show.legend=FALSE,hjust="inward",vjust="inward", size=3) + xlab("UMAP X") + ylab("UMAP Y") +
+ggsave("Median_ImmSig_UMAP_nn4_mindist0.1.jpg", width=4.5, height=4, dpi=600, plot= last_plot(), units = "in")
+
+imm_umap <- umap(Sig_zscores_noBlood %>% dselect(-Sample,-DzNormal,-TumorAbr) %>% t %>% data.frame, n_neighbors=2, metric="manhattan")
+imm_labels <- colnames(Sig_zscores_noBlood)[2:9]
+imm_umap$layout %>% data.frame %>% tibble::rownames_to_column("Imm_Sig") %>% ggplot(aes(x=X1, y=X2, colour=Imm_Sig, label=Imm_Sig)) + geom_label(alpha=0.5, show.legend=FALSE,hjust="inward",vjust="inward") +ggsave("ImmSig_UMAP.jpg", width=5, height=4, dpi=600, plot= last_plot(), units = "in")
+
+
+```
+
+
+Compare sample type MDSC_signal predictions
+```{r}
+library(ggbeeswarm)
+library(cowplot)
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=DzNormal,y=gMDSC_sig_score,fill=DzNormal, colour = DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) +
+ggsave("Tumor_Type_gMDSC.jpg", width=6, height=4, dpi=600, plot= last_plot(), units = "in")
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=DzNormal,y=sMDSC_sig_score,fill=DzNormal, colour = DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) +
+ggsave("Tumor_Type_sMDSC.jpg", width=6, height=4, dpi=600, plot= last_plot(), units = "in")
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=DzNormal,y=mMDSC_sig_score,fill=DzNormal, colour = DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) +
+ggsave("Tumor_Type_mMDSC.jpg", width=6, height=4, dpi=600, plot= last_plot(), units = "in")
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=DzNormal,y=gMDSC_sig_score,fill=DzNormal, line = DzNormal)) + geom_violin() +
+ggsave("Tumor_Type_gMDSC_violin.jpg", width=6, height=4, dpi=600, plot= last_plot(), units = "in")
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=DzNormal,y=sMDSC_sig_score,fill=DzNormal, line = DzNormal)) + geom_violin()  +
+ggsave("Tumor_Type_sMDSC_violin.jpg", width=6, height=4, dpi=600, plot= last_plot(), units = "in")
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=DzNormal,y=mMDSC_sig_score,fill=DzNormal, line = DzNormal)) + geom_violin()  +
+ggsave("Tumor_Type_mMDS_violinC.jpg", width=6, height=4, dpi=600, plot= last_plot(), units = "in")
+
+
+```
+
+Where are the Interleukins?
+```{r}
+Cancers_zscore %>% dfilter(Gene =="IL33") #NULL
+Cancers_zscore %>% dfilter(Gene =="FIL1") #NULL
+Cancers_zscore %>% dfilter(Gene =="IL38") #NULL
+```
+
+
+
+Plot by cancer type
+Grouped scatter
+
+```{r fig.height=8, fig.width=3}
+Signature_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% dfilter() %>% mutate(TumorAbr= fct_reorder(TumorAbr,GCN2, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=GCN2,fill=DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) + coord_flip() +
+theme(axis.title = element_text(size=12), axis.text.y = element_text(size=12), axis.text.x = element_text(angle=0-90,size=12,hjust=0),strip.text.x=element_text(size=12)) + nolegend() + stat_summary(inherit.aes = TRUE,geom="crossbar",fun.y=median, fun.ymax=median, fun.ymin=median,size=0.5,show.legend=FALSE) +
+ggsave("Tumor_GCN2_order_horizontal.jpg", width=4, height=7, dpi=600, plot= last_plot(), units = "in")
+
+Signature_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% dfilter() %>% mutate(TumorAbr= fct_reorder(TumorAbr,Hypoxia, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=Hypoxia,fill=DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) + coord_flip() + theme(axis.title = element_text(size=12), axis.text.y = element_text(size=12), axis.text.x = element_text(angle=0-90,size=12,hjust=0),strip.text.x=element_text(size=12)) + nolegend() + stat_summary(inherit.aes = TRUE,geom="crossbar",fun.y=median, fun.ymax=median, fun.ymin=median,size=0.5,show.legend=FALSE) +
+ggsave("Tumor_Hypoxia_order_horizontal.jpg", width=4, height=7, dpi=600, plot= last_plot(), units = "in")
+
+gMDSC_sig_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(gMDSC_sig_score=.data$.) %>% left_join(cancer_t, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(TumorAbr= fct_reorder(TumorAbr,gMDSC_sig_score, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=gMDSC_sig_score, colour=TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+cancer_t2 <- cancer_t %>% mutate(Sample= gsub("-","\\.",Sample))
+#cancer_t2 %>% dfilter(Dataset=="TCGA")
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% mutate(TumorAbr= fct_reorder(TumorAbr, NLRP3, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=NLRP3,fill=DzNormal, colour = DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) + coord_flip() +
+theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=45,size=14,hjust=1),strip.text.x=element_text(size=16)) +
+ggsave("NLRP3_NLRP3order_Tumor.jpg", width=8, height=12, dpi=600, plot= last_plot(), units = "in")
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% mutate(TumorAbr= fct_reorder(TumorAbr, NLRP3, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=xcell_NK_sig_score,fill=DzNormal, colour = DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) + coord_flip() +
+theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=45,size=14,hjust=1),strip.text.x=element_text(size=16)) +
+ggsave("NK_score_Tumor_NLRP3_order.jpg", width=8, height=12, dpi=600, plot= last_plot(), units = "in")
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=TumorAbr,y=sMDSC_sig_score,fill=DzNormal, colour = DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) + coord_flip() +
+ggsave("sgMDSC_Tumor.jpg", width=8, height=12, dpi=600, plot= last_plot(), units = "in")
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% ggplot(aes(x=TumorAbr,y=mMDSC_sig_score,fill=DzNormal, colour = DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) + coord_flip() +
+ggsave("mMDSC_Tumor.jpg", width=8, height=12, dpi=600, plot= last_plot(), units = "in")
+
+
+Patient_ISR  %>% left_join(cancer_t, by="Sample") %>% mutate(TumorAbr= fct_reorder(TumorAbr,GCN2_specific, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=GCN2_specific,fill=DzNormal, colour = DzNormal)) + geom_point(pch=20,position = position_jitterdodge()) + coord_flip() 
+ggsave("mMDSC_Tumor.jpg", width=8, height=12, dpi=600, plot= last_plot(), units = "in")
+
+Patient_ISR  %>% left_join(cancer_t, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset !="GSE102349", Dataset != "GSE68799", Dataset != "TreeHouseUCSC") %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG") %>% mutate(TumorAbr= fct_reorder(TumorAbr,gMDSC, .fun = median, .desc = TRUE)) %>% 
+  ggplot(aes(x=TumorAbr,y=gMDSC, colour = TumorAbr)) + 
+  geom_boxplot(outlier.colour=NA, fill=NA) + # ,show.legend=FALSE
+  geom_jitter(width=0.2, size=1.5, pch=21,show.legend=FALSE,alpha=0.5, fill=NA) + 
+  stat_summary(inherit.aes = TRUE,geom="crossbar",fun.y=median, fun.ymax=median, fun.ymin=median,size=0.5,show.legend=FALSE) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle=45,size=14,hjust=1),axis.text.y = element_text(size=14), axis.title= element_text(size=14)) +
+  nolegend() +
+  ggsave("gMDSC__TCGA_Tumor.jpg", width=12, height=4, dpi=300, plot= last_plot(), units = "in")
+
+Combo_score %>% left_join(cancer_t, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset !="GSE102349", Dataset != "GSE68799", Dataset != "TreeHouseUCSC") %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG") %>% mutate(TumorAbr= fct_reorder(TumorAbr,Combo_zscore, .fun = median, .desc = TRUE)) %>% 
+  ggplot(aes(x=TumorAbr,y=Combo_zscore, colour = TumorAbr)) + 
+  geom_boxplot(outlier.colour=NA, fill=NA) + # ,show.legend=FALSE
+  geom_jitter(width=0.2, size=1.5, pch=21,show.legend=FALSE,alpha=0.5, fill=NA) + 
+  stat_summary(inherit.aes = TRUE,geom="crossbar",fun.y=median, fun.ymax=median, fun.ymin=median,size=0.5,show.legend=FALSE) + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle=45,size=14,hjust=1),axis.text.y = element_text(size=14), axis.title= element_text(size=14)) +
+  nolegend() +
+  ylab("gMDSC * Merck18 * AAS * GCN2-sp") +
+  ggsave("Combo_zscore_product_TCGA_Tumor.jpg", width=12, height=4, dpi=150, plot= last_plot(), units = "in")
+
+Combo_score <- Patient_ISR %>% mutate_if(is.numeric,mx_zscore2) %>% mutate_if(is.numeric,frac01) %>% mutate(Combo_zscore= (gMDSC * Merck18 * AAS * GCN2_specific))
+frac01 <- function (x) {(x - min(x))/(max(x)-min(x))} # here x refers both to the current variable and the entire column, I don't understand why this works, but it does
+
+#Print cancer table
+cancer_t %>% dselect(TumorAbr,PrimaryDisease,Dataset,DzNormal) %>% unique %>% arrange(PrimaryDisease) %>% write.table(file="Tumor_codes_cancer.txt",sep="\t",row.names=FALSE,quote=FALSE)
+
+```
+Plot
+
+```{r fig.height=7, fig.width=7}
+gMDSC_sig_score2 %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(gMDSC_sig_score=.data$.) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(TumorAbr= fct_reorder(TumorAbr,gMDSC_sig_score, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=gMDSC_sig_score, colour=TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+mMDSC_sig_score2 %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(mMDSC_sig_score=.data$.) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(TumorAbr= fct_reorder(TumorAbr,mMDSC_sig_score, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=mMDSC_sig_score, colour=TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+TWIK2_zscore %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(TWIK2_zscore=.data$.) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA") %>% mutate(TumorAbr= fct_reorder(TumorAbr,TWIK2_zscore, .fun = median)) %>% ggplot(aes(x=TumorAbr,y=TWIK2_zscore, colour=TumorAbr, alpha=0.6)) + geom_jitter(pch=20, size=0.5, width=0.3) + coord_flip() + nolegend()
+
+TWIK2_zscore %>% rbind(mMDSC_sig_score2) %>% rbind(gMDSC_sig_score2) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% rename(TWIK2_zscore=.data$X1,mMDSC_sig_score=.data$X2,gMDSC_sig_score=.data$X3) %>% left_join(cancer_t2, by="Sample") %>% dfilter(DzNormal=="Cancer", Dataset=="TCGA", TumorAbr!="AML") %>% group_by(TumorAbr) %>% summarise_if(is.numeric,mean_mx) %>% ggplot(aes(x=TWIK2_zscore,y=gMDSC_sig_score, colour=TumorAbr, alpha=0.6)) + geom_smooth(method='lm', color="grey50") + geom_label(aes(label=TumorAbr, size=5)) + theme_bw() + nolegend() 
+
+```
+
+
+Plot Median scores for all metrics and plot as scatter
+
+```{r fig.height=10, fig.width=10}
+Signature_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% group_by(TumorAbr) %>% summarize_if(is.numeric, median) %>% ggplot(aes(x=gMDSC,y=Merck18, label=TumorAbr, fill=AAS, alpha= 0.5)) + geom_label(show.legend=TRUE)  +scale_fill_gradient2(low="#0072B2", high="#F0E442",limits=c(14,21),midpoint=17) + geom_abline(slope=0.35, intercept=6, size=0.5) + theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=50,size=14,hjust=1)) + ylim(-2.5,15) + xlim(-25,18) +
+ggsave("gMDSCvsMerckvsAAS.jpg", width=8, height=8, dpi=600, plot= last_plot(), units = "in")
+
+Signature_zscores %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% group_by(TumorAbr) %>% summarize_if(is.numeric, median) %>% dselect(gMDSC_AAS) %>% summary
+
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr!= "ALL/AML")%>% group_by(TumorAbr) %>% summarize_if(is.numeric, median) %>% ggplot(aes(x=NLRP3,y=IL33, label=TumorAbr, fill=xcell_NK_sig_score, alpha= 0.5)) + geom_label(show.legend=TRUE)  +scale_fill_gradient(low="#0072B2", high="#F0E442") + geom_abline(slope=0.35, intercept=8, size=0.5) + theme(axis.title = element_text(size=14), axis.text.y = element_text(size=16), axis.text.x = element_text(angle=50,size=16,hjust=1)) +
+ggsave("IL33_vs_NRLP3_Tumor.jpg", width=10, height=10, dpi=600, plot= last_plot(), units = "in")
+
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr!= "ALL/AML")%>% group_by(TumorAbr) %>% summarize_if(is.numeric, median) %>% ggplot(aes(x=IL1B,y=IL33, label=TumorAbr, fill=gMDSC_sig_score, alpha= 0.5)) + geom_label(show.legend=TRUE)  +scale_fill_gradient(low="#0072B2", high="#F0E442") + geom_abline(slope=0.35, intercept=8, size=0.5) + theme(axis.title = element_text(size=14), axis.text.y = element_text(size=16), axis.text.x = element_text(angle=50,size=16,hjust=1)) 
+ggsave("IL33_vs_NRLP3_Tumor.jpg", width=10, height=10, dpi=600, plot= last_plot(), units = "in")
+```
+
+Within Tumor scores
+```{r fig.height=30, fig.width=30}
+MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr != "AML") %>% ggplot(aes(x=gMDSC_sig_score,y=xcell_NK_sig_score, color=NLRP3)) + geom_point(pch=19, size=2) + scale_colour_gradient2(low="#0072B2", high="red",midpoint = -0.25) + facet_wrap(~TumorAbr) + geom_abline(slope=0.35, intercept=8, size=0.5) + theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14)) + xlim(-30,20) + ylim(-10,20)
+```
+Find Correlation between NLRP3 and NK score, or gMDSC score
+```{r}
+Tumor_type <- unique(cancer_t$TumorAbr)
+my_cor <- function()
+
+merged_tcga <- MDSC_score %>% t %>% data.frame %>% tibble::rownames_to_column("Sample")  %>% left_join(cancer_t, by="Sample") 
+
+NLRP3_cor <- sapply( "NLRP3", function(x) lmtest(merged_tcga, x) )
+```
+
+Find scores for original training reference data
+
+```{r fig.height=8, fig.width=15}
+sum_pos <- function(x) {sum(x[x>0])}
+train_gMDSC_score <- MDSC_zscore %>% dfilter(Gene %in% gMDSC_sig) %>% summarize_if(is.numeric,sum_pos)
+  
+train_sMDSC_score <- MDSC_zscore %>% dfilter(Gene %in% sMDSC_sig) %>% summarize_if(is.numeric,sum_pos)
+
+train_mMDSC_score <- MDSC_zscore %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,sum_pos)
+train_samples <- colnames(train_gMDSC_score)
+factors_train <- as.factor(c(rep("gMDSC",2),rep("mMDSC",8), rep("gMDSC",6),rep("PMN",10),rep("Mono",6),"M2","mMDSC","gMDSC", rep("myeloid/neutrophil",9),rep("other",52)))
+length(factors_train)
+
+Train_scores <- rbind(train_gMDSC_score, train_gMDSC_score_s, train_mMDSC_score, train_mMDSC_score_s, train_sMDSC_score, train_sMDSC_score_s) %>% t %>% data.frame
+colnames(Train_scores) <- c("gMDSC","gMDSC_s","mMDSC","mMDSC_s","sMDSC","sMDSC_s") 
+Train_scores %<>% mutate(Type = factors_train, Sample= train_samples)
+Train_scores %>% gather("Sig_type","Score", -Type, -Sample)
+
+Train_scores %>% gather("Sig_type","Score", -Type, -Sample) %>% ggplot(aes(x=Type, y=Score, color= Sig_type)) + geom_point(pch=16,position = position_jitterdodge()) + facet_grid(~Sig_type) + theme(axis.text.x = element_text(angle=45,size=15,hjust=1))
+ggsave("Train_gMDSC.jpg", width=8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+Train_scores %>% gather("Sig_type","Score", -Type, -Sample) %>% ggplot(aes(x=Type, y=Score, color= Sig_type)) + geom_violin() + geom_point(pch=16,position = position_jitterdodge()) + facet_grid(~Sig_type) + theme(axis.text.x = element_text(angle=45,size=15,hjust=1))
+
+```
+
+Calculate scores a different way: no penalty for negative values
+```{r fig.height=6, fig.width=10}
+sum_pos <- function(x) {sum(x[x>0])}
+train_gMDSC_score_s <- MDSC_zscore %>% dfilter(Gene %in% gMDSC_sig) %>% summarize_if(is.numeric,sum_pos)
+
+  
+train_sMDSC_score_s <- MDSC_zscore %>% dfilter(Gene %in% sMDSC_sig) %>% summarize_if(is.numeric,sum_pos)
+
+train_mMDSC_score_s <- MDSC_zscore %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,sum_pos)
+
+factors_train <- as.factor(c(rep("gMDSC",2),rep("mMDSC",8), rep("gMDSC",6),rep("PMN",10),rep("Mono",6),"M2","mMDSC","gMDSC", rep("myeloid/neutrophil",9),rep("other",52)))
+Train_scores <- rbind(train_gMDSC_score_s,train_mMDSC_score_s,train_sMDSC_score_s) %>% t %>% data.frame
+colnames(Train_scores) <- c("gMDSC","mMDSC","sMDSC") 
+Train_scores %<>% mutate(Type = factors_train, Sample= train_samples)
+
+Train_scores %>% gather("Sig_type","Score", -Type, -Sample) %>% ggplot(aes(x=Type, y=Score, color= Sig_type)) + geom_violin() + geom_point(pch=16,position = position_jitterdodge()) + facet_wrap(~Sig_type, scales="free_y") + theme(axis.text.x = element_text(angle=45,size=15,hjust=1)) +
+ggsave("Sig_test_on_training_data.jpg", width=8, height=6, dpi=600, plot= last_plot(), units = "in")
+
+
+```
+
+
+```{r}
+# Seurat object
+azizi_pbmc <- readRDS("D:/FLX/scRNA_data/Azizi2018/Azizi_PBMC_Seurat.rds")
+memory.limit(size=560000) # set high memory limit size to handle a very large sc dataset (>40K cells)
+azizi_data <- data.frame(azizi_pbmc@raw.data) # export raw data
+azizi_donors <- data.frame(azizi_pbmc@orig.ident) # export the patient source data, it could be in "orig.ident" or another meta data slot
+azizi_t_bulk <- data.frame(t(azizi_data)) %>% summarise_if(is.numeric,sum) # transpose to cells in rows, and sum
+#if there are cells from multiple donors, add the Donor info as a numbers column (with 1, 2, 3, 4, representing different donors) to the transposed raw data, then:  group_by(Donor) %>% summarise_if(is.numeric, sum)
+```
+
+Load Azizi data
+
+    0     1 
+ 5909 41107 
+
+12% Myeloid cells
+```{r fig.height=2.5, fig.width=4}
+library(Seurat)
+memory.limit(size=560000)
+myeloid <- readRDS("D:/FLX/scRNA_data/Azizi2018/Azizi_Myeloid.rds")
+azizi_pbmc <- readRDS("D:/FLX/scRNA_data/Azizi2018/Azizi_PBMC_Seurat.rds")
+myeloid <- readRDS("/Volumes/Enterprise/FLX/scRNA_data/Azizi2018/Azizi_Myeloid.rds")
+azizi_pbmc <- readRDS("/Volumes/Enterprise/FLX/scRNA_data/Azizi2018/Azizi_PBMC_Seurat.rds")
+
+levels(azizi_pbmc@ident) #"0","1","2","3","4","5","6","7","8","10","11","13","14","17","18","19","21","24"
+levels(myeloid@ident) # "9","12","15","16","20","22","23"
+myeloid_cells <- as.factor(c("9","12","15","16","20","22","23"))
+non_myeloid <- as.factor(c("0","1","2","3","4","5","6","7","8","10","11","13","14","17","18","19","21","24"))
+
+azizi_clusters <- data.frame(azizi_pbmc@ident)
+azizi_clusters %<>% mutate(myeloid_binary = ifelse(azizi_pbmc.ident %in% myeloid_cells, 0, 1 )) # 1 is for non-myeloid, 0 is for myeloid
+azizi_clusters %<>% mutate(sample_name=azizi_samples)
+myeloid_col <-azizi_clusters$myeloid_binary
+azizi_clusters$myeloid_binary %>% table
+
+azizi_data <- data.frame(azizi_pbmc@raw.data)
+azizi_samples <- colnames(azizi_data)
+azizi_genes <- rownames(azizi_data)
+
+azizi_t <- data.frame(t(azizi_data))
+azizi_t %<>% tibble::rownames_to_column("Sample") %>% mutate(nonmyeloid=myeloid_col)
+azizi_myeloid <- azizi_t %>% dfilter(nonmyeloid == 0) %>% dselect(-nonmyeloid) %>% summarise_if(is.numeric,sum) 
+azizi_nonmyeloid <- azizi_t %>% dfilter(nonmyeloid == 1) %>% dselect(-nonmyeloid) %>% summarise_if(is.numeric,sum)
+azizi_all <- azizi_t %>% dselect(-nonmyeloid) %>% summarise_if(is.numeric,sum)
+azizi_half <- azizi_t %>% dfilter(nonmyeloid == 1) %>% dplyr::slice(1:6000)
+azizi_half <- rbind(azizi_t %>% dfilter(nonmyeloid == 0),azizi_half)
+azizi_half_bulk <- azizi_half %>% dselect(-nonmyeloid) %>% summarise_if(is.numeric,sum) 
+
+azizi_bulk <- t(rbind(azizi_myeloid, azizi_nonmyeloid,azizi_all, azizi_half_bulk))
+azizi_bulk_norm <- normalizeBetweenArrays(azizi_bulk)
+
+boxplot(azizi_bulk,log10="y")
+boxplot(azizi_bulk_norm,log10="y")
+
+colnames(azizi_bulk_norm) <- c("azizi_myeloid", "azizi_nonmyeloid", "azizi_all", "azizi_half")
+
+mx_zscore <- function(x) {result <- (x-mean(x,na.rm=TRUE)) / sd(x,na.rm=TRUE) 
+                          return(result)}
+Azizi_zscore <- data.frame(azizi_bulk_norm) %>% mutate_all(mx_zscore)
+boxplot(Azizi_zscore, log10="y")
+
+Azizi_zscore %<>% mutate(Gene= azizi_genes)
+
+save(Azizi_zscore, file= "Azizi_bulkRNAsimulation_zscore.rdata")
+load("Azizi_bulkRNAsimulation_zscore.rdata")
+
+azizi_gMDSC_score <- Azizi_zscore %>% dfilter(Gene %in% gMDSC_sig) %>% summarize_if(is.numeric,sum)
+  
+azizi_sMDSC_score <- Azizi_zscore %>% dfilter(Gene %in% sMDSC_sig) %>% summarize_if(is.numeric,sum)
+
+azizi_mMDSC_score <- Azizi_zscore %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,sum)
+
+Azizi_scores <- rbind(azizi_mMDSC_score,azizi_gMDSC_score,azizi_sMDSC_score) %>% t %>% data.frame
+colnames(Azizi_scores) <- c("mMDSC","gMDSC","sMDSC") 
+
+Azizi_scores %>% tibble::rownames_to_column("Sample") %>% mutate(Myeloid_content = c(100,0,12, 50)) %>% gather("Signature","Score", -Sample, -Myeloid_content) %>% ggplot(aes(x=Myeloid_content, y=Score, colour= Signature, fill= Signature)) + geom_point(pch=22, size=5) + facet_wrap(~Signature, scales="free_y") + 
+ggsave("Sig_test_on_Azizi_data.jpg", width=8, height=4, dpi=600, plot= last_plot(), units = "in")
+
+Azizi_scores %>% tibble::rownames_to_column("Sample") %>% mutate(Myeloid_content = c(100,0,12, 50)) %>% gather("Signature","Signature_Score", -Sample, -Myeloid_content) %>% dfilter(Signature=="gMDSC") %>% ggplot(aes(x=Myeloid_content, y=Signature_Score, colour= Signature, fill= Signature)) + geom_line(linetype="dotted", size=1) + geom_point(pch=22, size=3) + facet_wrap(~Signature, scales="free_y") + ggsave("Sig_test_on_Azizi_data.jpg", width=4, height=2, dpi=600, plot= last_plot(), units = "in")
+```
+
+
+Data and Code from Gene:
+cBioportal contains Clinical and molecular MetaData for each cancer type. Correlate MDSC signature scores with each metadata parameter that looks interesting to see if there is a significant correlation. 
+cBioPortal # 28 element list of data.frames for each TCGA cancer type, with metadata
+Each cancer type has different metadata columns associated with it
+Rows of samples and cols of metadata
+
+want.info is a data.frame that contains the meta elements that are interesting these are named in a column named VAR
+TT is the tumor type
+dt in put for lmtest is the expression matrix with matching sample names.
+
+lmtest uses data.table code (encoded in data.table because it runs faster on this large dataset)
+DT[i, j, by]
+"Take DT, subset/reorder rows using i, then calculate j, grouped by by."
+
+******************************************
+
+Parse table for TCGAwICGC.subset term 
+Rows are samples, Columns are genes
+
+$PatientID is the column of TCGA code names 
+$Sample contains the longer name with -01 -06
+
+I need to insert the $Sample column from the metadata with the Cancer_zscores and rename it to SAMPLE_ID"
+cancer_t == t(Cancers_zscore)
+TCGA_zscores/Cancers_zscore have Genes in rows, samples as columns
+tcag has samples as rows, genes as cols
+merge in the MDSC signatures and NLRP3
+Cancers_zscore contains data from: GSE102349      GSE68799          ICGC        TARGET          TCGA TreeHouseUCSC 
+TCGA_zscore contains data from TCGA only
+tcga has to contain a column Tumor.Type 
+```{r fig.height=5, fig.width=20}
+load("TCGA_data.table_for_lm.rdata") #this is the final data for modeling
+load("/Volumes/Enterprise/FLX/TCGA/allMergedData.SampleInfo.rdata")
+load("allMergedData.quantileNormZscore.rdata")
+cancer_meta <- allMergedData.SampleInfo %>% dselect(Sample,DzNormal,TumorAbr)
+tcga <- Cancers_zscore %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SAMPLE_ID") %>% left_join(cancer_meta,by=c("SAMPLE_ID"="Sample"))  %>% dfilter(SAMPLE_ID %like% "^TCGA-") 
+tail(colnames(tcga))
+tcga_s <- cbind(tcga,data.frame(t(Signatures)))
+rownames(tcga_s) <- tcga_s$SAMPLE_ID
+save(tcga_s,file="tcga_s.rdata")
+load("tcga_s.rdata")
+tcga[1:5,1:5]
+tcga_s[1:5,17920:17928]
+tcga_s[1:5,1:5]
+tcga_s %>% dfilter(TumorAbr=="AML") 
+TCGA_zscore <- tcga %>% tibble::column_to_rownames("SAMPLE_ID") %>% t %>% data.frame %>% tibble::rownames_to_column("Gene") 
+save(TCGA_zscore,file="TCGA_zscores.rdata")
+load("TCGA_zscores.rdata")
+
+gMDSC_sig_score <- TCGA_zscore %>% dfilter(Gene %in% gMDSC_sig) %>% summarize_if(is.numeric,sum)
+
+mMDSC_sig_score <- TCGA_zscore %>% dfilter(Gene %in% mMDSC_sig) %>% summarize_if(is.numeric,sum)
+
+sMDSC_sig_score <- TCGA_zscore %>% dfilter(Gene %in% sMDSC_sig) %>% summarize_if(is.numeric,sum)
+
+#Genes to include: CD8A, NLRP3, ARG1, PPBP, GAPDH
+Signatures <- rbind(gMDSC_sig_score,mMDSC_sig_score,sMDSC_sig_score)
+rownames(Signatures) <- c("gMDSC_sig_score","mMDSC_sig_score","sMDSC_sig_score")
+
+#Signatures names have dots, and tcga SAMPLE_IDs have dashes. The cBioportal SAMPLE_ID also have dashes
+colnames(Signatures) == tcga$SAMPLE_ID #They do match in order by the separators are different, so they show as not matching
+```
+
+Add more signatures: ISR signals
+
+First, translate mouse gene names into Human
+```{r}
+Common <- c("Ddit3","Trib3","Ppp1r15a","Asns")
+GCN2 <- c("Hspa5","Slc3a2","Hspa13","Dct")
+PRK <- c("Ifit1","Isg15","Usp18")
+PERK <- c("Atf3","Tnfrsf12a") 
+HRI_sub <-c("Slc7a11","Soat2","Arl14ep","Pycr1") 
+ISR_markers <- c(GCN2,Common,PRK,PERK_try,HRI_sub,"Eif2ak4", "Ido1","Arg1")
+mouseAnnot %>% dfilter(HumanName=="TNFRSF12A") #GENE.SYMBOL HumanName
+```
+
+
+```{r}
+load("/Volumes/Enterprise/FLX/Files_from_Gene/cbioportal_massaged.rdata")
+cBioPortal # 28 element list of data.frames for each TCGA cancer type, with metadata
+
+want.info
+
+lmtest <- function(dt, test.col) {
+  if (test.col %nin% colnames(dt)) return(NA)
+  dt <- dt[, .SD, .SDcols=c("VAR", test.col) ] # .SD means "take all columns"i.e. no subset, and .SDcols restricts the column selection, equivalent of dplyr::select. The whole line of code selects VAR and test.col and binds them 
+  setnames(dt, 2, "VAL")
+  lm.here <- try(lm(VAL ~ VAR, data=dt[!is.na(VAR)]))
+  if (class(lm.here) != "try-error") {
+    lm.here %>% anova %>% tidy %>% filter(term=="VAR") %>% select(p.value) %>% unlist
+  } else {
+    NA
+  }
+}
+
+want.info[ TT == "SKCM"]$VAR #this lists all the VAR in BRCA
+cBioPortal["SKCM"]
+
+fullTT <- list(unique(want.info$TT))
+TTacrossSubgroups <- list() #this is the output variable
+tts <- unique(want.info$TT)
+tcga_dt <- data.table(tcga_s) 
+save(tcga_dt, file="TCGA_data.table_for_lm.rdata")
+load("TCGA_data.table_for_lm.rdata")
+tcga_dt[1:5,1:5]
+head(tcga_dt)
+for (tt in tts) {
+
+  wanted.annotations <- want.info[ TT == tt ] #TT is a column name in want.info, this is selecting all ROWS in want.info where TT is SKCM
+  if (nrow(wanted.annotations) > 0 && !is.null(cBioPortal[[tt]]) ) {
+    # stats by annotation
+    for (var in wanted.annotations$VAR) {
+      merged <- merge(tcga_dt[ TumorAbr == tt ], cBioPortal[[tt]][, .SD,.SDcols=c("SAMPLE_ID",var)], by="SAMPLE_ID", all=FALSE)
+      setnames(merged, ncol(merged), "VAR")
+
+      out <- sapply( c('CD8A','NLRP3','ARG1','PPBP','GAPDH','IL1B',"gMDSC_sig_score","mMDSC_sig_score","sMDSC_sig_score"), function(x) lmtest(merged, x) )
+      out <- data.table(as.data.frame(t(out)))
+      out[, ':=' (TT=tt, VAR=var) ]
+      TTacrossSubgroups[[ paste0(tt,".",var) ]] <- out
+    }
+  }
+}
+
+tcga_s[ TumorAbr == "SKCM"]
+cBioPortal[["STAD"]]$GENE_EXPRESSION_CLUSTER
+tcga_dt[1:5,1:5] #10534 0 
+cBioPortal[["COAD.READ"]]
+cBioPortal[["BRCA"]][, .SD, .SDcols=c("SAMPLE_ID","TUMOR_STATUS")]
+"TUMOR_STATUS"
+??merge.data.table()
+```
+
+HER2.FINAL.STATUS in BRCA is significantly correlated to gMDSC,and Silpa's MDSC signature, but not mMDSC
+AR_MRNA in PRAD
+
+Il1B correlates with meta-factors in PRAD, STAD, HNSC, BLCA, OV
+IL18 is not present in the dataset.
+```{r fig.height=5, fig.width=20}
+TTacrossSubgroups
+names(TTacrossSubgroups)
+lm_tcga <- rbindlist(TTacrossSubgroups, use.names=TRUE, fill=TRUE) #,use.names=TRUE, fill=TRUE
+lm_tcga %<>% dselect(10:20) %>% dfilter(!is.na(gMDSC_sig_score.p.value))
+write.table(lm_tcga, "MDSC_sig_lm_TCGAcBioPortal_metadata.txt", sep="\t", quote= FALSE, row.names=FALSE)
+read.table("MDSC_sig_lm_TCGAcBioPortal_metadata.txt", sep="\t", header=TRUE)
+
+lm_tcga %>% dfilter(gMDSC_sig_score.p.value <= 0.01) %>% arrange(TT) %>% write.table("MDSC_sig_lm_TCGAcBioPortal_metadata.txt", sep="\t", quote= FALSE, row.names=FALSE)
+
+lm_tcga %>% dfilter(GAPDH.p.value >= 0.05, IL1B.p.value <= 0.01) %>% arrange(gMDSC_sig_score.p.value) # %>% write.table("MDSC_sig_lm_gMDSC_sig.txt", sep="\t", quote= FALSE, row.names=FALSE) #19 rows
+
+lm_tcga %>% dfilter(!is.na(gMDSC_sig_score.p.value)) %>% dfilter(gMDSC_sig_score.p.value <= 0.01) %>% arrange(gMDSC_sig_score.p.value) %>% dselect(-1,-2) %>% boxplot()
+lm_tcga %>% dfilter(!is.na(gMDSC_sig_score.p.value)) %>% dfilter(gMDSC_sig_score.p.value <= 0.01) %>% arrange(NLRP3.p.value)
+#lm_tcga %>% dselect(-1,-2) %>% boxplot()
+lm_tcga %>% ggplot(aes(x=NLRP3.p.value,y=gMDSC_sig_score.p.value)) + geom_point()
+```
+
+Check linear modeling on interesting hits
+
+```{r fig.height=8, fig.width=8}
+tt <- "THCA"  # tumor type
+VAL <- c("gMDSC_sig_score")  # column to test
+VAR <-  "HISTOLOGICAL_DIAGNOSIS"#"AJCC_METASTASIS_PATHOLOGIC_PM"#meta  "ER.STATUS"
+VAR2 <- "HISTOLOGICAL_TYPE"#"GENE_EXPRESSION_CLUSTER"
+#VAR3 <- "BRAFV600E_RAF_CLASS"
+my_merged <- merge(tcga_dt[ TumorAbr == tt ], cBioPortal[[tt]][, .SD,.SDcols=c("SAMPLE_ID",VAR, VAR2)], by="SAMPLE_ID", all=FALSE)
+
+#cBioPortal[[tt]][, .SD,.SDcols=c("SAMPLE_ID","TUMOR_RESIDUAL_DISEASE")]
+
+my_lm <- lm(VAL ~ VAR , data=my_merged[!is.na(VAR)])
+
+my_lm %>% anova %>% tidy
+
+#AIC(my_lm) #4516
+my_merged[1:5,1:5]
+
+my_merged %>%  dselect(VAL,VAR) %>% gather(Expression, Genetic_status, -VAL) %>% ggplot(aes(x=Genetic_status, y=gMDSC_sig_score, color=Genetic_status)) + facet_wrap(~Expression,scales="free") + geom_point(pch=16,position = position_jitterdodge()) + theme(axis.title.y = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=65,size=4,hjust=1),strip.text.x=element_text(size=16)) + stat_summary(inherit.aes = TRUE,quantiles = 0.5, colour="black") +
+ggsave("THCA_Histology_MDSC.jpg", width=8, height=8, dpi=600, plot= last_plot(), units = "in")
+
+
+my_merged %>%  dselect(VAL,VAR, VAR2) %>% gather(Expression, Genetic_status, -VAL) %>% ggplot(aes(x=Genetic_status, y=NLRP3, color=Genetic_status)) + facet_wrap(~Expression,scales="free") + geom_point(pch=19,position = position_jitterdodge()) + theme(axis.title = element_text(size=14), axis.text.y = element_text(size=14), axis.text.x = element_text(angle=45,size=14,hjust=1),strip.text.x=element_text(size=16)) +
+ggsave("STAD_mRNA_Ana_NLRP3.jpg", width=15, height=6, dpi=600, plot= last_plot(), units = "in")
+
+gMDSC_PR_NEG <- my_merged %>% dselect(PR.STATUS,gMDSC_sig_score) %>% dfilter(PR.STATUS== "Negative") %>% dselect(gMDSC_sig_score)
+gMDSC_PR_POS <- my_merged %>% dselect(PR.STATUS,gMDSC_sig_score) %>% dfilter(PR.STATUS== "Positive") %>% dselect(gMDSC_sig_score)
+t.test(gMDSC_PR_NEG,gMDSC_PR_POS) # p-value < 2.2e-16
+
+NLRP3_BRAF <- my_merged %>% dselect(BRAFV600E_RAF_CLASS,NLRP3) %>% dfilter(BRAFV600E_RAF_CLASS== "Braf-like") %>% dselect(NLRP3)
+NLRP3_RAF <- my_merged %>% dselect(BRAFV600E_RAF_CLASS,NLRP3) %>% dfilter(BRAFV600E_RAF_CLASS== "Ras-like") %>% dselect(NLRP3)
+t.test(NLRP3_BRAF,NLRP3_RAF) # p-value = 1.185e-12
+
+NLRP3_Dif <- my_merged %>% dselect(LAUREN_CLASS,NLRP3) %>% dfilter(LAUREN_CLASS== "Diffuse") %>% dselect(NLRP3)
+NLRP3_Int <- my_merged %>% dselect(LAUREN_CLASS,NLRP3) %>% dfilter(LAUREN_CLASS== "Intestinal") %>% dselect(NLRP3)
+t.test(NLRP3_Dif,NLRP3_Int) # p-value = 0.001698
+
+GENE_EXPRESSION_CLUSTER
+
+NLRP3_Dif <- my_merged %>% dselect(GENE_EXPRESSION_CLUSTER,NLRP3) %>% dfilter(GENE_EXPRESSION_CLUSTER== "C2") %>% dselect(NLRP3)
+NLRP3_Int <- my_merged %>% dselect(GENE_EXPRESSION_CLUSTER,NLRP3) %>% dfilter(GENE_EXPRESSION_CLUSTER== "C1") %>% dselect(NLRP3)
+t.test(NLRP3_Dif,NLRP3_Int) # p-value = 6.376e-10 2 vs 3 
+```
+
+
+The correlation betweeh IL1B and NLRP3 is not strong
+```{r}
+
+lm_tcga %>% ggplot(aes(x=mMDSC_sig_score.p.value,y=gMDSC_sig_score.p.value)) + geom_point()
+lm_tcga %>% ggplot(aes(x=NLRP3.p.value,y=IL1B.p.value)) + geom_point()
+cor(lm_tcga$NLRP3.p.value,lm_tcga$IL1B.p.value) #0.4 
+cor(lm_tcga$sMDSC_sig_score.p.value,lm_tcga$gMDSC_sig_score.p.value) # 0.70
+
+TCGA_zscore %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% ggplot(aes(x=NLRP3, y=IL1B)) + geom_point()
+TCGA_zscore %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% ggplot(aes(x=IL18, y=IL1B)) + geom_point()
+TCGA_zscore %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% ggplot(aes(x=NLRP3, y=IL18)) + geom_point()
+TCGA_zscore %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% ggplot(aes(x=GNLY, y=IL18)) + geom_point()
+TCGA_t <- TCGA_zscore %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>%
+cor(TCGA_t$NLRP3,TCGA_t$IL1B) #0.34
+cor(TCGA_t$IL18,TCGA_t$IL1B) #0.43
+cor(TCGA_t$NLRP3,TCGA_t$IL18) #0.27
+cor(TCGA_t$CD8A,TCGA_t$CD3D) #0.86
+cor(TCGA_t$MAP4K1,TCGA_t$LCK) #0.59
+cor(TCGA_t$EIF2AK4,TCGA_t$ATF4) #0.1 GCN2 CHOP
+```
+
+###################################
+###################################
+Xcell TCGA data
+Correlate GCN2 signiture to TILs
+
+###################################
+###################################
+```{r fig.height=10, fig.width=4}
+xcell_TCGA <- read.table("D:/FLX/Reference_tables/xCell_TCGA_RSEM.txt",sep="\t", header=TRUE) # 64 cell types, 9948 TCGA cases
+
+Quanti_Ciber_TCGA <- read.table("/Volumes/Picard/FLX/Reference_tables/TIL_estimates/QuantiSeq_CiberSort_CellTypeFractionsData.tsv",sep="\t", header=TRUE) # 64 cell types, 9948 TCGA cases
+
+xcell_TCGA <- read.table("/Volumes/Picard/FLX/Reference_tables/TIL_estimates/xCell_TCGA_RSEM.txt",sep="\t", header=TRUE) 
+
+xCell <- read.table("/Volumes/Picard/FLX/Reference_tables/TIL_estimates/xCell_TCGA_RSEM.txt", sep="\t", header=TRUE) %>% data.frame %>% dfilter(X %in% c("aDC","B-cells","CD4+ memory T-cells","CD4+ naive T-cells","CD8+ naive T-cells","CD8+ T-cells","CD8+ Tcm","CD8+ Tem","DC","Macrophages M1","Macrophages M2","Monocytes","Neutrophils","NK cells","Tregs")) %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("TCGA") %>% mutate(Sample=substr(TCGA,1,12)) %>% mutate(Sample = Hmisc::sedit(Sample,'.','-')) %>% dselect(-TCGA) %>% dselect(Sample,everything())
+
+sedi
+
+xcell_TCGA_t_z <- xcell_TCGA %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate_if(is.numeric,mx_zscore2)
+boxplot(xcell_TCGA_t_z[,2:65])
+
+ggplot( xcell_TCGA %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% dfilter(Sample == "TCGA.WC.A888.01") %>% gather(Cell_Type,Content,-Sample),aes(Cell_Type,Content)) + geom_bar(stat="identity") + coord_flip()
+```
+Grab the GCN2_scores (z_scores)
+Merge with the xCell data, or just run cor on the two different data.frames
+cor works on Columns
+
+Apply a filter for blood cancers
+
+Try correlation with z_scores: reason is that some cell types are more abundant, and have more variance. z_score normalizes this
+```{r}
+library(Hmisc)
+GCN2_score <-  Cancers_zscore %>% dfilter(Gene %in% GCN2_h) %>% summarize_if(is.numeric,sum) %>% dselect(starts_with("TCGA")) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Sample = sedit(Sample,'-','.'))
+PERK_score <-  Cancers_zscore %>% dfilter(Gene %in% PERK_h) %>% summarize_if(is.numeric,sum)  %>% dselect(starts_with("TCGA")) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Sample = sedit(Sample,'-','.'))
+HRI_score <-  Cancers_zscore %>% dfilter(Gene %in% HRI_h) %>% summarize_if(is.numeric,sum) %>% dselect(starts_with("TCGA")) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% mutate(Sample = sedit(Sample,'-','.'))
+
+
+
+GCN2_score_noBlood <- Cancers_zscore %>% dfilter(Gene %in% PERK_h) %>% summarize_if(is.numeric,sum) %>% dselect(starts_with("TCGA")) %>% t %>% data.frame %>% tibble::rownames_to_column("Sample") %>% left_join(cancer_t, by="Sample") %>% dfilter(TumorAbr != "ALL", TumorAbr != "ALL/AML", TumorAbr != "AML", TumorAbr != "DIPG") %>% mutate(Sample = sedit(Sample,'-','.')) %>% dselect(Sample,.data$.)
+
+colnames(GCN2_score_noBlood) <- c("Sample","PERK_Score")
+
+GCN2_xcell <- GCN2_score_noBlood %>% left_join(xcell_TCGA %>% tibble::column_to_rownames("X") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample"), by="Sample") %>% dfilter(!is.na(Tregs)) #9185
+
+GCN2_xcell_cor <- round(cor(GCN2_xcell[2:66]),2)
+GCN2_xcell_cor %>% data.frame %>% tibble::rownames_to_column("Cell_type") %>% arrange(-GCN2_Score)
+
+## Correlate to Z-scores
+GCN2_xcell_z <- GCN2_score_noBlood %>% left_join(xcell_TCGA_t_z, by="Sample") %>% dfilter(!is.na(Tregs)) #9185
+GCN2_xcell_z_cor <- round(cor(GCN2_xcell_z[2:66]),2)
+my_order <- GCN2_xcell_z_cor %>% data.frame %>% tibble::rownames_to_column("Cell_type") %>% arrange(-PERK_Score) %>% dselect(Cell_type) %>% .[,1]
+```
+Plot heatmap
+```{r fig.height=15, fig.width=15}
+GCN2_xcell_z_cor %>% data.frame %>% tibble::rownames_to_column("Cell_type") %>% gather(Signature,Correlation,-Cell_type) %>% mutate(Cell_type=factor(Cell_type,levels=rev(my_order)), Signature=factor(Signature,levels=my_order)) %>% ggplot(aes(x=Signature,y=Cell_type, fill=Correlation)) + geom_tile() + scale_fill_gradient2(low = "dodgerblue4", high = "red", na.value="white", limit = c(-1,1), name="Score",oob=squish) + theme(axis.text.x = element_text(angle=90,size=15,hjust=1), axis.text.y=element_text(size=15)) + ggsave("PERK_xcell_cor.jpg", width=15, height=15, dpi=150, plot= last_plot(), units = "in")
+
+```
+
