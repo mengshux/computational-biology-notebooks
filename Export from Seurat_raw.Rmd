@@ -1,0 +1,54 @@
+---
+title: "Export Seurat as matrix"
+author: "Mengshu"
+date: "1/2/2019"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(magrittr)
+source("/Volumes/Enterprise/FLX/Files_from_Gene/R_functions.r")
+```
+
+Load data from rds file
+#The data file called "_original" has the cluster names, not sure why it's named "original" with 21 clusters
+#Saved the predicted identity of the cell as the col_header
+```{r}
+pbmc_raw<- readRDS("10X_8K_PBMC_Seurat.rds")
+pbmc <- readRDS("10X_8K_PBMC_Seurat_Imputed_original.rds")
+levels(pbmc_raw@ident)
+levels(pbmc@ident)
+levels(pbmc@ident) == levels(pbmc_raw@ident) # two labels don't match
+raw_id <- pbmc_raw@ident 
+raw_id <- sub("4. B cells","4. B cell precursor", raw_id ,fixed=TRUE)
+id <- pbmc@ident
+id <- sub("15. T & DC high Mito","15. Apoptotic T",id, fixed=TRUE)
+raw_id_num <-as.numeric(sub(". [a-z,A-Z]+.*","",raw_id))
+id_num <-as.numeric(sub(". [a-z,A-Z]+.*","",id))
+pbmc_df_raw <- as.matrix(pbmc_raw@data)
+pbmc_df <- as.matrix(pbmc@data)
+dim(pbmc_df)
+pbmc_df_raw[1:5,1:5]
+pbmc_df_raw <- t(pbmc_df_raw)
+pbmc_df <- t(pbmc_df)
+pbmc_df <- as.data.frame(pbmc_df)
+pbmc_df_raw <- as.data.frame(pbmc_df_raw)
+pbmc_df <- data.frame(id_num,id,pbmc_df)
+pbmc_df_raw <- data.frame(raw_id_num,raw_id,pbmc_df_raw)
+
+
+#select variable genes only
+vargenes <- pbmc_raw@var.genes #1554
+vargenes2 <- sub("-",".", vargenes)
+pbmc_df_raw_var <- pbmc_df_raw %>% dselect(1:2,vargenes2)
+pbmc_df_var <- pbmc_df %>% dselect(1:2,vargenes2)
+```
+
+```{r}
+write.table(pbmc_df, file="10X_pbmc_t.txt", sep="\t", row.names=TRUE, col.names=TRUE)
+write.table(pbmc_df_raw, file="10X_pbmc_raw_t.txt", sep="\t", row.names=TRUE, col.names=TRUE)
+write.table(pbmc_df_var, file="10X_pbmc_t_variable.txt", sep="\t", row.names=TRUE, col.names=TRUE)
+write.table(pbmc_df_raw_var, file="10X_pbmc_raw_t_variable.txt", sep="\t", row.names=TRUE, col.names=TRUE)
+write.table(raw_id, file="cluster_identities.txt",sep="\t",row.names=FALSE, col.names=FALSE)
+```
+

@@ -1,0 +1,2196 @@
+---
+title: "TAM_Spp1_Angiogenic_Signature_010924.Rmd"
+author: "Mengshu Xu"
+date: "2024-01-09"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(Seurat)
+library(magrittr)
+library(ggplot2)
+library(stringr)
+#library(ggpubr)
+library(ggridges)
+library(Hmisc)
+library(ggchicklet)
+#install.packages('ggbeeswarm')
+library(ggbeeswarm)
+library(RColorBrewer)
+library(limma)
+library(edgeR)
+
+BiocManager::install(c("limma","edgeR"))
+devtools::install("profileR")
+GDP tools
+### Load packages
+library(ProfilerAPI2) # this is upload tool
+library(dplyr)
+library(profileR)
+library(readr)
+ProfilerAPI2::
+  profileR::
+### API Authentication
+api <- profiler_api()
+api$authenticate()
+```
+
+######################
+################
+
+Krishna et al ccRcc: clear cell Renal carcinoma
+
+#############
+###################
+
+
+Load data
+```{r}
+#load(file="/fcrbiouatappn01/resbioinfo/data/Oncology/Team_Shared/public_scRNAseq/Gilead_Tiered_Annotated_Data/Qian_2_ccRcc_Seurat_WH_Tiered_112322.rdata") # Qian_2_ccRcc_v3
+
+load(file="/scratch/oncology_scRNA/Qian_2_ccRcc_Seurat_WH_Tiered_011824.rdata")
+save(Qian_2_ccRcc_v3,file="/scratch/oncology_scRNA/Qian_2_ccRcc_Seurat_WH_Tiered_011824.rdata")
+
+load(file="/scratch/Oncology_Shared/oncology_scRNA/PanCan_Myeloid_Integrated2.rdata")
+load(file="/scratch/Oncology_Shared/oncology_scRNA/Krishna_ccRcc_Seurat_WH_Tiered_011824.rdata")
+```
+
+DimPlot of Celltype
+```{r fig.height=6, fig.width=6}
+DimPlot(Qian_2_ccRcc_v3,group.by="Tier_1",label=T, repel=TRUE)
+DimPlot(Qian_2_ccRcc_v3,group.by="Tier_2",label=T, repel=TRUE)
+DimPlot(Qian_2_ccRcc_v3,group.by="Celltype_MX",label=T, repel=TRUE)
+TAM_C1QC <- c("APOE","C1QA","C1QC","TREM2","CD81","C1QB")
+Phagocytosis <- c("MRC1","CD163","MERTK","C1QB")
+TAM_SPP1 <- c("SPP1","PPARG","ADM","MARCO")
+FeaturePlot(Qian_2_ccRcc_v3,features=TAM_C1QC,order=TRUE)
+FeaturePlot(Qian_2_ccRcc_v3,features=TAM_SPP1,order=TRUE, max.cutoff = 3)
+
+UMAPPlot(Krishna_ccRcc_v3, group.by="Celltype_MX",label=TRUE,repel=TRUE) + ggtitle(NULL) + NoLegend()
+
+ggsave("/scratch/mxu4/CD47/UMAPPlot_Krishna.tiff", units="in", width=6, height=6, dpi=300, compression = 'lzw')
+```
+
+Plot existing Signatures in Krishna to show specificity
+```{r fig.height=8, fig.width=12}
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+TAM_SPP1_original <- c("SPP1","PPARG","ADM","MARCO","VEGFA","VCAN","CXCL8","ANGPTL4")
+
+Krishna_ccRcc_v3$cluster %>% unique
+Krishna_ccRcc_v3$TAM_SPP1_score
+FeaturePlot(Krishna_ccRcc_v3,features=c("TAM_SPP1_score","SPP1","PPARG","ADM","MARCO","VEGFA","VCAN","CXCL8","ANGPTL4"),order=T)
+FeaturePlot(Krishna_ccRcc_v3,features=c("TAM_C1QC_score","APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK","CD206","IL4I1"),order=T,max.cutoff = 1)
+
+ggsave("/scratch/mxu4/CD47/SPP1_marker_FeaturePlot.tiff", units="in", width=12, height=8, dpi=900, compression = 'lzw')
+
+#Figure S8 markers
+FeaturePlot(Krishna_ccRcc_v3,features=c("TAM_SPP1_score","SPP1","IL1RN","OLR1","VEGFA","EREG","C15orf48","GPNMB","PHLDA1","APQP9","TNS3","NDRG1"))
+```
+
+Look at SIRPa expression by Mac type
+```{r fig.height=6.5, fig.width=7}
+"integrated"
+DefaultAssay(object = PanCan_Myeloid_Integrated2) <- "RNA"
+
+FetchData(PanCan_Myeloid_Integrated2,vars=c("Cancer_Study","MajorCluster","Gilead_Celltype","SIRPA")) %>% group_by(Cancer_Study,Gilead_Celltype) %>% summarise(Pct_SIRPA_Pos=sum(SIRPA>0)*100/n()) %>%
+  ggplot(aes(x=Gilead_Celltype, y=Pct_SIRPA_Pos)) +
+  geom_bar(stat="identity") +
+  facet_wrap(~Cancer_Study,ncol=2) +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=35,size=8,hjust=1),strip.text=element_text(size=8)) +
+
+PanCan_Myeloid_Integrated2$Cancer_Study %>% unique
+```
+
+Look at SIRPa expression by Mac type: Scatter
+```{r fig.height=3, fig.width=12}
+"integrated"
+DefaultAssay(object = PanCan_Myeloid_Integrated2) <- "RNA"
+
+FetchData(PanCan_Myeloid_Integrated2,vars=c("Cancer_Study","MajorCluster","Gilead_Celltype","SIRPA")) %>% group_by(Cancer_Study,Gilead_Celltype) %>% summarise(Pct_SIRPA_Pos=sum(SIRPA>0)*100/n()) %>%
+  ggplot(aes(x=Gilead_Celltype, y=Pct_SIRPA_Pos,color=Cancer_Study)) +
+  geom_quasirandom(width=0.3,aes(color=Cancer_Study=="CilloHNSC") )+
+  theme_bw() +
+  #geom_text_repel(aes(label=Cancer_Study)) +
+  theme(axis.text.x=element_text(angle=35,size=8,hjust=1),strip.text=element_text(size=8))
+
+PanCan_Myeloid_Integrated2$Cancer_Study %>% unique
+```
+
+Load the Myeloid Merge dataset
+```{r fig.height=7, fig.width=9}
+DimPlot(PanCan_Myeloid_Integrated2,group.by="MajorCluster",label=T, repel=TRUE,order=TRUE)
+
+DimPlot(PanCan_Myeloid_Integrated2,group.by="Study",label=T, repel=TRUE,order=TRUE)
+#zero in on cluster SPP1
+DimPlot(PanCan_Myeloid_Integrated2,group.by="MajorCluster",label=T, repel=TRUE,order=TRUE) + ylim(0,5) + xlim(3,9) + NoLegend()
+
+DimPlot(PanCan_Myeloid_Integrated2,group.by="seurat_clusters",label=T, repel=TRUE,order=TRUE)
+
+DimPlot(PanCan_Myeloid_Integrated2,group.by="Gilead_Celltype",label=T, repel=TRUE,order=TRUE)
+
+PanCan_Myeloid_Integrated2 <- SetIdent(PanCan_Myeloid_Integrated2,value="MajorCluster")
+PanCan_Myeloid_Integrated2 <- SetIdent(PanCan_Myeloid_Integrated2,value="seurat_clusters")
+
+C1QC_anno <- WhichCells(PanCan_Myeloid_Integrated2, idents =c("M10_Macro_C1QC","M11_Macro_C1QC","M09_Macro_C1QC","M07_Macro_C1QC"))
+my_C1QC_clusters <-  WhichCells(PanCan_Myeloid_Integrated2, idents =c(7,6,8,9,15,23))
+
+##Refine the clusters for TAM_C1QC cells
+FetchData(PanCan_Myeloid_Integrated2,vars=c("Gilead_Celltype","seurat_clusters")) %>% filter(seurat_clusters %in% c(7,6,8,9,15,23)) %>% 
+
+
+DimPlot(PanCan_Myeloid_Integrated2,cells.highlight = C1QC_anno,label=T, repel=TRUE,order=TRUE)
+DimPlot(PanCan_Myeloid_Integrated2,cells.highlight = my_C1QC_clusters,label=T, repel=TRUE,order=TRUE)
+
+PanCan_Myeloid_Integrated2$MajorCluster %>% unique
+
+PanCan_Myeloid_Integrated2$Gilead_Celltype %>% unique
+```
+
+
+
+Overlap of Cluster and Annotation
+```{r}
+# Overlap of M08_Macro_SPP1 and CLuster 12
+FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(MajorCluster=="M08_Macro_SPP1") %>% select(seurat_clusters) %>% table #12 has 413 cells overlapping
+PanCan_Myeloid_Integrated2$seurat_clusters %>% table #Cluster 12 has 8060 cells
+#SPP1
+#Percent positive per cluster
+data.frame(FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(MajorCluster %in% c("M08_Macro_SPP1")) %>% select(seurat_clusters) %>% table) %>% left_join(data.frame(PanCan_Myeloid_Integrated2$seurat_clusters %>% table) %>% dplyr::rename(seurat_clusters="."),by="seurat_clusters") %>% mutate(SPP1_Percent=Freq.x*100/Freq.y) %>% arrange(-SPP1_Percent)
+
+## CIQC cells
+FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(grepl("C1QC",MajorCluster)) %>% select(seurat_clusters) %>% table %>% data.frame
+
+## LYVE1 cells
+#Percent positive per cluster
+data.frame(FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(grepl("LYVE1",MajorCluster)) %>% select(seurat_clusters) %>% table) %>% left_join(data.frame(PanCan_Myeloid_Integrated2$seurat_clusters %>% table) %>% dplyr::rename(seurat_clusters="."),by="seurat_clusters") %>% mutate(LYVE1_Percent=Freq.x*100/Freq.y) %>% arrange(-LYVE1_Percent)
+
+#C1QC
+#Percent positive per cluster
+data.frame(FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(grepl("C1QC",MajorCluster)) %>% select(seurat_clusters) %>% table) %>% left_join(data.frame(PanCan_Myeloid_Integrated2$seurat_clusters %>% table) %>% dplyr::rename(seurat_clusters="."),by="seurat_clusters") %>% mutate(C1QC_Percent=Freq.x*100/Freq.y) %>% arrange(-C1QC_Percent)
+
+PanCan_Myeloid_Integrated2$seurat_clusters %>% table %>% data.frame
+
+# 42713 cells in Krishna
+# 516 cells fall into cluster 12
+FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(Study=="Krishna",seurat_clusters==12) #,MajorCluster=="M08_Macro_SPP1") % 516 cells
+
+Qian_2_SPP1_barcodes <- FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(Study=="Krishna",seurat_clusters==12) %>% tibble::rownames_to_column("barcode") %>% pull(barcode)
+
+Qian_2_C1QC_barcodes <- FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(Study=="Krishna",seurat_clusters==7) %>% tibble::rownames_to_column("barcode") %>% pull(barcode)
+
+
+PanCan_Myeloid_Integrated2$Study %>% unique # Krishna
+```
+Conversely, the annotations of Cluster 12 (SPP1) and Cluster 7 (C1QC)
+```{r}
+# Cluster 12 SPP1
+data.frame(FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(seurat_clusters==12)  %>% select(MajorCluster) %>% table) %>% mutate(Clusters_total=sum(Freq),Cluster_Percent=Freq*100/Clusters_total) %>% arrange(-Freq)
+
+# Cluster 7 C1QC
+data.frame(FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(seurat_clusters==7)  %>% select(MajorCluster) %>% table) %>% mutate(Clusters_total=sum(Freq),Cluster_Percent=Freq*100/Clusters_total) %>% arrange(-Freq) %>% filter(grepl("C1QC",MajorCluster)) # 48% out of 4314 cells
+#multicluster C1QC
+data.frame(FetchData(PanCan_Myeloid_Integrated2,vars=c("seurat_clusters","MajorCluster","Study")) %>% filter(seurat_clusters %in% c(6,8,9,10,11,15,16,21,27,23))  %>% select(MajorCluster) %>% table) %>% mutate(Clusters_total=sum(Freq),Cluster_Percent=Freq*100/Clusters_total) %>% arrange(-Freq) %>% filter(grepl("C1QC",MajorCluster)) # with 7 34%, without 7: 30% out of 12556 cells
+
+```
+
+Display differen Meta slots
+
+```{r fig.height=16, fig.width=20}
+FeaturePlot(PanCan_Myeloid_Integrated2,features=c("VEGFA","VCAN","CCND2","MMP9"),label=T, repel=TRUE)
+
+DimPlot(PanCan_Myeloid_Integrated2,group.by="MajorCluster",label=T, repel=TRUE) + facet_wrap(~MajorCluster)
+
+DimPlot(PanCan_Myeloid_Integrated2,group.by="Study",label=T, repel=TRUE,order=TRUE) + facet_wrap(~Study)
+
+DimPlot(PanCan_Myeloid_Integrated2,group.by="seurat_clusters",label=T, repel=TRUE,order=TRUE) + facet_wrap(~seurat_clusters)
+
+
+#zero in on cluster SPP1
+DimPlot(PanCan_Myeloid_Integrated2,group.by="seurat_clusters",label=T,label.size = 16, repel=TRUE,order=TRUE) + ylim(0,5) + xlim(3,9) + NoLegend()
+```
+
+Get annotations into Krishna et al.
+SPP1 == Cluster 13
+```{r fig.height=7, fig.width=9}
+Krishna_ccRcc_v3[["SPP1_12"]] <- data.frame(barcode=Krishna_SPP1_barcodes,Sig_anno="SPP1_TAM") %>% separate(barcode,sep="Krishna_ccRcc_",into=c(NA,"barcode")) %>% tibble::column_to_rownames("barcode")
+
+nume <- FetchData(Krishna_ccRcc_v3,vars=c("SPP1_12","cluster")) %>% filter(SPP1_12=="SPP1_TAM") %>% select(cluster) %>% table # 13(248), 1(113), 5(88), 12(64)
+deno <- Krishna_ccRcc_v3$cluster %>% table 
+data.frame(Cluster=demo) %>% dplyr::rename(Cluster="Cluster..") %>% left_join(data.frame(Cluster=nume),by=c("Cluster"="Cluster.cluster")) %>% mutate(Percent=Cluster.Freq.y*100/Cluster.Freq.x) %>% arrange(-Percent)
+
+#colnames(Krishna_ccRcc_v3) %>% head # "AAACCTGAGCGTTGCC-1_UT1_Center"
+#get rid of the prepended barcode "Krishna_ccRcc"
+#Krishna_ccRcc_AGGGTGACAGTCAGCC-1_UT1_Center
+
+DimPlot(Krishna_ccRcc_v3,group.by="SPP1_12",label=T, repel=TRUE,order=TRUE,cols=c("red","grey90"),na.value = "grey90")
+
+DimPlot(Krishna_ccRcc_v3,group.by="cluster",label=T, repel=TRUE) + facet_wrap(~cluster)
+
+cluster_13 <- WhichCells(Krishna_ccRcc_v3, idents =13)
+cluster_5 <- WhichCells(Krishna_ccRcc_v3, idents =5)
+cluster_1 <- WhichCells(Krishna_ccRcc_v3, idents =1)
+cluster_34 <- WhichCells(Krishna_ccRcc_v3, idents =34)
+cluster_18 <- WhichCells(Krishna_ccRcc_v3, idents =18)
+
+DimPlot(Krishna_ccRcc_v3,group.by="cluster",label=T, cells.highlight=cluster_13) 
+DimPlot(Krishna_ccRcc_v3,group.by="cluster",label=T, cells.highlight=cluster_5) 
+DimPlot(Krishna_ccRcc_v3,group.by="cluster",label=T, cells.highlight=cluster_1) 
+DimPlot(Krishna_ccRcc_v3,group.by="cluster",label=T, cells.highlight=cluster_34) 
+DimPlot(Krishna_ccRcc_v3,group.by="cluster",label=T, cells.highlight=cluster_18)
+
+Krishna_ccRcc_v3 <- SetIdent(Krishna_ccRcc_v3,value = "cluster")
+```
+
+C1QC == Cluster 
+```{r fig.height=7, fig.width=9}
+Krishna_ccRcc_v3[["C1QC_7"]] <- data.frame(barcode=Krishna_C1QC_barcodes,Sig_anno="C1QC_TAM") %>% separate(barcode,sep="Krishna_ccRcc_",into=c(NA,"barcode")) %>% tibble::column_to_rownames("barcode")
+
+nume <- FetchData(Krishna_ccRcc_v3,vars=c("C1QC_7","cluster")) %>% filter(C1QC_7=="C1QC_TAM") %>% select(cluster) %>% table # 13(248), 1(113), 5(88), 12(64)
+deno <- Krishna_ccRcc_v3$cluster %>% table 
+data.frame(Cluster=demo) %>% dplyr::rename(Cluster="Cluster..") %>% left_join(data.frame(Cluster=nume),by=c("Cluster"="Cluster.cluster")) %>% mutate(Percent=Cluster.Freq.y*100/Cluster.Freq.x) %>% arrange(-Percent)
+
+#colnames(Krishna_ccRcc_v3) %>% head # "AAACCTGAGCGTTGCC-1_UT1_Center"
+#get rid of the prepended barcode "Krishna_ccRcc"
+#Krishna_ccRcc_AGGGTGACAGTCAGCC-1_UT1_Center
+
+DimPlot(Krishna_ccRcc_v3,group.by="C1QC_7",label=T, repel=TRUE,order=TRUE,cols=c("red","grey90"),na.value = "grey90")
+
+DimPlot(Krishna_ccRcc_v3,group.by="cluster",label=T, repel=TRUE) + facet_wrap(~cluster)
+
+cluster_12 <- WhichCells(Krishna_ccRcc_v3, idents =12)
+cluster_13 <- WhichCells(Krishna_ccRcc_v3, idents =13)
+
+DimPlot(Krishna_ccRcc_v3,group.by="cluster",label=T, cells.highlight=cluster_13) 
+
+Krishna_ccRcc_v3 <- SetIdent(Krishna_ccRcc_v3,value = "cluster")
+```
+
+
+DE Analysis 
+
+Cluster 12 is C1QC TAM
+Cluster 13 is SPP1 TAM
+
+ident.1 = the experimental
+ident.2 = the control
+```{r}
+C1QC_DE <- FindMarkers(Krishna_ccRcc_v3,ident.1=12,min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+SPP1_DE <- FindMarkers(Krishna_ccRcc_v3,ident.1=13,min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+SPP1_DE_2 <- FindMarkers(Krishna_ccRcc_v3,ident.1=13,min.pct=0.2,only.pos=TRUE,thresh.use=0.3) #1188
+SPP1_DE_2["MARCO",]
+C1QC_DE["TREM2",]
+SPP1_DE["MARCO",] # not there, why not?? this needs to be there
+
+# Filter the pct.2 to <0.1. Need markers that are very specific to the cell group
+C1QC_DE %>% filter(pct.2 <= 0.1) # mostly markers at 30-50% positive expression: 12 markers
+C1QC_DE %>% filter(pct.2 <= 0.2, pct.1 >= 0.6) # 12 markers
+C1QC_DE %>% filter(pct.2 <= 0.2, pct.1 >= 0.5) # 24 markers -4
+C1QC_markers <- rownames(C1QC_DE %>% filter(pct.2 <= 0.2, pct.1 >= 0.5) )
+C1QC_markers <- setdiff(C1QC_markers,shared_marker)
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD14","CD163" )
+
+
+SPP1_DE %>% filter(pct.2 <= 0.1, pct.1 >= 0.6) # 3 markers
+SPP1_DE %>% filter(pct.2 <= 0.2, pct.1 >= 0.7) # 18 markers
+SPP1_DE %>% filter(pct.2 <= 0.2, pct.1 >= 0.6) # 58 markers -4. <<<<<<<<<<<<<<<<
+SPP1_markers <- rownames(SPP1_DE %>% filter(pct.2 <= 0.2, pct.1 >= 0.6) )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+SPP1_markers <- setdiff(SPP1_markers,shared_marker)
+
+shared_marker <- intersect(C1QC_markers,SPP1_markers)
+```
+
+Feature Plot
+```{r fig.height=9, fig.width=14}
+FeaturePlot(Krishna_ccRcc_v3,features=c(C1QC_markers),order=T)
+
+FeaturePlot(Krishna_ccRcc_v3,features=c(shared_marker),order=T)
+
+FeaturePlot(Krishna_ccRcc_v3,features=c(SPP1_markers),order=T) #GPR183
+
+FeaturePlot(Krishna_ccRcc_v3,features=c(SPP1_hand_picked),order=T) 
+
+FeaturePlot(Krishna_ccRcc_v3,features=c("TAM_anno"),order=T) 
+```
+
+Plot as DotPlots and Heatmaps
+
+```{r fig.height=9, fig.width=16}
+DotPlot(Krishna_ccRcc_v3,features=c(SPP1_markers))
+DotPlot(Krishna_ccRcc_v3,features=c(C1QC_markers))
+Krishna_ccRcc_v3 <- SetIdent(Krishna_ccRcc_v3,value="cluster")
+DoHeatmap(Krishna_ccRcc_v3,features=c(C1QC_markers),slot="counts",label=FALSE)
+DoHeatmap(Krishna_ccRcc_v3,features=c(SPP1_markers),slot="data")
+```
+
+```{r fig.height=8, fig.width=9}
+DotPlot(Krishna_ccRcc_v3,features=c(SPP1_hand_picked))
+```
+
+Calculate the average signal of the candidate signatures
+```{r}
+FetchData(Krishna_ccRcc_v3,vars=c(C1QC_markers))
+FetchData(Krishna_ccRcc_v3,vars=c(SPP1_hand_picked)) %>% t %>% data.frame %>% dplyr::summarise_all(sum) %>% t
+
+cell_names <- FetchData(Krishna_ccRcc_v3,vars=c("CD8A")) %>% rownames()
+#original C1QC score
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+
+TAM_SPP1_score <-FetchData(Krishna_ccRcc_v3,vars=SPP1_hand_picked,slot="data") %>% summarise(TAM_SPP1_score= rowSums(.)/8)
+TAM_C1QC_score <-FetchData(Krishna_ccRcc_v3,vars=C1QC_markers,slot="data") %>% summarise(TAM_C1QC_score= rowSums(.)/8)
+TAM_C1QC_score_original <- FetchData(Krishna_ccRcc_v3,vars=TAM_C1QC_original,slot="data") %>% summarise(TAM_C1QC_original= rowSums(.)/8)
+
+TAM_signature_scores <- cbind(barcodes=cell_names,TAM_SPP1_score=TAM_SPP1_score,TAM_C1QC_score=TAM_C1QC_score,TAM_C1QC_original=TAM_C1QC_score_original)
+TAM_signature_scores %<>% column_to_rownames("barcodes")
+
+Krishna_ccRcc_v3 <- AddMetaData(Krishna_ccRcc_v3,metadata=TAM_signature_scores)
+```
+
+Plot TAM signature scores
+```{r fig.height=5, fig.width=16}
+FeaturePlot(Krishna_ccRcc_v3,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original"),order=TRUE,ncol=3) #, max.cutoff = 3)
+```
+
+Signatures Dotplot
+```{r fig.height=2.5, fig.width=14}
+SetIdent(Krishna_ccRcc_v3,value="cluster")
+DotPlot(Krishna_ccRcc_v3,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original")) + coord_flip()
+```
+
+FeaturePlot in Myeloid Merged
+```{r fig.height=16, fig.width=20}
+SPP1_hand_picked
+FeaturePlot(PanCan_Myeloid_Integrated2,features=c(SPP1_hand_picked),order=TRUE,min.cutoff = 0)
+
+FeaturePlot(PanCan_Myeloid_Integrated2,features=c(C1QC_markers),order=TRUE,min.cutoff = 0)
+```
+
+Load Test File
+This dataset did not have author annotations so no TAM annotations available. Not good
+```{r}
+load(file="/scratch/oncology_scRNA/Zhang_TNBC_Seurat_WH_Tiered_120622.rdata")
+Zhang_TNBC_Tiered$ident %>% unique
+Zhang_TNBC_Tiered$Celltype_MX %>% unique
+
+Zhang_TNBC_Tiered$Tier_2 %>% unique
+
+Zhang_TNBC_Tiered$
+```
+
+Load Qian et al first dataset annotated by Abio
+Looking at what annotations look like: I think the indications: lung, colorectal, ovary and breast cancer
+No_523_1 = Lung
+No_523_2 = Colorectal 
+No_523_3 = Ovary # no C1QC cells
+No_523_4 = Breast # has SPP1 and C1QC
+```{r}
+Qian_1 <- readRDS(file="/scratch/oncology_scRNA/Abio/No_523_1_Annotation.rds")
+Qian_2 <- readRDS(file="/scratch/oncology_scRNA/Abio/No_523_2_Annotation.rds")
+Qian_3 <- readRDS(file="/scratch/oncology_scRNA/Abio/No_523_3_Annotation.rds")
+Qian_4 <- readRDS(file="/scratch/oncology_scRNA/Abio/No_523_4_Annotation.rds")
+
+
+Qian_1$`Cell Type (Abio Internal Tier 1)` %>% unique # very broad
+Qian_2$`Cell Type (Abio Internal Tier 2)` %>% unique # Mph-SPP1  Mph-C1QC
+Qian_1$`Cell Type (Author)` %>% unique # also very broad
+
+Qian_1 <- SetIdent(Qian_1, value=Qian_1$`Cell Type (Abio Internal Tier 2)`)
+Qian_2 <- SetIdent(Qian_2, value=Qian_2$`Cell Type (Abio Internal Tier 2)`)
+Qian_3 <- SetIdent(Qian_3, value=Qian_3$`Cell Type (Abio Internal Tier 2)`)
+Qian_4 <- SetIdent(Qian_4, value=Qian_4$`Cell Type (Abio Internal Tier 2)`)
+
+```
+
+Test Signature scores
+```{r}
+#Lung
+cell_names <- FetchData(Qian_1,vars=c("CD8A")) %>% rownames()
+#original C1QC score
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD14","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+TAM_SPP1_score <-FetchData(Qian_1,vars=SPP1_hand_picked,slot="data") %>% summarise(TAM_SPP1_score= rowSums(.)/8)
+TAM_C1QC_score <-FetchData(Qian_1,vars=C1QC_markers,slot="data") %>% summarise(TAM_C1QC_score= rowSums(.)/8)
+TAM_C1QC_score_original <- FetchData(Qian_1,vars=TAM_C1QC_original,slot="data") %>% summarise(TAM_C1QC_original= rowSums(.)/8)
+
+TAM_signature_scores <- cbind(barcodes=cell_names,TAM_SPP1_score=TAM_SPP1_score,TAM_C1QC_score=TAM_C1QC_score,TAM_C1QC_original=TAM_C1QC_score_original)
+TAM_signature_scores %<>% column_to_rownames("barcodes")
+
+Qian_1 <- AddMetaData(Qian_1,metadata=TAM_signature_scores)
+
+#######
+#Rectal
+
+cell_names <- FetchData(Qian_2,vars=c("CD8A")) %>% rownames()
+#original C1QC score
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD14","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+TAM_SPP1_score <-FetchData(Qian_2,vars=SPP1_hand_picked,slot="data") %>% summarise(TAM_SPP1_score= rowSums(.)/8)
+TAM_C1QC_score <-FetchData(Qian_2,vars=C1QC_markers,slot="data") %>% summarise(TAM_C1QC_score= rowSums(.)/8)
+TAM_C1QC_score_original <- FetchData(Qian_2,vars=TAM_C1QC_original,slot="data") %>% summarise(TAM_C1QC_original= rowSums(.)/8)
+
+TAM_signature_scores <- cbind(barcodes=cell_names,TAM_SPP1_score=TAM_SPP1_score,TAM_C1QC_score=TAM_C1QC_score,TAM_C1QC_original=TAM_C1QC_score_original)
+TAM_signature_scores %<>% column_to_rownames("barcodes")
+
+Qian_2 <- AddMetaData(Qian_2,metadata=TAM_signature_scores)
+
+#######
+#Ovary
+
+cell_names <- FetchData(Qian_3,vars=c("CD8A")) %>% rownames()
+#original C1QC score
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD14","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+TAM_SPP1_score <-FetchData(Qian_3,vars=SPP1_hand_picked,slot="data") %>% summarise(TAM_SPP1_score= rowSums(.)/8)
+TAM_C1QC_score <-FetchData(Qian_3,vars=C1QC_markers,slot="data") %>% summarise(TAM_C1QC_score= rowSums(.)/8)
+TAM_C1QC_score_original <- FetchData(Qian_3,vars=TAM_C1QC_original,slot="data") %>% summarise(TAM_C1QC_original= rowSums(.)/8)
+
+TAM_signature_scores <- cbind(barcodes=cell_names,TAM_SPP1_score=TAM_SPP1_score,TAM_C1QC_score=TAM_C1QC_score,TAM_C1QC_original=TAM_C1QC_score_original)
+TAM_signature_scores %<>% column_to_rownames("barcodes")
+
+Qian_3 <- AddMetaData(Qian_3,metadata=TAM_signature_scores)
+
+#######
+#Breast
+
+cell_names <- FetchData(Qian_4,vars=c("CD8A")) %>% rownames()
+#original C1QC score
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD14","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+TAM_SPP1_score <-FetchData(Qian_4,vars=SPP1_hand_picked,slot="data") %>% summarise(TAM_SPP1_score= rowSums(.)/8)
+TAM_C1QC_score <-FetchData(Qian_4,vars=C1QC_markers,slot="data") %>% summarise(TAM_C1QC_score= rowSums(.)/8)
+TAM_C1QC_score_original <- FetchData(Qian_4,vars=TAM_C1QC_original,slot="data") %>% summarise(TAM_C1QC_original= rowSums(.)/8)
+
+TAM_signature_scores <- cbind(barcodes=cell_names,TAM_SPP1_score=TAM_SPP1_score,TAM_C1QC_score=TAM_C1QC_score,TAM_C1QC_original=TAM_C1QC_score_original)
+TAM_signature_scores %<>% column_to_rownames("barcodes")
+
+Qian_4 <- AddMetaData(Qian_4,metadata=TAM_signature_scores)
+```
+
+Plot UMAP
+```{r fig.height=9, fig.width=16}
+UMAPPlot(Qian_1,label=TRUE)
+UMAPPlot(Qian_2,label=TRUE)
+UMAPPlot(Qian_3,label=TRUE)
+UMAPPlot(Qian_4,label=TRUE)
+```
+ 
+Plot TAM signature scores
+
+Spp1 is the best marker within the TAM cluster, but the problem is it's also expressed in epithelial cells
+I think I need to test in all indications before making a final judgement on the signature
+```{r fig.height=5, fig.width=16}
+FeaturePlot(Qian_1,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original"),order=F,ncol=3) #, max.cutoff = 3)
+FeaturePlot(Qian_1,features=c("C1QC","SPP1","MARCO"),order=F,ncol=3)
+
+FeaturePlot(Qian_2,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original"),order=F,ncol=3) #, max.cutoff = 3)
+FeaturePlot(Qian_2,features=c("C1QC","SPP1","MARCO"),order=F,ncol=3)
+
+FeaturePlot(Qian_3,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original"),order=F,ncol=3) #, max.cutoff = 3)
+FeaturePlot(Qian_3,features=c("C1QC","SPP1","MARCO"),order=F,ncol=3)
+
+FeaturePlot(Qian_4,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original"),order=F,ncol=3) #, max.cutoff = 3)
+FeaturePlot(Qian_4,features=c("C1QC","SPP1","MARCO"),order=F,ncol=3)
+```
+
+Signatures Dotplot
+```{r fig.height=3, fig.width=14}
+DotPlot(Qian_1,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original")) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1))
+
+#Colorectal
+DotPlot(Qian_2,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original")) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1))
+
+#Ovarian
+DotPlot(Qian_3,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original")) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1))
+
+#Breast
+DotPlot(Qian_4,features=c("TAM_SPP1_score","TAM_C1QC_score","TAM_C1QC_original")) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1))
+```
+
+Could change the strategy here and use this data to generate the signatures: at least use this to find more specific markers?
+The current markers are not specific enough. Find markers for each indication. 
+
+What to use for a testing dataset?? Use the Krishna dataset and old code for pseudobulk to test
+
+DE Analysis
+ident.1 = the experimental
+ident.2 = the control
+```{r}
+install.packages('devtools')
+devtools::install_github('immunogenomics/presto')
+
+C1QC_DE_1 <- FindMarkers(Qian_1,ident.1="Mph-C1QC",min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+C1QC_DE_2 <- FindMarkers(Qian_2,ident.1="Mph-C1QC",min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+C1QC_DE_4 <- FindMarkers(Qian_4,ident.1="Mph-C1QC",min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+
+C1QC_DE_1_f <- C1QC_DE_1 %>% filter(pct.2 <= 0.2, pct.1 >= 0.7) %>% rownames
+C1QC_DE_2_f <- C1QC_DE_2 %>% filter(pct.2 <= 0.2, pct.1 >= 0.7) %>% rownames
+C1QC_DE_4_f <- C1QC_DE_4 %>% filter(pct.2 <= 0.2, pct.1 >= 0.7) %>% rownames
+
+C1QC_union <- union(union(C1QC_DE_1_f,C1QC_DE_2_f),C1QC_DE_4_f)
+
+C1QC_Qian <- c("LGMN","MFSD1","DAB2","LILRB4","CD163","MAFB","C1QA","C1QC","TREM2","C1QB")
+
+SPP1_DE_1 <- FindMarkers(Qian_1,ident.1="Mph-SPP1",min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+SPP1_DE_2 <- FindMarkers(Qian_2,ident.1="Mph-SPP1",min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+SPP1_DE_3 <- FindMarkers(Qian_3,ident.1="Mph-SPP1",min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+SPP1_DE_4 <- FindMarkers(Qian_4,ident.1="Mph-SPP1",min.pct=0.3,only.pos=TRUE,thresh.use=0.5)
+
+SPP1_DE_1_f <- SPP1_DE_1 %>% filter(pct.2 <= 0.25, pct.1 >= 0.7) %>% rownames
+SPP1_DE_2_f <- SPP1_DE_2 %>% filter(pct.2 <= 0.2, pct.1 >= 0.7) %>% rownames
+SPP1_DE_3_f <- SPP1_DE_3 %>% filter(pct.2 <= 0.25, pct.1 >= 0.7) %>% rownames
+SPP1_DE_4_f <- SPP1_DE_4 %>% filter(pct.2 <= 0.2, pct.1 >= 0.7) %>% rownames
+
+SPP1_union <- union(union(union(SPP1_DE_1_f,SPP1_DE_2_f),SPP1_DE_3_f),SPP1_DE_4_f)
+
+SPP1_Qian <- c("PLIN2","PLAUR","SPP1","SLC11A1","C15orf48","BRI3","FBP1","IFIT3","ABCA1","GPNMB")
+```
+
+DotPlot DE markers
+
+Impossible to find Q1QC markers that are not expression in SPP1
+```{r fig.height=14, fig.width=16}
+DotPlot(Qian_1,features=c(C1QC_union)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) # LGMN, CD163
+DotPlot(Qian_2,features=c(C1QC_union)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) 
+C1QC_DE_2_f
+DotPlot(Qian_2,features=c(C1QC_DE_2_f)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) 
+
+DotPlot(Qian_4,features=c(C1QC_union)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) 
+DotPlot(Qian_4,features=c(C1QC_DE_4_f)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1))
+
+DotPlot(Qian_1,features=c(SPP1_union)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) # PLIN2 PLAUR SPP1 SLC11A1 C15orf48
+DotPlot(Qian_2,features=c(SPP1_union)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) # FBP1 BRI3
+DotPlot(Qian_3,features=c(SPP1_union)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) # PLIN2 GPNMB
+DotPlot(Qian_4,features=c(SPP1_union)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) # IFIT3 ABCA1 GPNMB
+
+```
+Final Markers
+```{r fig.height=5, fig.width=16}
+DotPlot(Qian_4,features=c(SPP1_Qian)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) 
+
+DotPlot(Qian_4,features=c(C1QC_Qian)) + coord_flip() + theme(axis.text.x=element_text(angle=35,hjust=1)) 
+```
+
+Test on Krishna data
+```{r}
+SPP1_Qian <- c("PLIN2","PLAUR","SPP1","SLC11A1","C15orf48","BRI3","FBP1","IFIT3","ABCA1","GPNMB")
+C1QC_Qian <- c("LGMN","MFSD1","DAB2","LILRB4","CD163","MAFB","C1QA","C1QC","TREM2","C1QB")
+
+#Pull the previously annotated SPP1 and C1QC cells out of the Integrated Myeloid dataset: with refinement eliminating non myeloid clusters
+spp1 <- FetchData(PanCan_Myeloid_Integrated2,vars=c("Gilead_Celltype","Study")) %>% filter(Gilead_Celltype=="TAM_SPP1",Study=="Krishna") %>% select(Gilead_Celltype) %>% tibble::rownames_to_column("Barcode") %>% separate(Barcode, into=c(NA,"Barcode"), sep="Qian_2_ccRcc_") %>% tibble::column_to_rownames("Barcode") #2226
+
+c1qc <- FetchData(PanCan_Myeloid_Integrated2,vars=c("Gilead_Celltype","Study","seurat_clusters")) %>% filter(Gilead_Celltype=="TAM_C1QC",Study=="Krishna") %>% filter(seurat_clusters %in% c(7,6,8,9,15,23)) %>% select(Gilead_Celltype) %>% tibble::rownames_to_column("Barcode") %>% separate(Barcode, into=c(NA,"Barcode"), sep="Qian_2_ccRcc_") %>% tibble::column_to_rownames("Barcode") #9926
+
+TAM_anno <- rbind(spp1,c1qc)
+
+Qian_2_ccRcc_v3[["TAM_anno"]] <- TAM_anno
+```
+
+Plot on Krishna Feature Plot
+```{r fig.height=10, fig.width=20}
+FeaturePlot(Krishna_ccRcc_v3,features=c("PLIN2","PLAUR","SPP1","SLC11A1","C15orf48","BRI3","FBP1","IFIT3","ABCA1","GPNMB"),order=T)
+
+FeaturePlot(Krishna_ccRcc_v3,features=c("LGMN","MFSD1","DAB2","LILRB4","CD163","MAFB","C1QA","C1QC","TREM2","C1QB"),order=T)
+
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+FeaturePlot(Krishna_ccRcc_v3,features=c(SPP1_hand_picked),order=T)
+```
+Signatures
+
+```{r}
+#original
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+TAM_SPP1_original <- c("SPP1","PPARG","ADM","MARCO","VEGFA","VCAN","CXCL8","ANGPTL4")
+
+#Krishna
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD14","CD163" )
+
+#Qian
+C1QC_Qian_2 <- c("LGMN","LILRB4","C1QA","C1QC","TREM2","C1QB")
+SPP1_Qian_2 <- c("PLAUR","SLC11A1","C15orf48","BRI3","IFIT3")
+
+```
+
+
+Plot the pseudobulk composition cartoon
+
+
+```{r fig.height=3, fig.width=9}
+#Krishna test dataset
+data.frame(nonMac=50, Mac25=2482, Mac50=2*2482, Mac75=3*2482,Mac99=4*2482, C1QC_25=2482, C1QC_50=2*2482, C1QC_75=3*2482, C1QC_99=4*2482, SPP1_25=2482, SPP1_50=2*2482, SPP1_75=3*2482,SPP1_99=4*2482) %>% gather(Composition,Cell_num) %>% mutate(Cell_type=c(rep("nonMac",1),rep("Mac",4),rep("C1QC_Phago",4),rep("SPP1_Angio",4)) ) %>% mutate(Other_cells=140775)  %>% mutate(Percent_Mac=round(100*(Cell_num/(Other_cells+Cell_num)),digits=1) ) %>% gather(Cells,Cell_number,-Composition,-Percent_Mac,-Cell_type) %>%  mutate(Composition=factor(Composition,levels=c("nonMac","Mac25","Mac50","Mac75","Mac99","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99")))  %>% mutate(Cells=if_else(Cells=="Other_cells",Cells,Cell_type)) %>% mutate(Cells=factor(Cells,levels=c("Other_cells","Mac","C1QC_Phago","SPP1_Angio"))) %>%
+  ggplot(aes(x=Composition, y=Cell_number, fill=Cells)) +
+  geom_chicklet(position="stack") +
+  geom_label(aes(label=Percent_Mac),vjust = -3) +
+  theme_classic() + 
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) +
+  scale_fill_manual(values=c("grey60","red","orange","dodgerblue"))
+
+#Qian 2 Colorectal
+Qian_2_C1QC <- subset(Qian_2,subset = Abio_Tier2 =="Mph-C1QC") #806
+#Qian_2_nonC1QC <- subset(Qian_2,subset = c("Mph-SPP1","Mph-C1QC"), invert=TRUE) #157357
+
+Qian_2_SPP1 <- subset(Qian_2,subset = Abio_Tier2 =="Mph-SPP1") #716
+#Qian_2_nonSPP1 <- subset(Qian_2,subset = c("Mph-SPP1","Mph-C1QC"), invert=TRUE) 
+
+Qian_2_MAC <- subset(Qian_2,subset = Abio_Tier2 =="Mph-LYVE1") #628
+Qian_2_nonMAC <- subset(Qian_2,subset = Abio_Tier2 %in% c("Mph-SPP1","Mph-C1QC","Mph-LYVE1"), invert=TRUE) # 34290
+
+ran_col_0 = sample(1:628, 50, replace = TRUE)
+ran_col_25 = sample(1:628, 800, replace = TRUE)
+ran_col_50 = sample(1:628, 1600, replace =TRUE)
+ran_col_75 = sample(1:628, 2400, replace = TRUE)
+ran_col_99 = sample(1:628, 3200, replace = TRUE)
+
+data.frame(nonMac=50, Mac25=800, Mac50=2*800, Mac75=3*800,Mac99=4*800, C1QC_25=800, C1QC_50=2*800, C1QC_75=3*800, C1QC_99=4*800, SPP1_25=800, SPP1_50=2*800, SPP1_75=3*800,SPP1_99=4*800) %>% gather(Composition,Cell_num) %>% mutate(Cell_type=c(rep("nonMac",1),rep("Mac",4),rep("C1QC_Phago",4),rep("SPP1_Angio",4)) ) %>% mutate(Other_cells=34290)  %>% mutate(Percent_Mac=round(100*(Cell_num/(Other_cells+Cell_num)),digits=1) ) %>% gather(Cells,Cell_number,-Composition,-Percent_Mac,-Cell_type) %>%  mutate(Composition=factor(Composition,levels=c("nonMac","Mac25","Mac50","Mac75","Mac99","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99")))  %>% mutate(Cells=if_else(Cells=="Other_cells",Cells,Cell_type)) %>% mutate(Cells=factor(Cells,levels=c("Other_cells","Mac","C1QC_Phago","SPP1_Angio"))) %>%
+  ggplot(aes(x=Composition, y=Cell_number, fill=Cells)) +
+  geom_chicklet(position="stack") +
+  geom_label(aes(label=Percent_Mac),vjust = -3) +
+  theme_classic() + 
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) +
+  scale_fill_manual(values=c("grey60","red","orange","dodgerblue"))
+
+# Qian 4, Breast cancer
+Qian_4$Abio_Tier2 %>% unique
+Qian_4_C1QC <- subset(Qian_4,subset = Abio_Tier2 =="Mph-C1QC") # 1183
+#Qian_4_nonC1QC <- subset(Qian_4,subset = c("Mph-SPP1","Mph-C1QC"), invert=TRUE) #157357
+
+Qian_4_SPP1 <- subset(Qian_4,subset = Abio_Tier2 =="Mph-SPP1") #701
+#Qian_4_nonSPP1 <- subset(Qian_4,subset = c("Mph-SPP1","Mph-C1QC"), invert=TRUE) 
+
+#Qian_4_MAC <- subset(Qian_4,subset = Abio_Tier2 =="Mph-MKI67") #83
+Qian_4_nonMAC <- subset(Qian_4,subset = Abio_Tier2 %in% c("Mph-SPP1","Mph-C1QC","Mph-MKI67"), invert=TRUE) # 34728
+
+#C1QC
+ran_col_0 = sample(1:1183, 50, replace = TRUE)
+ran_col_25 = sample(1:1183, 800, replace = TRUE)
+ran_col_50 = sample(1:1183, 1600, replace = TRUE)
+ran_col_75 = sample(1:1183, 2400, replace = TRUE)
+ran_col_99 = sample(1:1183, 3200, replace = TRUE)
+
+data.frame(nonMac=50, C1QC_25=800, C1QC_50=2*800, C1QC_75=3*800, C1QC_99=4*800, SPP1_25=800, SPP1_50=2*800, SPP1_75=3*800,SPP1_99=4*800) %>% gather(Composition,Cell_num) %>% mutate(Cell_type=c(rep("nonMac",1),rep("C1QC_Phago",4),rep("SPP1_Angio",4)) ) %>% mutate(Other_cells=34728)  %>% mutate(Percent_Mac=round(100*(Cell_num/(Other_cells+Cell_num)),digits=1) ) %>% gather(Cells,Cell_number,-Composition,-Percent_Mac,-Cell_type) %>%  mutate(Composition=factor(Composition,levels=c("nonMac","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99")))  %>% mutate(Cells=if_else(Cells=="Other_cells",Cells,Cell_type)) %>% mutate(Cells=factor(Cells,levels=c("Other_cells","C1QC_Phago","SPP1_Angio"))) %>%
+  ggplot(aes(x=Composition, y=Cell_number, fill=Cells)) +
+  geom_chicklet(position="stack") +
+  geom_label(aes(label=Percent_Mac),vjust = -3) +
+  theme_classic() + 
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) +
+  scale_fill_manual(values=c("grey60","orange","dodgerblue"))
+```
+
+
+Test signatures in Krishna Pseudobulk data
+```{r fig.height=2.2,fig.width=7}
+
+Krishna_C1QC <- subset(Krishna_ccRcc_v3,subset = TAM_anno=="TAM_C1QC") #9926
+Krishna_nonC1QC <- subset(Krishna_ccRcc_v3,subset = TAM_anno=="TAM_C1QC", invert=TRUE) #157357
+
+Krishna_SPP1 <- subset(Krishna_ccRcc_v3,subset = TAM_anno=="TAM_SPP1") #2226
+Krishna_nonSPP1 <- subset(Krishna_ccRcc_v3,subset = TAM_anno=="TAM_SPP1", invert=TRUE) 
+
+Krishna_MAC <- subset(Krishna_ccRcc_v3,subset = cluster %in% c(18)) #2797
+Krishna_nonMAC <- subset(Krishna_ccRcc_v3,subset = cluster %in% c(1,12,13,18,33,34), invert=TRUE) #140775
+
+#MAC
+ran_col_0 = sample(1:2797, 50, replace = TRUE)
+ran_col_25 = sample(1:2797, 2482, replace = TRUE)
+ran_col_50 = sample(1:2797, 4963, replace =TRUE)
+ran_col_75 = sample(1:2797, 7445, replace = TRUE)
+ran_col_99 = sample(1:2796, 9926, replace = TRUE)
+
+MAC_5 <- Krishna_MAC@assays$RNA@counts[,ran_col_0]
+MAC_25 <- Krishna_MAC@assays$RNA@counts[,ran_col_25]
+MAC_50 <- Krishna_MAC@assays$RNA@counts[,ran_col_50]
+MAC_75 <-Krishna_MAC@assays$RNA@counts[,ran_col_75]
+MAC_99 <-Krishna_MAC@assays$RNA@counts[,ran_col_99]
+dim(MAC_75)
+#C1QC
+ran_col_0 = sample(1:9926, 50, replace = FALSE)
+ran_col_25 = sample(1:9926, 2482, replace = FALSE)
+ran_col_50 = sample(1:9926, 4963, replace = FALSE)
+ran_col_75 = sample(1:9926, 7445, replace = FALSE)
+ran_col_99 = sample(1:9926, 9926, replace = FALSE)
+
+C1QC_5 <- Krishna_C1QC@assays$RNA@counts[,ran_col_0]
+C1QC_25 <- Krishna_C1QC@assays$RNA@counts[,ran_col_25]
+C1QC_50 <- Krishna_C1QC@assays$RNA@counts[,ran_col_50]
+C1QC_75 <-Krishna_C1QC@assays$RNA@counts[,ran_col_75]
+C1QC_99 <-Krishna_C1QC@assays$RNA@counts[,ran_col_99]
+
+#SPP1
+# contains only 2226 cells, so make replicates of this instead of subsets
+
+nonMAC_pBulk <- data.frame(nonMAC=rowSums(Krishna_nonMAC@assays$RNA@counts) )
+
+pBulk_25MAC <- data.frame(Mac25=rowSums(Krishna_nonMAC@assays$RNA@counts) + rowSums(MAC_25) )
+pBulk_50MAC <- data.frame(Mac50=rowSums(Krishna_nonMAC@assays$RNA@counts) + rowSums(MAC_50) )
+pBulk_75MAC <- data.frame(Mac75=rowSums(Krishna_nonMAC@assays$RNA@counts) + rowSums(MAC_75) )
+pBulk_99MAC <- data.frame(Mac99=rowSums(Krishna_nonMAC@assays$RNA@counts) + rowSums(MAC_99) ) 
+
+#pBulk_0C1QC <- data.frame(noC1QC=rowSums(Krishna_nonMAC@assays$RNA@counts)+ rowSums(C1QC_5))
+pBulk_25C1QC <- data.frame(C1QC_25=rowSums(Krishna_nonMAC@assays$RNA@counts) + rowSums(C1QC_25) )
+pBulk_50C1QC <- data.frame(C1QC_50=rowSums(Krishna_nonMAC@assays$RNA@counts) + rowSums(C1QC_50) )
+pBulk_75C1QC <- data.frame(C1QC_75=rowSums(Krishna_nonMAC@assays$RNA@counts) + rowSums(C1QC_75) )
+pBulk_99C1QC <- data.frame(C1QC_99=rowSums(Krishna_nonMAC@assays$RNA@counts) + rowSums(C1QC_99)) 
+
+
+pBulk_25SPP1 <- data.frame(SPP1_25=rowSums(Krishna_nonMAC@assays$RNA@counts) + 1*rowSums(Krishna_SPP1@assays$RNA@counts) )
+pBulk_50SPP1 <- data.frame(SPP1_50=rowSums(Krishna_nonMAC@assays$RNA@counts) + 2*rowSums(Krishna_SPP1@assays$RNA@counts)) 
+pBulk_75SPP1 <- data.frame(SPP1_75=rowSums(Krishna_nonMAC@assays$RNA@counts) + 3*rowSums(Krishna_SPP1@assays$RNA@counts) ) 
+pBulk_99SPP1 <- data.frame(SPP1_99=rowSums(Krishna_nonMAC@assays$RNA@counts) + 4*rowSums(Krishna_SPP1@assays$RNA@counts) ) 
+
+#Mac_test_Krishna <- cbind(nonMAC_pBulk,pBulk_25MAC,pBulk_50MAC,pBulk_75MAC,pBulk_99MAC,pBulk_25C1QC,pBulk_50C1QC,pBulk_75C1QC,pBulk_25SPP1,pBulk_50SPP1,pBulk_75SPP1,pBulk_25Mast,pBulk_50Mast,pBulk_75Mast) # ,CD8_Trm_pBulk
+
+Mac_test_Krishna <- cbind(nonMAC_pBulk,pBulk_25MAC,pBulk_50MAC,pBulk_75MAC,pBulk_99MAC,pBulk_25C1QC,pBulk_50C1QC,pBulk_75C1QC,pBulk_99C1QC,pBulk_25SPP1,pBulk_50SPP1,pBulk_75SPP1,pBulk_99SPP1) 
+
+library(limma)
+Mac_test_Krishna_norm <- limma::normalizeBetweenArrays(Mac_test_Krishna)
+save(Mac_test_Krishna_norm,file="/scratch/mxu4/Krishna_TAM_SPP1_Pseudobulk_01182024.rdata")
+save(Mac_test_Krishna_norm_z,file="/scratch/mxu4/Krishna_TAM_SPP1_Pseudobulk_z_01182024.rdata")
+load(file="/scratch/mxu4/Krishna_TAM_SPP1_Pseudobulk_z_01182024.rdata")
+
+mx_zscore <- function(i) {
+  require(dplyr)
+  denom <- ifelse(sd(i,na.rm=T) >= 0.1,sd(i,na.rm=T),0.1)
+  result <- (i-mean(i,na.rm=T)) / denom
+}
+
+Mac_test_Krishna_norm_z <-  apply(Mac_test_Krishna_norm %>% as.matrix,1,mx_zscore) %>% t %>% data.frame 
+
+TAM_C1QC <- c("APOE","C1QA","C1QC","TREM2","C1QB")
+Phagocytosis <- c("MRC1","CD163","MERTK","C1QB")
+TAM_C1QC_Phago <- unique(c(TAM_C1QC,Phagocytosis))
+
+TAM_SPP1 <- c("SPP1","PPARG","ADM","MARCO")
+Angiogenesis <- c("VEGFA","VCAN","CXCL8","ANGPTL4")
+TAM_SPP1_Angio <- unique(c(TAM_SPP1,Angiogenesis))
+
+Cheng_Angio <- c("CCND2","CCNE1","CD44","CXCR4","E2F3","EDN1","EZH2","FGF18","FGFR1","FYN","HEY1","ITGAV","JAG1","JAG2","MMP9","NOTCH1","PDGFA","PTK2","SPP1","STC1","TNFAIP6","TYMP","VAV2","VCAN","VEGFA")
+
+Mast_Sig <- c("KIT","TPSAB1","CPA3","TPSB2")
+Mac_Sig <- c("CD68","MARCO","APOE","CSF1R")
+
+#Qian
+C1QC_Qian_2 <- c("LGMN","LILRB4","C1QA","C1QC","TREM2","C1QB")
+SPP1_Qian_2 <- c("PLAUR","SLC11A1","C15orf48","BRI3","IFIT3")
+
+
+Mac_test_Krishna_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% TAM_C1QC_Phago ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  geom_point(size=3, pch=15) +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+  
+Mac_test_Krishna_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% TAM_SPP1_Angio ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Krishna_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% Mac_Sig ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+
+############# New
+
+SPP1_Qian <- c("PLIN2","PLAUR","SPP1","SLC11A1","C15orf48","BRI3","FBP1","IFIT3","ABCA1","GPNMB")
+C1QC_Qian <- c("LGMN","MFSD1","DAB2","LILRB4","CD163","MAFB","C1QA","C1QC","TREM2","C1QB")
+
+#SPP1 this works pretty well!
+Mac_test_Krishna_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% SPP1_Qian_2 ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Krishna_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% C1QC_Qian_2 ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+
+#Krishna derived signatures
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+Mac_test_Krishna_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% C1QC_markers ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Krishna_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% SPP1_hand_picked) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+```
+
+Test on Qian et al 
+
+No_523_1 = Lung
+No_523_2 = Colorectal  Testing 
+No_523_3 = Ovary # no C1QC cells
+No_523_4 = Breast # has SPP1 and C1QC Testing
+```{r}
+Qian_1 <- readRDS(file="/scratch/oncology_scRNA/Abio/No_523_1_Annotation.rds")
+Qian_2 <- readRDS(file="/scratch/oncology_scRNA/Abio/No_523_2_Annotation.rds")
+Qian_3 <- readRDS(file="/scratch/oncology_scRNA/Abio/No_523_3_Annotation.rds")
+Qian_4 <- readRDS(file="/scratch/oncology_scRNA/Abio/No_523_4_Annotation.rds")
+
+Qian_1$`Cell Type (Abio Internal Tier 1)` %>% unique # very broad
+Qian_2$`Cell Type (Abio Internal Tier 2)` %>% unique # Mph-SPP1  Mph-C1QC
+Qian_1$`Cell Type (Author)` %>% unique # also very broad
+
+Qian_1 <- SetIdent(Qian_1, value=Qian_1$`Cell Type (Abio Internal Tier 2)`)
+Qian_2 <- SetIdent(Qian_2, value=Qian_2$`Cell Type (Abio Internal Tier 2)`)
+Qian_3 <- SetIdent(Qian_3, value=Qian_3$`Cell Type (Abio Internal Tier 2)`)
+Qian_4 <- SetIdent(Qian_4, value=Qian_4$`Cell Type (Abio Internal Tier 2)`)
+
+Qian_2[["Abio_Tier2"]] <- Qian_2@meta.data$`Cell Type (Abio Internal Tier 2)`
+Qian_4[["Abio_Tier2"]] <- Qian_4@meta.data$`Cell Type (Abio Internal Tier 2)`
+```
+
+
+Colorectal Qian_2
+
+```{r}
+Qian_2_C1QC <- subset(Qian_2,subset = Abio_Tier2 =="Mph-C1QC") #806
+#Qian_2_nonC1QC <- subset(Qian_2,subset = c("Mph-SPP1","Mph-C1QC"), invert=TRUE) #157357
+
+Qian_2_SPP1 <- subset(Qian_2,subset = Abio_Tier2 =="Mph-SPP1") #716
+#Qian_2_nonSPP1 <- subset(Qian_2,subset = c("Mph-SPP1","Mph-C1QC"), invert=TRUE) 
+
+Qian_2_MAC <- subset(Qian_2,subset = Abio_Tier2 =="Mph-LYVE1") #628
+Qian_2_nonMAC <- subset(Qian_2,subset = Abio_Tier2 %in% c("Mph-SPP1","Mph-C1QC","Mph-LYVE1"), invert=TRUE) # 34290
+
+#Use the same cell numbers as Trm, otherwise it's not a fair comparison
+#MAC
+ran_col_0 = sample(1:628, 50, replace = TRUE)
+ran_col_25 = sample(1:628, 800, replace = TRUE)
+ran_col_50 = sample(1:628, 1600, replace =TRUE)
+ran_col_75 = sample(1:628, 2400, replace = TRUE)
+ran_col_99 = sample(1:628, 3200, replace = TRUE)
+
+MAC_5 <- Qian_2_MAC@assays$RNA@counts[,ran_col_0]
+MAC_25 <- Qian_2_MAC@assays$RNA@counts[,ran_col_25]
+MAC_50 <- Qian_2_MAC@assays$RNA@counts[,ran_col_50]
+MAC_75 <-Qian_2_MAC@assays$RNA@counts[,ran_col_75]
+MAC_99 <-Qian_2_MAC@assays$RNA@counts[,ran_col_99]
+dim(MAC_75)
+#C1QC
+ran_col_0 = sample(1:806, 50, replace = TRUE)
+ran_col_25 = sample(1:806, 800, replace = TRUE)
+ran_col_50 = sample(1:806, 1600, replace = TRUE)
+ran_col_75 = sample(1:806, 2400, replace = TRUE)
+ran_col_99 = sample(1:806, 3200, replace = TRUE)
+
+C1QC_5 <- Qian_2_C1QC@assays$RNA@counts[,ran_col_0]
+C1QC_25 <- Qian_2_C1QC@assays$RNA@counts[,ran_col_25]
+C1QC_50 <- Qian_2_C1QC@assays$RNA@counts[,ran_col_50]
+C1QC_75 <-Qian_2_C1QC@assays$RNA@counts[,ran_col_75]
+C1QC_99 <-Qian_2_C1QC@assays$RNA@counts[,ran_col_99]
+
+#SPP1
+ran_col_0 = sample(1:716, 50, replace = TRUE)
+ran_col_25 = sample(1:716, 800, replace = TRUE)
+ran_col_50 = sample(1:716, 1600, replace = TRUE)
+ran_col_75 = sample(1:716, 2400, replace = TRUE)
+ran_col_99 = sample(1:716, 3200, replace = TRUE)
+
+SPP1_5 <- Qian_2_SPP1@assays$RNA@counts[,ran_col_0]
+SPP1_25 <- Qian_2_SPP1@assays$RNA@counts[,ran_col_25]
+SPP1_50 <- Qian_2_SPP1@assays$RNA@counts[,ran_col_50]
+SPP1_75 <-Qian_2_SPP1@assays$RNA@counts[,ran_col_75]
+SPP1_99 <-Qian_2_SPP1@assays$RNA@counts[,ran_col_99]
+
+nonMAC_pBulk <- data.frame(nonMAC=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(MAC_5) )
+pBulk_25MAC <- data.frame(Mac25=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(MAC_25) )
+pBulk_50MAC <- data.frame(Mac50=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(MAC_50) )
+pBulk_75MAC <- data.frame(Mac75=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(MAC_75) )
+pBulk_99MAC <- data.frame(Mac99=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(MAC_99) ) 
+
+#pBulk_0C1QC <- data.frame(noC1QC=rowSums(Qian_2_nonMAC@assays$RNA@counts)+ rowSums(C1QC_5))
+pBulk_25C1QC <- data.frame(C1QC_25=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(C1QC_25) )
+pBulk_50C1QC <- data.frame(C1QC_50=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(C1QC_50) )
+pBulk_75C1QC <- data.frame(C1QC_75=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(C1QC_75) )
+pBulk_99C1QC <- data.frame(C1QC_99=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(C1QC_99)) 
+
+
+pBulk_25SPP1 <- data.frame(SPP1_25=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(SPP1_25) )
+pBulk_50SPP1 <- data.frame(SPP1_50=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(SPP1_50) )
+pBulk_75SPP1 <- data.frame(SPP1_75=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(SPP1_75) )
+pBulk_99SPP1 <- data.frame(SPP1_99=rowSums(Qian_2_nonMAC@assays$RNA@counts) + rowSums(SPP1_99) )
+```
+
+Plot for Qian_2
+```{r fig.height=2.2, fig.width=7}
+Mac_test_Qian_2 <- cbind(nonMAC_pBulk,pBulk_25MAC,pBulk_50MAC,pBulk_75MAC,pBulk_99MAC,pBulk_25C1QC,pBulk_50C1QC,pBulk_75C1QC,pBulk_99C1QC,pBulk_25SPP1,pBulk_50SPP1,pBulk_75SPP1,pBulk_99SPP1) 
+
+library(limma)
+Mac_test_Qian_2_norm <- limma::normalizeBetweenArrays(Mac_test_Qian_2)
+save(Mac_test_Qian_2_norm,file="/scratch/mxu4/Qian_2_TAM_SPP1_Pseudobulk_01182024.rdata")
+save(Mac_test_Qian_2_norm_z,file="/scratch/mxu4/Qian_2_TAM_SPP1_Pseudobulk_z_01182024.rdata")
+
+mx_zscore <- function(i) {
+  require(dplyr)
+  denom <- ifelse(sd(i,na.rm=T) >= 0.1,sd(i,na.rm=T),0.1)
+  result <- (i-mean(i,na.rm=T)) / denom
+}
+
+Mac_test_Qian_2_norm_z <-  apply(Mac_test_Qian_2_norm %>% as.matrix,1,mx_zscore) %>% t %>% data.frame 
+
+Mac_test_Qian_2_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% TAM_C1QC_Phago ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  geom_point(size=3, pch=15) +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+  
+Mac_test_Qian_2_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% TAM_SPP1_Angio ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,2) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+#Krishna derived signatures
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+Mac_test_Qian_2_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% C1QC_markers ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Qian_2_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% SPP1_hand_picked) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Qian_2_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% SPP1_Qian ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Qian_2_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% C1QC_Qian ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+```
+
+Breast Qian_4
+
+This dataset has very few Mac cells that are not SPP1 or C1QC, so exclude
+
+```{r}
+Qian_4$Abio_Tier2 %>% unique
+Qian_4_C1QC <- subset(Qian_4,subset = Abio_Tier2 =="Mph-C1QC") # 1183
+#Qian_4_nonC1QC <- subset(Qian_4,subset = c("Mph-SPP1","Mph-C1QC"), invert=TRUE) #157357
+
+Qian_4_SPP1 <- subset(Qian_4,subset = Abio_Tier2 =="Mph-SPP1") #701
+#Qian_4_nonSPP1 <- subset(Qian_4,subset = c("Mph-SPP1","Mph-C1QC"), invert=TRUE) 
+
+#Qian_4_MAC <- subset(Qian_4,subset = Abio_Tier2 =="Mph-MKI67") #83
+Qian_4_nonMAC <- subset(Qian_4,subset = Abio_Tier2 %in% c("Mph-SPP1","Mph-C1QC","Mph-MKI67"), invert=TRUE) # 34728
+
+#C1QC
+ran_col_0 = sample(1:1183, 50, replace = TRUE)
+ran_col_25 = sample(1:1183, 800, replace = TRUE)
+ran_col_50 = sample(1:1183, 1600, replace = TRUE)
+ran_col_75 = sample(1:1183, 2400, replace = TRUE)
+ran_col_99 = sample(1:1183, 3200, replace = TRUE)
+
+C1QC_5 <- Qian_4_C1QC@assays$RNA@counts[,ran_col_0]
+C1QC_25 <- Qian_4_C1QC@assays$RNA@counts[,ran_col_25]
+C1QC_50 <- Qian_4_C1QC@assays$RNA@counts[,ran_col_50]
+C1QC_75 <-Qian_4_C1QC@assays$RNA@counts[,ran_col_75]
+C1QC_99 <-Qian_4_C1QC@assays$RNA@counts[,ran_col_99]
+
+#SPP1
+ran_col_0 = sample(1:701, 50, replace = TRUE)
+ran_col_25 = sample(1:701, 800, replace = TRUE)
+ran_col_50 = sample(1:701, 1600, replace = TRUE)
+ran_col_75 = sample(1:701, 2400, replace = TRUE)
+ran_col_99 = sample(1:701, 3200, replace = TRUE)
+
+SPP1_5 <- Qian_4_SPP1@assays$RNA@counts[,ran_col_0]
+SPP1_25 <- Qian_4_SPP1@assays$RNA@counts[,ran_col_25]
+SPP1_50 <- Qian_4_SPP1@assays$RNA@counts[,ran_col_50]
+SPP1_75 <-Qian_4_SPP1@assays$RNA@counts[,ran_col_75]
+SPP1_99 <-Qian_4_SPP1@assays$RNA@counts[,ran_col_99]
+
+#pBulk_0C1QC <- data.frame(noC1QC=rowSums(Qian_4_nonMAC@assays$RNA@counts)+ rowSums(C1QC_5))
+pBulk_25C1QC <- data.frame(C1QC_25=rowSums(Qian_4_nonMAC@assays$RNA@counts) + rowSums(C1QC_25) )
+pBulk_50C1QC <- data.frame(C1QC_50=rowSums(Qian_4_nonMAC@assays$RNA@counts) + rowSums(C1QC_50) )
+pBulk_75C1QC <- data.frame(C1QC_75=rowSums(Qian_4_nonMAC@assays$RNA@counts) + rowSums(C1QC_75) )
+pBulk_99C1QC <- data.frame(C1QC_99=rowSums(Qian_4_nonMAC@assays$RNA@counts) + rowSums(C1QC_99)) 
+
+
+pBulk_25SPP1 <- data.frame(SPP1_25=rowSums(Qian_4_nonMAC@assays$RNA@counts) + rowSums(SPP1_25) )
+pBulk_50SPP1 <- data.frame(SPP1_50=rowSums(Qian_4_nonMAC@assays$RNA@counts) + rowSums(SPP1_50) ) 
+pBulk_75SPP1 <- data.frame(SPP1_75=rowSums(Qian_4_nonMAC@assays$RNA@counts) + rowSums(SPP1_75) ) 
+pBulk_99SPP1 <- data.frame(SPP1_99=rowSums(Qian_4_nonMAC@assays$RNA@counts) + rowSums(SPP1_99) )
+```
+
+Plot for Qian_4
+```{r fig.height=2.2, fig.width=7}
+Mac_test_Qian_4 <- cbind(nonMAC_pBulk,pBulk_25C1QC,pBulk_50C1QC,pBulk_75C1QC,pBulk_99C1QC,pBulk_25SPP1,pBulk_50SPP1,pBulk_75SPP1,pBulk_99SPP1) 
+
+library(limma)
+Mac_test_Qian_4_norm <- limma::normalizeBetweenArrays(Mac_test_Qian_4)
+save(Mac_test_Qian_4_norm,file="/scratch/mxu4/Qian_4_TAM_SPP1_Pseudobulk_01182024.rdata")
+save(Mac_test_Qian_4_norm_z,file="/scratch/mxu4/Qian_4_TAM_SPP1_Pseudobulk_z_01182024.rdata")
+
+mx_zscore <- function(i) {
+  require(dplyr)
+  denom <- ifelse(sd(i,na.rm=T) >= 0.1,sd(i,na.rm=T),0.1)
+  result <- (i-mean(i,na.rm=T)) / denom
+}
+
+Mac_test_Qian_4_norm_z <-  apply(Mac_test_Qian_4_norm %>% as.matrix,1,mx_zscore) %>% t %>% data.frame 
+
+Mac_test_Qian_4_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% TAM_C1QC_Phago ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  geom_point(size=3, pch=15) +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+  
+Mac_test_Qian_4_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% TAM_SPP1_Angio ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+#Krishna derived signatures
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+Mac_test_Qian_4_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% C1QC_markers ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Qian_4_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% SPP1_hand_picked) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Qian_4_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% SPP1_Qian ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Mac_test_Qian_4_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% C1QC_Qian ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+```
+
+
+Plot the pseudobulk composition cartoon
+
+
+```{r fig.height=3, fig.width=9}
+data.frame(nonMac=500, Mac25=6600, Mac50=13000, Mac75=19777,Mac99=26370, C1QC_25=6600, C1QC_50=13000, C1QC_75=19256, C1QC_99=19256, SPP1_25=3*2226, SPP1_50=6*2226, SPP1_75=9*2226,SPP1_99=9*2226) %>% gather(Composition,Mac) %>% mutate(Cell_type=c(rep("Mac",5),rep("C1QC_Phago",3),rep("SPP1_Angio",3),rep("Mast",3)) ) %>% mutate(Other_cells=140913)  %>% mutate(Percent_Mac=round(100*(Mac/(140913)),digits=1) ) %>% gather(Cells,Cell_number,-Composition,-Percent_Mac,-Cell_type)  %>% mutate(Composition=factor(Composition,levels=c("nonMac","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","Mast_25","Mast_50","Mast_75"))) %>% mutate(Cells=if_else(Cells=="Other_cells",Cells,Cell_type))  %>% mutate(Cells=factor(Cells,levels=c("Other_cells","Mac","C1QC_Phago","SPP1_Angio","Mast"))) %>%
+  ggplot(aes(x=Composition, y=Cell_number, fill=Cells)) +
+  geom_chicklet(position="stack") +
+  geom_label(aes(label=Percent_Mac),vjust = -3) +
+  theme_classic() + 
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) +
+  scale_fill_manual(values=c("grey60","red","orange","dodgerblue","dodgerblue3"))
+```
+
+Looked at the Becker dataset No_1691_1, 2, 3, 4 but the dataset did not contain any SPP1 TAM cells. Not useful at all
+The code for this was lost
+
+
+Look at Pelka 2021 Annotated by Abio
+34450029_1 from Abio_Batch2
+
+Apparently some files are too big to directly load, still have to download
+Error in api$data_lake$download_file_raw("file-410fad64-f0c6-4f57-85ed-e7b4dab33ef7") : 
+  File size for file 34450029_1_Annotation.rds (file-410fad64-f0c6-4f57-85ed-e7b4dab33ef7) exceeds max_size limit of 1e+09 bytes for downloading into memory.
+  
+```{r}
+#too big to directly load
+Pelka_2021_CRC <- readRDS(gzcon(rawConnection(api$data_lake$download_file_raw("file-410fad64-f0c6-4f57-85ed-e7b4dab33ef7"))))
+
+#download to scratch and delete later
+study <- "Gilead Public scRNA-Seq Data"
+downloadObjFromDataLake(study=study, local_path="/scratch/oncology_scRNA", datalake_path="Batch2_Abio_Data/Batch2/34450029_1/34450029_1_Annotation.rds")
+# it throws an error but the file is there???? I forgot I already transfered it
+```
+
+
+Pelka
+
+```{r}
+Pelka_CRC <- readRDS(file="/scratch/oncology_scRNA/34450029_1_Annotation.rds")
+Pelka_CRC[["Tier2"]] <- Pelka_CRC$`Cell Type (Abio Internal Tier 2)`
+
+Pelka_CRC$`Cell Type (Abio Internal Tier 2)` %>% unique
+Pelka_CRC$`Cell Type (Author)` %>% unique # too broad
+Pelka_CRC$meta_PID %>% unique
+Pelka_CRC$meta_subFull %>% unique
+Pelka_CRC$meta_clMidwayPr %>% unique # Macro
+
+FetchData(Pelka_CRC, vars=c("meta_clMidwayPr","meta_subFull","meta_PID","Tier2")) %>% filter(meta_clMidwayPr=="Macro") %>% select(Tier2) %>% table
+```
+
+FROM THE original paper, there are definitely groups with Angio marker Macs
+```{r fig.height=24, fig.width=24}
+Pelka_CRC <- SetIdent(Pelka_CRC,value=Pelka_CRC$`Cell Type (Abio Internal Tier 2)`)
+
+Dotplot(Pelka_CRC,features=c("SPP1","MARCO","VEGFA","VCAN","PLAUR"))
+FeaturePlot(Pelka_CRC,features=c("SPP1","MARCO","VEGFA","VCAN","PLAUR","C1QA","C1QB","C1QC","TREM2","CD163"),order=T)
+FeaturePlot(Pelka_CRC,features=c("C1QA","C1QB","C1QC","TREM2","CD163"))
+```
+
+DimPlot
+```{r fig.height=12, fig.width=16}
+DimPlot(Pelka_CRC,label=T) + NoLegend()
+```
+
+```{r}
+Misc(Pelka_CRC)$celltypes
+```
+Zhang 2020 CRC
+```{r}
+
+Zhang_CRC_2020_smart <- readRDS(file="/scratch/oncology_scRNA/GSE146771_smartseq_seurat_1644279277943.rds")
+
+Zhang_CRC_2020_smart_update <- UpdateSeuratObject(Zhang_CRC_2020_smart)
+
+Zhang_CRC_2020_smart_update[["Cell_subclass"]] <- Zhang_CRC_2020_smart_update$`Cell sub-class`
+
+Zhang_CRC_2020_smart_update$`Cell sub-class` %>% unique # "hM13_TAM-SPP1" "hM12_TAM-C1QC" "hM08_Macro-NLRP3"
+
+Zhang_CRC_2020_smart_update$`Source tissue` %>% unique # Tumor Normal Peripheral blood
+```
+
+Plot the pseudobulk composition cartoon for ZHang 2020 CRC
+
+
+```{r fig.height=3, fig.width=8}
+install.packages("ggbreak")
+library(ggbreak)
+
+data.frame(nonMac=2, Mac25=100, Mac50=150, Mac75=200,Mac99=250, C1QC_25=100, C1QC_50=150, C1QC_75=200, C1QC_99=250, SPP1_25=100, SPP1_50=150, SPP1_75=200,SPP1_99=250) %>% gather(Composition,Cell_num) %>% mutate(Cell_type=c(rep("nonMac",1),rep("Mac",4),rep("C1QC_Phago",4),rep("SPP1_Angio",4)) ) %>% mutate(Other_cells=9940)  %>% mutate(Percent_Mac=round(100*(Cell_num/(Other_cells+Cell_num)),digits=1) ) %>% gather(Cells,Cell_number,-Composition,-Percent_Mac,-Cell_type) %>%  mutate(Composition=factor(Composition,levels=c("nonMac","Mac25","Mac50","Mac75","Mac99","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99")))  %>% mutate(Cells=if_else(Cells=="Other_cells",Cells,Cell_type)) %>% mutate(Cells=factor(Cells,levels=c("Other_cells","Mac","C1QC_Phago","SPP1_Angio"))) %>%
+  ggplot(aes(x=Composition, y=Cell_number, fill=Cells)) +
+  geom_chicklet(position="stack") +
+  theme_classic() + 
+  theme(axis.text.x=element_text(angle=40,size=13,hjust=1),axis.text.y=element_text(size=13),axis.title.y=element_text(size=13,hjust=0.7,vjust=-2),axis.title.x=element_text(size=0)) +
+  scale_y_break(c(300,9000), scale=2) +
+  geom_label(aes(label=Percent_Mac),vjust = 3, size=5,fill="white") +
+  scale_fill_manual(values=c("grey60","red","orange","dodgerblue")) +
+  NoLegend()
+```
+
+Colorectal Zhang 2020
+
+```{r}
+Zhang_CRC_2020_C1QC <- subset(Zhang_CRC_2020_smart_update,subset = Cell_subclass =="hM12_TAM-C1QC") #293
+
+Zhang_CRC_2020_SPP1 <- subset(Zhang_CRC_2020_smart_update,subset = Cell_subclass =="hM13_TAM-SPP1") #58
+
+Zhang_CRC_2020_NRLP3 <- subset(Zhang_CRC_2020_smart_update,subset = Cell_subclass =="hM08_Macro-NLRP3") #177
+
+Zhang_CRC_2020_nonMAC <- subset(Zhang_CRC_2020_smart_update,subset = Cell_subclass %in% c("hM12_TAM-C1QC","hM13_TAM-SPP1","hM08_Macro-NLRP3"), invert=TRUE) # 9940
+
+#Use the same cell numbers as Trm, otherwise it's not a fair comparison
+#MAC NRLP3
+ran_col_0 = sample(1:177, 50, replace = TRUE)
+ran_col_25 = sample(1:177, 100, replace = TRUE)
+ran_col_50 = sample(1:177, 150, replace =TRUE)
+ran_col_75 = sample(1:177, 200, replace = TRUE)
+ran_col_99 = sample(1:177, 250, replace = TRUE)
+
+MAC_5 <- Zhang_CRC_2020_NRLP3@assays$RNA@counts[,ran_col_0]
+MAC_25 <- Zhang_CRC_2020_NRLP3@assays$RNA@counts[,ran_col_25]
+MAC_50 <- Zhang_CRC_2020_NRLP3@assays$RNA@counts[,ran_col_50]
+MAC_75 <-Zhang_CRC_2020_NRLP3@assays$RNA@counts[,ran_col_75]
+MAC_99 <-Zhang_CRC_2020_NRLP3@assays$RNA@counts[,ran_col_99]
+#dim(MAC_75)
+#C1QC
+ran_col_0 = sample(1:293, 50, replace = TRUE)
+ran_col_25 = sample(1:293, 100, replace = TRUE)
+ran_col_50 = sample(1:293, 150, replace = TRUE)
+ran_col_75 = sample(1:293, 200, replace = TRUE)
+ran_col_99 = sample(1:293, 250, replace = TRUE)
+
+C1QC_5 <- Zhang_CRC_2020_C1QC@assays$RNA@counts[,ran_col_0]
+C1QC_25 <- Zhang_CRC_2020_C1QC@assays$RNA@counts[,ran_col_25]
+C1QC_50 <- Zhang_CRC_2020_C1QC@assays$RNA@counts[,ran_col_50]
+C1QC_75 <- Zhang_CRC_2020_C1QC@assays$RNA@counts[,ran_col_75]
+C1QC_99 <- Zhang_CRC_2020_C1QC@assays$RNA@counts[,ran_col_99]
+
+#SPP1
+ran_col_0 = sample(1:58, 50, replace = TRUE)
+ran_col_25 = sample(1:58, 100, replace = TRUE)
+ran_col_50 = sample(1:58, 150, replace = TRUE)
+ran_col_75 = sample(1:58, 200, replace = TRUE)
+ran_col_99 = sample(1:58, 250, replace = TRUE)
+
+SPP1_5 <- Zhang_CRC_2020_SPP1@assays$RNA@counts[,ran_col_0]
+SPP1_25 <- Zhang_CRC_2020_SPP1@assays$RNA@counts[,ran_col_25]
+SPP1_50 <- Zhang_CRC_2020_SPP1@assays$RNA@counts[,ran_col_50]
+SPP1_75 <- Zhang_CRC_2020_SPP1@assays$RNA@counts[,ran_col_75]
+SPP1_99 <- Zhang_CRC_2020_SPP1@assays$RNA@counts[,ran_col_99]
+
+nonMAC_pBulk <- data.frame(nonMAC=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) )
+pBulk_25MAC <- data.frame(Mac25=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(MAC_25) )
+pBulk_50MAC <- data.frame(Mac50=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(MAC_50) )
+pBulk_75MAC <- data.frame(Mac75=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(MAC_75) )
+pBulk_99MAC <- data.frame(Mac99=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(MAC_99) ) 
+
+#pBulk_0C1QC <- data.frame(noC1QC=rowSums(Qian_2_nonMAC@assays$RNA@counts)+ rowSums(C1QC_5))
+pBulk_25C1QC <- data.frame(C1QC_25=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(C1QC_25) )
+pBulk_50C1QC <- data.frame(C1QC_50=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(C1QC_50) )
+pBulk_75C1QC <- data.frame(C1QC_75=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(C1QC_75) )
+pBulk_99C1QC <- data.frame(C1QC_99=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(C1QC_99)) 
+
+
+pBulk_25SPP1 <- data.frame(SPP1_25=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(SPP1_25) )
+pBulk_50SPP1 <- data.frame(SPP1_50=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(SPP1_50) )
+pBulk_75SPP1 <- data.frame(SPP1_75=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(SPP1_75) )
+pBulk_99SPP1 <- data.frame(SPP1_99=rowSums(Zhang_CRC_2020_nonMAC@assays$RNA@counts) + rowSums(SPP1_99) )
+```
+
+Plot for Qian_2
+```{r fig.height=2.2, fig.width=7}
+TAM_C1QC <- c("APOE","C1QA","C1QC","TREM2","C1QB")
+Phagocytosis <- c("MRC1","CD163","MERTK","C1QB")
+TAM_C1QC_Phago <- unique(c(TAM_C1QC,Phagocytosis))
+
+TAM_SPP1 <- c("SPP1","PPARG","ADM","MARCO")
+Angiogenesis <- c("VEGFA","VCAN","CXCL8","ANGPTL4")
+TAM_SPP1_Angio <- unique(c(TAM_SPP1,Angiogenesis))
+
+SPP1_Qian <- c("PLIN2","PLAUR","SPP1","SLC11A1","C15orf48","BRI3","FBP1","IFIT3","ABCA1","GPNMB") # WHY is SPP1 in here???? Test all Qian markers on Krishna
+C1QC_Qian <- c("LGMN","MFSD1","DAB2","LILRB4","CD163","MAFB","C1QA","C1QC","TREM2","C1QB")
+#Krishna derived signatures
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+Zhang_CRC_2020_test <- cbind(nonMAC_pBulk,pBulk_25MAC,pBulk_50MAC,pBulk_75MAC,pBulk_99MAC,pBulk_25C1QC,pBulk_50C1QC,pBulk_75C1QC,pBulk_99C1QC,pBulk_25SPP1,pBulk_50SPP1,pBulk_75SPP1,pBulk_99SPP1) 
+
+library(limma)
+Zhang_CRC_2020_test_norm <- limma::normalizeBetweenArrays(Zhang_CRC_2020_test)
+save(Zhang_CRC_2020_test_norm,file="/scratch/mxu4/Zhang_CRC_2020_TAM_SPP1_Pseudobulk_013124.rdata")
+save(Zhang_CRC_2020_test_norm_z,file="/scratch/mxu4/Zhang_CRC_2020_TAM_SPP1_z_Pseudobulk_013124.rdata")
+load(file="/scratch/mxu4/Zhang_CRC_2020_TAM_SPP1_z_Pseudobulk_013124.rdata")
+
+mx_zscore <- function(i) {
+  require(dplyr)
+  denom <- ifelse(sd(i,na.rm=T) >= 0.1,sd(i,na.rm=T),0.1)
+  result <- (i-mean(i,na.rm=T)) / denom
+}
+
+Zhang_CRC_2020_test_norm_z <-  apply(Zhang_CRC_2020_test_norm%>% as.matrix,1,mx_zscore) %>% t %>% data.frame 
+
+Zhang_CRC_2020_test_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% TAM_C1QC_Phago ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  geom_point(size=3, pch=15) +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+  
+Zhang_CRC_2020_test_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% TAM_SPP1_Angio ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99","Mast_25","Mast_50","Mast_75"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+#Krishna derived signatures
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD163" )
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+
+Zhang_CRC_2020_test_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% C1QC_markers ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Zhang_CRC_2020_test_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% SPP1_hand_picked) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2.5,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+Zhang_CRC_2020_test_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% C1QC_Qian_2 ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+
+
+Zhang_CRC_2020_test_norm_z %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% SPP1_Qian_2 ) %>% summarise_if(is.numeric,mean) %>% gather(Composition,Sig_Score) %>% mutate(Composition=factor(Composition,levels=c("nonMAC","Mac25","Mac50","Mac75","Mac99","noC1QC","C1QC_25","C1QC_50","C1QC_75","C1QC_99","SPP1_25","SPP1_50","SPP1_75","SPP1_99"))) %>%
+  ggplot(aes(x=Composition, y=Sig_Score)) +
+  geom_point(size=3, pch=15) +
+  geom_hline(yintercept=1,linetype="dashed",color="red") +
+  geom_hline(yintercept=0,linetype="solid") +
+  theme_bw() +
+  ylim(-2,3) +
+  theme(axis.text.x=element_text(angle=40,size=11,hjust=1)) 
+```
+
+
+##################
+###############
+
+Testing Marker Applications
+
+###############
+##################
+
+Signatures
+
+```{r}
+#original
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+TAM_SPP1_original <- c("SPP1","PPARG","ADM","MARCO","VEGFA","VCAN","CXCL8","ANGPTL4")
+
+#Krishna
+SPP1_hand_picked <- c("PLAUR","CLEC10A","GPR183","CD83","IFI30","IER3","CHMP1B","PTPRE")
+C1QC_markers <- c("C1QC","C1QA","C1QB","APOE","MAFB","APOC1","CD14","CD163" )
+
+#Qian
+C1QC_Qian_2 <- c("LGMN","LILRB4","C1QA","C1QC","TREM2","C1QB")
+SPP1_Qian_2 <- c("PLAUR","SLC11A1","C15orf48","BRI3","IFIT3")
+
+```
+
+TCGA Expression
+
+TCGA expression
+This data has separate values for different sample types!
+ 01A  01B  01C  01R  02A  02B  03A  03B  05A  06A  06B  07A  11A  11B  11C 
+9572  129    4    1   40    6  158   15   11  393    2    1  719   17    1 
+
+11 is adjacent normal
+
+Here: should I take the z-score across all TCGA, or within indications?? Across all TCGA would normalize for indication-wise variation
+
+```{r}
+# Parsed RNAseq data
+load(file="/scratch/mxu4/reference/TCGA/EBPlusPlusAdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp_vst_df_MX.rdata") # RNAseq_vst_df Gene
+RNAseq_vst_df # The patient IDs are in this format: "TCGA.OR.A5J1.01A.11R.A29S.07" I do need to change and shorten it to join
+
+str(RNAseq_vst_df)
+
+my_marker <- TAM_C1QC_original
+my_marker <- TAM_SPP1_original
+my_marker <- C1QC_Qian_2 
+my_marker <- SPP1_Qian_2
+
+TCGA_RNA <- RNAseq_vst_df %>% filter(Gene %in% my_marker) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample.ID") %>% mutate(Sample.ID= str_replace_all(Sample.ID,"\\.","-")) %>% mutate(Sample.ID = substr(Sample.ID,1,16)) %>% mutate(Sample_type= substr(Sample.ID,14,16)) %>% select(Sample.ID,Sample_type,everything()) %>% mutate(Tissue=if_else(grepl("11",Sample_type),"Normal","Tumor")) %>% filter(Tissue=="Tumor") %>% select(-Sample_type,-Tissue) %>% mutate(Sample.ID = substr(Sample.ID,1,12)) %>% group_by(Sample.ID) %>% summarise_all(mean) %>% ungroup() %>% unique %>% mutate(Sample.ID = substr(Sample.ID,1,12))
+#genes are columns, samples are rows
+
+mx_zscore <- function(i) {
+  require(dplyr)
+  denom <- ifelse(sd(i,na.rm=T) >= 0.1,sd(i,na.rm=T),0.1)
+  result <- (i-mean(i,na.rm=T)) / denom
+}
+
+TAM_C1QC_original_z_sig <-  apply(TCGA_RNA %>% tibble::column_to_rownames("Sample.ID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# taking z 
+
+TAM_SPP1_original_z_sig <-  apply(TCGA_RNA %>% tibble::column_to_rownames("Sample.ID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# taking z 
+
+TAM_C1QC_Qian_z_sig <-  apply(TCGA_RNA %>% tibble::column_to_rownames("Sample.ID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# taking z 
+
+TAM_SPP1_Qian_z_sig <-  apply(TCGA_RNA %>% tibble::column_to_rownames("Sample.ID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# taking z 
+
+TCGA_TAM_scores <- rbind(C1QC_orig=TAM_C1QC_original_z_sig,SPP1_orig=TAM_SPP1_original_z_sig,C1QC_Qian=TAM_C1QC_Qian_z_sig,SPP1_Qian=TAM_SPP1_Qian_z_sig) %>% t %>% data.frame %>% tibble::rownames_to_column("TCGA_Participant_Barcode") %>% mutate(TCGA_Participant_Barcode= str_replace_all(TCGA_Participant_Barcode,"\\.","-"))
+
+
+```
+Merge Meta Data
+```{r}
+TCGA_TAM_scores 
+
+#TCGA Metadata
+load(file="/scratch/mxu4/reference/TCGA/TCGA_ImmuneLandscapeOfCancer_Tumors_ImmuneScores.rdata") # TCGA_TMB_IOscore
+TCGA_TMB_IOscore
+
+#Merge meta data with mRNA expression data for plotting
+TCGA_TAM_Sig_meta <- TCGA_TAM_scores %>% left_join(TCGA_TMB_IOscore %>% select(TCGA_Participant_Barcode,TCGA_Study,TCGA_Subtype,OS_Time,OS), by="TCGA_Participant_Barcode") %>% filter(!is.na(TCGA_Study))
+
+save(TCGA_TAM_scores, file="/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_Sig_020124.rdata")
+load("/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_Sig_020124.rdata")
+save(TCGA_TAM_Sig_meta,file="/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_Sig_with_meta_020124.rdata")
+load("/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_Sig_with_meta_020124.rdata")
+save(TCGA_TAM_Sig_meta_bin,file="/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_Sig_with_meta_bin_020124.rdata")
+load("/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_Sig_with_meta_bin_020124.rdata")
+
+#SLC_TCGA_meta %<>% select(my_marker,TCGA_Study,Tissue) %>% gather(Marker,Log2_TPM,-TCGA_Study,-Tissue)
+TCGA_TAM_Sig_meta_bin
+```
+
+Correlate TAM signture with Immune signatures
+
+Calculate CAF scores
+
+```{r}
+library(jsonlite)
+tgfb_myCAF<- fromJSON("/scratch/mxu4/TME_Jamie/CAF/tgfb_myCAF.json")
+ecm_myCAF<- fromJSON("/scratch/mxu4/TME_Jamie/CAF/ecm_myCAF.json")
+ifng_iCAF<- fromJSON("/scratch/mxu4/TME_Jamie/CAF/ifng_iCAF.json")
+il_iCAF<- fromJSON("/scratch/mxu4/TME_Jamie/CAF/il_iCAF.json")
+CAF_sig <- list(tgfb_myCAF=tgfb_myCAF,ecm_myCAF=ecm_myCAF,ifng_iCAF=ifng_iCAF,il_iCAF=il_iCAF)
+save(CAF_sig,file="/scratch/mxu4/TME_Jamie/CAF/human_CAF_sig_Kai.rdata")
+
+my_marker <- tgfb_myCAF
+my_marker <- ecm_myCAF
+my_marker <- ifng_iCAF 
+my_marker <- il_iCAF
+
+TCGA_RNA <- RNAseq_vst_df %>% filter(Gene %in% my_marker) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample.ID") %>% mutate(Sample.ID= str_replace_all(Sample.ID,"\\.","-")) %>% mutate(Sample.ID = substr(Sample.ID,1,16)) %>% mutate(Sample_type= substr(Sample.ID,14,16)) %>% select(Sample.ID,Sample_type,everything()) %>% mutate(Tissue=if_else(grepl("11",Sample_type),"Normal","Tumor")) %>% filter(Tissue=="Tumor") %>% select(-Sample_type,-Tissue) %>% mutate(Sample.ID = substr(Sample.ID,1,12)) %>% group_by(Sample.ID) %>% summarise_all(mean) %>% ungroup() %>% unique %>% mutate(Sample.ID = substr(Sample.ID,1,12))
+#genes are columns, samples are rows
+
+mx_zscore <- function(i) {
+  require(dplyr)
+  denom <- ifelse(sd(i,na.rm=T) >= 0.1,sd(i,na.rm=T),0.1)
+  result <- (i-mean(i,na.rm=T)) / denom
+}
+
+tgfb_myCAF_z_sig <-  apply(TCGA_RNA %>% tibble::column_to_rownames("Sample.ID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)
+
+ecm_myCAF_z_sig <-  apply(TCGA_RNA %>% tibble::column_to_rownames("Sample.ID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)
+
+ifng_iCAF_z_sig <-  apply(TCGA_RNA %>% tibble::column_to_rownames("Sample.ID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)
+
+il_iCAF_z_sig <-  apply(TCGA_RNA %>% tibble::column_to_rownames("Sample.ID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)
+
+CAF_TCGA_Sig <- rbind(tgfb_myCAF=tgfb_myCAF_z_sig,ecm_myCAF=ecm_myCAF_z_sig,ifng_iCAF=ifng_iCAF_z_sig, il_iCAF=il_iCAF_z_sig) %>% t %>% data.frame %>% tibble::rownames_to_column("TCGA_Participant_Barcode") %>% mutate(TCGA_Participant_Barcode= str_replace_all(TCGA_Participant_Barcode,"\\.","-"))
+
+#Merge meta data with mRNA expression data for plotting
+TCGA_TAM_CAF_Sig_meta <- TCGA_TAM_scores %>% left_join(CAF_TCGA_Sig,by="TCGA_Participant_Barcode") %>% left_join(TCGA_TMB_IOscore, by="TCGA_Participant_Barcode") %>% filter(!is.na(TCGA_Study))
+
+save(TCGA_TAM_CAF_Sig_meta,file="/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_CAF_Sig_with_meta_020724.rdata")
+load("/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_CAF_Sig_with_meta_020724.rdata")
+TCGA_TAM_Sig_meta_bin %>% select(TCGA_Participant_Barcode,TAM_groups_Qian)
+```
+
+Cutpoint
+C1QC_orig	0.5164144	7.667167		
+SPP1_Qian	0.2349944	14.912386	
+
+HNSC
+0.533
+0.501
+Plot TAM Bins:
+Original C1QC and New SPP1
+```{r fig.height=16, fig.width=28}
+require(survival)
+library(survminer)
+
+  rescut <- surv_cutpoint(
+  data= TCGA_TAM_Sig_meta %>% filter(TCGA_Study =="HNSC"),
+  time = "OS_Time",
+  event = "OS",
+  variables= c("C1QC_orig","SPP1_Qian"),
+  minprop = 0.1,
+  progressbar = TRUE
+)
+
+  TCGA_TAM_Sig_meta %<>% mutate(TCGA_Study=if_else(TCGA_Study %in% c("READ","COAD"),"COAD_READ",TCGA_Study)) %>% group_by(TCGA_Study) %>% mutate(TAM_groups_orig=case_when(
+  C1QC_orig < 0.533 & SPP1_Qian >= 0.501 ~ "C1QC_Low_SPP1_High",
+  C1QC_orig < 0.533 & SPP1_Qian < 0.501 ~ "C1QC_Low_SPP1_Low",
+  C1QC_orig >= 0.533 & SPP1_Qian >= 0.501 ~ "C1QC_High_SPP1_High",
+  C1QC_orig >= 0.533 & SPP1_Qian < 0.501 ~ "C1QC_High_SPP1_Low"
+    )) %>% mutate(TAM_groups_orig=factor(TAM_groups_orig,levels=c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High"))) %>% data.frame
+  
+ ggsurvplot(
+    fit = survfit(Surv(OS_Time,OS) ~ TAM_groups_orig, data= TCGA_TAM_Sig_meta),
+    xlab = "Months", 
+    ylab = "Overall survival probability",
+    pval=TRUE,
+    facet.by=c("TCGA_Study"), 
+    fontsize=4,
+    risk.table=TRUE ) +
+    scale_colour_manual(values=c("red","pink","dodgerblue","blue"))
+```
+
+
+
+
+
+
+Correlations
+Correlate by Cancer indication using lapply
+```{r fig.height=10, fig.width=9}
+TCGA_TAM_CAF_Sig_meta 
+
+library(purrr)
+library(tidyr)
+library(pheatmap)
+
+#Look for indications with enough n, filter for
+cancer_types <- TCGA_TAM_CAF_Sig_meta %>% select(TCGA_Study) %>% unique %>% pull(TCGA_Study)
+
+#make a function to cycle thru different cancers (7) with sufficient data
+cor_cancer <- function(x) {
+  cor_input <-TCGA_TAM_CAF_Sig_meta %>% select_if(is.numeric) %>% cbind(TCGA_TAM_CAF_Sig_meta %>% select(TCGA_Study)) %>% filter(TCGA_Study == x) %>% select(-TCGA_Study) %>% as.matrix
+  return(rcorr(cor_input))
+}
+cancer_cor_results <- lapply(cancer_types, cor_cancer)
+names(cancer_cor_results) <- cancer_types
+
+#C1QC
+cancer_corr_C1QC_Qian <- cbind.data.frame(lapply(cancer_cor_results,function(j) {j$r %>% data.frame %>% select(C1QC_Qian)}))
+colnames(cancer_corr_C1QC_Qian) <- cancer_types
+cancer_corr_Pval_C1QC_Qian <- cbind.data.frame(lapply(cancer_cor_results,function(j) {j$P %>% data.frame %>% select(C1QC_Qian)}))
+colnames(cancer_corr_Pval_C1QC_Qian) <- cancer_types
+cancer_corr_C1QC_Qian[1:5,1:5]
+
+save(cancer_corr_C1QC_Qian,file="/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_C1QC_CAF_Sig_Corr_020724.rdata")
+load("/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_C1QC_CAF_Sig_Corr_020724.rdata")
+
+#SPP1
+cancer_corr_SPP1_Qian <- cbind.data.frame(lapply(cancer_cor_results,function(j) {j$r %>% data.frame %>% select(SPP1_Qian)}))
+colnames(cancer_corr_SPP1_Qian) <- cancer_types
+cancer_corr_Pval_SPP1_Qian <- cbind.data.frame(lapply(cancer_cor_results,function(j) {j$P %>% data.frame %>% select(SPP1_Qian)}))
+colnames(cancer_corr_Pval_SPP1_Qian) <- cancer_types
+
+save(cancer_corr_SPP1_Qian,file="/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_SPP1_CAF_Sig_Corr_020724.rdata")
+load("/scratch/mxu4/CD47/TAM_SPP1_Signature/TCGA_TAM_SPP1_CAF_Sig_Corr_020724.rdata")
+
+paletteLength <- 50
+myColor <- colorRampPalette(c("lightblue1", "white", "red"))(paletteLength)
+myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+
+myBreaks <- c(seq( -1, 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq( 1/50,1,length.out=floor(paletteLength/2))  ) 
+
+cancer_corr_C1QC_Qian_sig <- ifelse(cancer_corr_Pval_C1QC_Qian  < 0.05, cancer_corr_C1QC_Qian, 0)
+cancer_corr_C1QC_Qian_sig[1:2,1:5]
+
+pheatmap(cancer_corr_C1QC_Qian_sig, color= myColor, breaks=myBreaks, cluster_rows = F, cluster_cols=F)
+
+pheatmap(cancer_corr_SPP1_Qian, color= myColor, breaks=myBreaks,cluster_rows = F, cluster_cols=F)
+```
+
+Plot interesting variables by Bins
+
+```{r fig.height=9, fig.width=14}
+
+TCGA_TAM_CAF_Sig_meta %>% left_join(TCGA_TAM_Sig_meta_bin %>% select(TCGA_Participant_Barcode,TAM_groups_Qian),by="TCGA_Participant_Barcode") %>% filter(TCGA_Study=="HNSC") %>%  select(TAM_groups_Qian,tgfb_myCAF,ecm_myCAF,ifng_iCAF,il_iCAF,TCGA_Study,Leukocyte_Fraction,Stromal_Fraction,Lymphocyte_Infiltration_Signature_Score,`IFN-gamma_Response`,`TGF-beta_Response`,TCR_Shannon,TCR_Richness,Th1_Cells,Macrophages_M1,Macrophages_M2,T_Cells_CD8) %>% gather(Variable,Score,-TAM_groups_Qian,-TCGA_Study) %>% mutate(TAM_groups_Qian=factor(TAM_groups_Qian,levels=c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High"))) %>%
+  ggplot(aes(x=TAM_groups_Qian,y=Score,colour=TAM_groups_Qian)) +
+  facet_wrap(~Variable,scales="free_y") +
+  theme_bw() +
+  geom_quasirandom() +
+  scale_colour_manual(values=c("dodgerblue","grey40","grey60","red")) +
+  theme(axis.text.x=element_text(angle=90,size=14,hjust=1),strip.text=element_text(size=11)) +
+  stat_compare_means(method="wilcox",comparisons = my_comp,vjust=0.6)
+
+my_comp <- list(c("C1QC_High_SPP1_Low","C1QC_Low_SPP1_High"))
+```
+
+PLot Lymphoyte infiltration and CAF 
+```{r fig.height=12, fig.width=16}
+#selected factors
+TCGA_TAM_CAF_Sig_meta %>% left_join(TCGA_TAM_Sig_meta_bin %>% select(TCGA_Participant_Barcode,TAM_groups_Qian),by="TCGA_Participant_Barcode") %>%  select(TAM_groups_Qian,Lymphocyte_Infiltration_Signature_Score,TCGA_Study) %>% mutate(TAM_groups_Qian=factor(TAM_groups_Qian,levels=c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High"))) %>%
+  ggplot(aes(x=TAM_groups_Qian,y=Lymphocyte_Infiltration_Signature_Score,colour=TAM_groups_Qian)) +
+  facet_wrap(~TCGA_Study,scales="free_y") +
+  theme_bw() +
+  geom_quasirandom() +
+  scale_colour_manual(values=c("dodgerblue","grey40","grey60","red")) +
+  stat_compare_means(method="wilcox",comparisons = my_comp,vjust=1.5) +
+  stat_summary(fun="median", geom="crossbar",color="grey20") +
+  scale_x_discrete(breaks = c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High"), 
+                     labels = c("C1QC_High\nSPP1_Low","C1QC_High\nSPP1_High","C1QC_Low\nSPP1_Low","C1QC_Low\nSPP1_High")) +
+  #theme(axis.text.x=element_text(angle=90,size=10,hjust=1),strip.text=element_text(size=11)) +
+  NoLegend()
+  
+#selected factors
+TCGA_TAM_CAF_Sig_meta %>% left_join(TCGA_TAM_Sig_meta_bin %>% select(TCGA_Participant_Barcode,TAM_groups_Qian),by="TCGA_Participant_Barcode") %>% filter(TCGA_Study=="HNSC") %>%  select(TAM_groups_Qian,tgfb_myCAF,ecm_myCAF,ifng_iCAF,il_iCAF,TCGA_Study) %>% gather(Variable,Score,-TAM_groups_Qian,-TCGA_Study) %>% mutate(TAM_groups_Qian=factor(TAM_groups_Qian,levels=c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High"))) %>% mutate(Variable=factor(Variable,levels=c("tgfb_myCAF","ecm_myCAF","ifng_iCAF","il_iCAF"))) %>%
+  ggplot(aes(x=TAM_groups_Qian,y=Score,colour=TAM_groups_Qian)) +
+  facet_wrap(~Variable,scales="free_y") +
+  theme_bw() +
+  geom_quasirandom() +
+  scale_colour_manual(values=c("dodgerblue","grey40","grey60","red")) +
+  #theme(axis.text.x=element_text(angle=90,size=10,hjust=1),strip.text=element_text(size=11)) +
+  stat_compare_means(method="wilcox",comparisons = my_comp,vjust=1.5) +
+  stat_summary(fun="median", geom="crossbar",color="grey20") +
+  scale_x_discrete(breaks = c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High"), 
+                     labels = c("C1QC_High\nSPP1_Low","C1QC_High\nSPP1_High","C1QC_Low\nSPP1_Low","C1QC_Low\nSPP1_High")) +
+  NoLegend()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+Plot the Signature distribution
+```{r fig.height=4, fig.width=16}
+TCGA_TAM_CAF_Sig_meta %>% select(-TCGA_Subtype,-OS_Time,-OS,-TCGA_Participant_Barcode) %>% gather(Signature,Score,-TCGA_Study) %>% filter(grepl("orig",Signature))   %>%
+  ggplot(aes(x=TCGA_Study, y=Score,colour=Signature)) +
+  geom_quasirandom(dodge.width = 0.6, show.legend = T, size=0.5) +
+  stat_summary(aes(group=Signature),position="dodge",fun="median", geom="crossbar",color="grey25", width=0.75) +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=35,size=11,hjust=1),strip.text=element_text(size=11)) +
+  ylab("Signature Score") +
+  scale_colour_manual(values=c("red3","dodgerblue"))
+# %>% mutate(TCGA_Study= fct_reorder(TCGA_Study,-Score))
+
+TCGA_TAM_CAF_Sig_meta %>% select(-TCGA_Subtype,-OS_Time,-OS,-TCGA_Participant_Barcode) %>% gather(Signature,Score,-TCGA_Study) %>% filter(grepl("Qian",Signature)) %>%
+  ggplot(aes(x=TCGA_Study, y=Score,colour=Signature)) +
+  geom_quasirandom(dodge.width = 0.6, show.legend = T, size=0.5) +
+  stat_summary(aes(group=Signature),position="dodge",fun="median", geom="crossbar",color="grey25", width=0.75) +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=35,size=11,hjust=1),strip.text=element_text(size=11)) +
+  ylab("Signature Score") +
+  scale_colour_manual(values=c("red3","dodgerblue"))
+```
+
+
+Calculate High Low bins
+```{r}
+
+#Merge Colon and Rectal
+TCGA_TAM_Sig_meta_bin <- TCGA_TAM_Sig_meta %>% mutate(TCGA_Study=if_else(TCGA_Study %in% c("READ","COAD"),"COAD_READ",TCGA_Study)) %>% group_by(TCGA_Study) %>% mutate(C1QC_orig_Bin=ntile(C1QC_orig,2),SPP1_orig_bin=ntile(SPP1_orig,2),C1QC_Qian_Bin=ntile(C1QC_Qian,2),SPP1_Qian_bin=ntile(SPP1_Qian,2)) %>% ungroup %>% mutate(TAM_groups_orig=case_when(
+  C1QC_orig_Bin == 1 & SPP1_orig_bin ==2 ~ "C1QC_Low_SPP1_High",
+  C1QC_orig_Bin == 1 & SPP1_orig_bin ==1 ~ "C1QC_Low_SPP1_Low",
+  C1QC_orig_Bin == 2 & SPP1_orig_bin ==2 ~ "C1QC_High_SPP1_High",
+  C1QC_orig_Bin == 2 & SPP1_orig_bin ==1 ~ "C1QC_High_SPP1_Low"
+    )) %>% mutate(TAM_groups_Qian=case_when(
+  C1QC_Qian_Bin == 1 & SPP1_Qian_bin ==2 ~ "C1QC_Low_SPP1_High",
+  C1QC_Qian_Bin == 1 & SPP1_Qian_bin ==1 ~ "C1QC_Low_SPP1_Low",
+  C1QC_Qian_Bin == 2 & SPP1_Qian_bin ==2 ~ "C1QC_High_SPP1_High",
+  C1QC_Qian_Bin == 2 & SPP1_Qian_bin ==1 ~ "C1QC_High_SPP1_Low"
+    )) %>% data.frame
+
+TCGA_TAM_Sig_meta_percentile <- TCGA_TAM_Sig_meta %>% mutate(TCGA_Study=if_else(TCGA_Study %in% c("READ","COAD"),"COAD_READ",TCGA_Study)) %>% group_by(TCGA_Study) %>% mutate(C1QC_orig_pr=percent_rank(C1QC_orig),SPP1_orig_pr=percent_rank(SPP1_orig),C1QC_Qian_pr=percent_rank(C1QC_Qian),SPP1_Qian_pr=percent_rank(SPP1_Qian)) %>% ungroup %>% mutate(TAM_groups_orig=case_when(
+  C1QC_orig_pr < 0.45 & SPP1_orig_pr >= 0.55 ~ "C1QC_Low_SPP1_High",
+  C1QC_orig_pr < 0.45 & SPP1_orig_pr < 0.45 ~ "C1QC_Low_SPP1_Low",
+  C1QC_orig_pr >= 0.55 & SPP1_orig_pr >= 0.55 ~ "C1QC_High_SPP1_High",
+  C1QC_orig_pr >= 0.55 & SPP1_orig_pr < 0.45 ~ "C1QC_High_SPP1_Low"
+    )) %>% mutate(TAM_groups_Qian=case_when(
+  C1QC_Qian_pr <= 0.55 & SPP1_Qian_pr > 0.45 ~ "C1QC_Low_SPP1_High",
+  C1QC_Qian_pr <= 0.55 & SPP1_Qian_pr <= 0.55 ~ "C1QC_Low_SPP1_Low",
+  C1QC_Qian_pr > 0.45 & SPP1_Qian_pr > 0.45 ~ "C1QC_High_SPP1_High",
+  C1QC_Qian_pr > 0.45 & SPP1_Qian_pr <= 0.55 ~ "C1QC_High_SPP1_Low"
+    )) %>% data.frame
+
+#case numbers, onlt indications where the "C1QC_High_SPP1_Low" group has >=30 cases
+TCGA_subgroup <- TCGA_TAM_Sig_meta_bin %>% group_by(TAM_groups_orig,TCGA_Study) %>% mutate(Num=n()) %>% ungroup() %>% filter(TAM_groups_orig == "C1QC_High_SPP1_Low", Num >=30) %>% pull(TCGA_Study) %>% unique
+```
+
+KM Analysis
+```{r fig.height=10, fig.width=16}
+require("survival")
+library("survminer")
+install.packages("survminer")
+
+ggsurv <- ggsurvplot(fit2, conf.int = TRUE)
+ggsurv$plot+facet_wrap(~TCGA_Study)
+
+# to plot by facet, remove all optional plots
+ggsurvplot(
+    fit = survfit(Surv(OS_Time,OS) ~ TAM_groups_orig, data=TCGA_TAM_Sig_meta_bin %>% filter(TCGA_Study %in% TCGA_subgroup)),
+    #xlab = "Days", 
+    #ylab = "Overall survival probability",
+    #risk.table=TRUE, 
+    #size=2,
+    #censor=OS,
+    xlim=c(0,3500),
+    pval=TRUE,
+    facet.by="TCGA_Study") +
+  scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+  theme_bw()
+
+ggsurvplot(
+    fit = survfit(Surv(OS_Time,OS) ~ TAM_groups_Qian, data=TCGA_TAM_Sig_meta_bin %>% filter(TCGA_Study %in% TCGA_subgroup)),
+    #xlab = "Days", 
+    #ylab = "Overall survival probability",
+    #risk.table=TRUE, 
+    #size=2,
+    #censor=OS,
+    xlim=c(0,3500),
+    pval=TRUE,
+    facet.by="TCGA_Study") +
+  scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+  theme_bw()
+
+
+
+
+Optimized Percentiles
+
+ggsurvplot(
+    fit = survfit(Surv(OS_Time,OS) ~ TAM_groups_orig, data=TCGA_TAM_Sig_meta_percentile %>% filter(TCGA_Study %in% TCGA_subgroup)),
+    xlim=c(0,3500),
+    pval=TRUE,
+    facet.by="TCGA_Study") +
+  scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+  theme_bw()
+
+ggsurvplot(
+    fit = survfit(Surv(OS_Time,OS) ~ TAM_groups_Qian, data=TCGA_TAM_Sig_meta_percentile %>% filter(TCGA_Study %in% TCGA_subgroup)),
+    xlim=c(0,3500),
+    pval=TRUE,
+    facet.by="TCGA_Study") +
+  scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+  theme_bw()
+
+
+```
+Km Plot single indication
+
+:We used the Cox proportional hazards model implemented in the R package survival to correct tumor stage and MSI-state for survival ana- lyses and plotted Kaplan-Meier survival curves using R function ggsurvplot.
+
+surv_cutpoint() finds the optimal cut point
+
+```{r fig.height=5, fig.width=7}
+
+coadread <- read.table(file="/scratch/mxu4/reference/TCGA/coadread_tcga_pan_can_atlas_2018_clinical_data.tsv",sep="\t",header=T)
+
+TCGA_TAM_Sig_meta_bin_colerectal <- TCGA_TAM_Sig_meta_bin %>% filter(TCGA_Study %in% "COAD_READ") %>% left_join(coadread,by=c("TCGA_Participant_Barcode"="Patient.ID")) %>% mutate(MSI_status=if_else(MSIsensor.Score>=10,"MSIhigh","MSS")) %>% mutate(Tumor_Stage=case_when(
+  American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "TIS" ~ 1,
+  American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T2" ~ 2,
+  American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T3" ~ 3,
+  American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T4" ~ 4,
+  American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T4A" ~ 5,
+  American.Joint.Committee.on.Cancer.Tumor.Stage.Code == "T4B" ~ 6,
+))
+
+fit <- coxph(Surv(OS_Time,OS) ~ TAM_groups_Qian + MSI_status + Tumor_Stage, data=TCGA_TAM_Sig_meta_bin_colerectal)
+fit
+
+ggsurvplot(
+    fit = survfit(Surv(OS_Time,OS) ~ TAM_groups_Qian, data=TCGA_TAM_Sig_meta_bin %>% filter(TCGA_Study =="COAD_READ")),
+    xlim=c(0,3500),
+    pval=TRUE,
+    facet.by="TCGA_Study") +
+  scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+  theme_bw()
+
+ggsurvplot(
+    fit = survfit(Surv(OS_Time,OS) ~ TAM_groups_orig, data=TCGA_TAM_Sig_meta_bin %>% filter(TCGA_Study =="COAD_READ")),
+    xlim=c(0,3500),
+    pval=TRUE,
+    facet.by="TCGA_Study") +
+  scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+  theme_bw()
+
+
+
+READ_COAD <- TCGA_TAM_Sig_meta_percentile %>% filter(TCGA_Study =="COAD_READ")
+#Find Ideal cutpoint for COAD_READ
+# C1QC 0.74, Spp1 0.59
+rescut <- surv_cutpoint(
+  data=READ_COAD,
+  time = "OS_Time",
+  event = "OS",
+  variables= c("C1QC_orig_pr","SPP1_orig_pr"),
+  minprop = 0.1,
+  progressbar = TRUE
+)
+
+
+
+
+```
+
+With optimized splits
+```{r}
+TCGA_TAM_Sig_meta_percentile <- TCGA_TAM_Sig_meta %>% mutate(TCGA_Study=if_else(TCGA_Study %in% c("READ","COAD"),"COAD_READ",TCGA_Study)) %>% group_by(TCGA_Study) %>% mutate(C1QC_orig_pr=percent_rank(C1QC_orig),SPP1_orig_pr=percent_rank(SPP1_orig),C1QC_Qian_pr=percent_rank(C1QC_Qian),SPP1_Qian_pr=percent_rank(SPP1_Qian)) %>% ungroup %>% mutate(TAM_groups_orig=case_when(
+  C1QC_orig_pr < 0.74 & SPP1_orig_pr >= 0.59 ~ "C1QC_Low_SPP1_High",
+  C1QC_orig_pr < 0.74 & SPP1_orig_pr < 0.59 ~ "C1QC_Low_SPP1_Low",
+  C1QC_orig_pr >= 0.74 & SPP1_orig_pr >= 0.59 ~ "C1QC_High_SPP1_High",
+  C1QC_orig_pr >= 0.74 & SPP1_orig_pr < 0.59 ~ "C1QC_High_SPP1_Low"
+    )) %>% mutate(TAM_groups_Qian=case_when(
+  C1QC_Qian_pr <= 0.67 & SPP1_Qian_pr > 0.11 ~ "C1QC_Low_SPP1_High",
+  C1QC_Qian_pr <= 0.67 & SPP1_Qian_pr <= 0.11 ~ "C1QC_Low_SPP1_Low",
+  C1QC_Qian_pr > 0.67 & SPP1_Qian_pr > 0.11 ~ "C1QC_High_SPP1_High",
+  C1QC_Qian_pr > 0.67 & SPP1_Qian_pr <= 0.11 ~ "C1QC_High_SPP1_Low"
+    )) %>% data.frame
+```
+
+
+#######################
+###################
+###############
+
+Load POPLAR OAK data
+
+###############
+####################
+########################
+
+Upload to Datalake
+
+Do on Terminal from HPC
+
+cp -r /resbioinfo/data/Oncology/Team_Shared/IO_Cohorts /rad_dataingest/
+```{r}
+```
+
+
+```{r}
+POPLAR_OAK_meta <- read.table(file="/scratch/mxu4/reference/IO_data/OAK_POPLAR_PatientInfo.csv", sep=",",header=T) %>% dplyr::rename(SampleID="X")
+
+load(file="/scratch/mxu4/reference/IO_data/POPLAR_OAK_log2TPM.rdata")
+
+#original
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+TAM_SPP1_original <- c("SPP1","PPARG","ADM","MARCO","VEGFA","VCAN","CXCL8","ANGPTL4")
+#Qian
+C1QC_Qian_2 <- c("LGMN","LILRB4","C1QA","C1QC","TREM2","C1QB")
+SPP1_Qian_2 <- c("PLAUR","SLC11A1","C15orf48","BRI3","IFIT3")
+
+C1QC_orig_poplar <- POPLAR_OAK_mRNA %>% filter(Gene %in% TAM_C1QC_original) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID")
+
+SPP1_orig_poplar <- POPLAR_OAK_mRNA %>% filter(Gene %in% TAM_SPP1_original) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID")
+
+C1QC_Qian_poplar <- POPLAR_OAK_mRNA %>% filter(Gene %in% C1QC_Qian_2) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID")
+
+SPP1_Qian_poplar <- POPLAR_OAK_mRNA %>% filter(Gene %in% SPP1_Qian_2) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID")
+
+mx_zscore <- function(i) {
+  require(dplyr)
+  denom <- ifelse(sd(i,na.rm=T) >= 0.1,sd(i,na.rm=T),0.1)
+  result <- (i-mean(i,na.rm=T)) / denom
+}
+
+TAM_C1QC_original_z_sig <-  apply(C1QC_orig_poplar %>% tibble::column_to_rownames("SampleID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# taking z 
+
+TAM_SPP1_original_z_sig <-  apply(SPP1_orig_poplar %>% tibble::column_to_rownames("SampleID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# taking z 
+
+TAM_C1QC_Qian_z_sig <-  apply(C1QC_Qian_poplar %>% tibble::column_to_rownames("SampleID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# taking z 
+
+TAM_SPP1_Qian_z_sig <-  apply(SPP1_Qian_poplar %>% tibble::column_to_rownames("SampleID") %>% as.matrix,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# taking z 
+
+Poplar_TAM_scores <- rbind(C1QC_orig=TAM_C1QC_original_z_sig,SPP1_orig=TAM_SPP1_original_z_sig,C1QC_Qian=TAM_C1QC_Qian_z_sig,SPP1_Qian=TAM_SPP1_Qian_z_sig) %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID") 
+
+save(Poplar_TAM_scores,file="/scratch/mxu4/CD47/Poplar_Oak_TAM_scores_020724.rdata")
+save(Poplar_TAM_scores_meta,file="/scratch/mxu4/CD47/Poplar_Oak_TAM_scores_meta_020724.rdata")
+load(file="/scratch/mxu4/CD47/Poplar_Oak_TAM_scores_meta_020724.rdata")
+save(Poplar_TAM_Sig_meta_bin,file="/scratch/mxu4/CD47/Poplar_Oak_TAM_Sig_meta_bin_020724.rdata")
+save(Poplar_TAM_Sig_meta_percentile,file="/scratch/mxu4/CD47/Poplar_TAM_Sig_meta_percentile_020724.rdata")
+load(file="/scratch/mxu4/CD47/Poplar_TAM_Sig_meta_percentile_020724.rdata")
+```
+
+Add metadata
+```{r}
+api$data_lake$download_file_raw(file_id, max_size = 1e10)
+
+Poplar_TAM_scores_meta <- Poplar_TAM_scores %>% left_join(POPLAR_OAK_meta, by="SampleID")
+```
+Calculate Bins
+
+```{r}
+Poplar_TAM_Sig_meta_bin <- Poplar_TAM_scores_meta %>% group_by(ACTARM,HIST) %>% mutate(C1QC_orig_Bin=ntile(C1QC_orig,2),SPP1_orig_bin=ntile(SPP1_orig,2),C1QC_Qian_Bin=ntile(C1QC_Qian,2),SPP1_Qian_bin=ntile(SPP1_Qian,2)) %>% ungroup %>% mutate(TAM_groups_orig=case_when(
+  C1QC_orig_Bin == 1 & SPP1_orig_bin ==2 ~ "C1QC_Low_SPP1_High",
+  C1QC_orig_Bin == 1 & SPP1_orig_bin ==1 ~ "C1QC_Low_SPP1_Low",
+  C1QC_orig_Bin == 2 & SPP1_orig_bin ==2 ~ "C1QC_High_SPP1_High",
+  C1QC_orig_Bin == 2 & SPP1_orig_bin ==1 ~ "C1QC_High_SPP1_Low"
+    )) %>% mutate(TAM_groups_Qian=case_when(
+  C1QC_Qian_Bin == 1 & SPP1_Qian_bin ==2 ~ "C1QC_Low_SPP1_High",
+  C1QC_Qian_Bin == 1 & SPP1_Qian_bin ==1 ~ "C1QC_Low_SPP1_Low",
+  C1QC_Qian_Bin == 2 & SPP1_Qian_bin ==2 ~ "C1QC_High_SPP1_High",
+  C1QC_Qian_Bin == 2 & SPP1_Qian_bin ==1 ~ "C1QC_High_SPP1_Low"
+    )) %>% data.frame
+```
+Plot Signature signals in POPLAR-OAK
+```{r}
+
+Poplar_TAM_Sig_meta_bin %>% filter(ACTARM !="yg") %>%
+  ggplot(aes(x=interaction(ACTARM,HIST),y=C1QC_orig,colour=HIST)) +
+  geom_quasirandom() +
+  theme_bw() +
+  #theme(axis.text.x=element_text(angle=35,size=14,hjust=1),strip.text=element_text(size=11)) 
+  scale_x_discrete(breaks = c('Docetaxel.NON-SQUAMOUS', 'MPDL3280A.NON-SQUAMOUS', 'Docetaxel.SQUAMOUS', 'MPDL3280A.SQUAMOUS'), 
+                     labels = c('Docetaxel\nAdeno', 'aPD-L1\nAdeno', 'Docetaxel\nSquamous', 'aPD-L1\nSquamous'))
+
+Poplar_TAM_Sig_meta_bin %>% filter(ACTARM !="yg") %>%
+  ggplot(aes(x=interaction(ACTARM,HIST),y=SPP1_orig,colour=HIST)) +
+  geom_quasirandom() +
+  theme_bw() +
+  #theme(axis.text.x=element_text(angle=35,size=14,hjust=1),strip.text=element_text(size=11)) 
+  scale_x_discrete(breaks = c('Docetaxel.NON-SQUAMOUS', 'MPDL3280A.NON-SQUAMOUS', 'Docetaxel.SQUAMOUS', 'MPDL3280A.SQUAMOUS'), 
+                     labels = c('Docetaxel\nAdeno', 'aPD-L1\nAdeno', 'Docetaxel\nSquamous', 'aPD-L1\nSquamous'))
+
+
+Poplar_TAM_Sig_meta_bin %>% filter(ACTARM !="yg") %>%
+  ggplot(aes(x=interaction(ACTARM,HIST),y=C1QC_Qian,colour=HIST)) +
+  geom_quasirandom() +
+  theme_bw() +
+  #theme(axis.text.x=element_text(angle=35,size=14,hjust=1),strip.text=element_text(size=11)) 
+  scale_x_discrete(breaks = c('Docetaxel.NON-SQUAMOUS', 'MPDL3280A.NON-SQUAMOUS', 'Docetaxel.SQUAMOUS', 'MPDL3280A.SQUAMOUS'), 
+                     labels = c('Docetaxel\nAdeno', 'aPD-L1\nAdeno', 'Docetaxel\nSquamous', 'aPD-L1\nSquamous'))
+
+Poplar_TAM_Sig_meta_bin %>% filter(ACTARM !="yg") %>%
+  ggplot(aes(x=interaction(ACTARM,HIST),y=SPP1_Qian,colour=HIST)) +
+  geom_quasirandom() +
+  theme_bw() +
+  #theme(axis.text.x=element_text(angle=35,size=14,hjust=1),strip.text=element_text(size=11)) 
+  scale_x_discrete(breaks = c('Docetaxel.NON-SQUAMOUS', 'MPDL3280A.NON-SQUAMOUS', 'Docetaxel.SQUAMOUS', 'MPDL3280A.SQUAMOUS'), 
+                     labels = c('Docetaxel\nAdeno', 'aPD-L1\nAdeno', 'Docetaxel\nSquamous', 'aPD-L1\nSquamous'))
+```
+
+KM OS analysis
+```{r fig.height=5, fig.width=8}
+require(survival)
+library(survminer)
+
+  ggsurvplot(
+    fit = survfit(Surv(OS_MONTHS,OS_CENSOR) ~ TAM_groups_orig, data=Poplar_TAM_Sig_meta_bin %>% filter(ACTARM!="yg")),
+    xlab = "Months", 
+    ylab = "Overall survival probability",
+    pval=TRUE,
+    fontsize=4,
+    facet.by=c("HIST","ACTARM")) +
+    scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+    theme_bw()
+
+  ggsurvplot(
+    fit = survfit(Surv(OS_MONTHS,OS_CENSOR) ~ TAM_groups_Qian, data=Poplar_TAM_Sig_meta_bin %>% filter(ACTARM!="yg")),
+    xlab = "Months", 
+    ylab = "Overall survival probability",
+    pval=TRUE,
+    fontsize=4,
+    facet.by=c("HIST","ACTARM")) +
+    scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+    theme_bw()
+
+
+Poplar_TAM_Sig_meta_percentile <- Poplar_TAM_scores_meta %>% group_by(ACTARM,HIST) %>% mutate(C1QC_orig_pr=percent_rank(C1QC_orig),SPP1_orig_pr=percent_rank(SPP1_orig),C1QC_Qian_pr=percent_rank(C1QC_Qian),SPP1_Qian_pr=percent_rank(SPP1_Qian)) %>% ungroup 
+  
+  #Find Ideal cutpoint for COAD_READ
+#C1QC: 0.23. SPP1 0.176
+rescut <- surv_cutpoint(
+  data=Poplar_TAM_Sig_meta_percentile,
+  time = "OS_MONTHS",
+  event = "OS_CENSOR",
+  variables= c("C1QC_orig_pr","SPP1_orig_pr"),
+  minprop = 0.1,
+  progressbar = TRUE)
+
+#C1QC: 0.19 SPP1 0.26
+rescut <- surv_cutpoint(
+  data=Poplar_TAM_Sig_meta_percentile,
+  time = "OS_MONTHS",
+  event = "OS_CENSOR",
+  variables= c("C1QC_Qian_pr","SPP1_Qian_pr"),
+  minprop = 0.1,
+  progressbar = TRUE)
+
+Poplar_TAM_Sig_meta_percentile <- Poplar_TAM_Sig_meta_percentile %>% mutate(TAM_groups_orig=case_when(
+  C1QC_orig_pr < 0.23 & SPP1_orig_pr >= 0.18 ~ "C1QC_Low_SPP1_High",
+  C1QC_orig_pr < 0.23 & SPP1_orig_pr < 0.18 ~ "C1QC_Low_SPP1_Low",
+  C1QC_orig_pr >= 0.23 & SPP1_orig_pr >= 0.18 ~ "C1QC_High_SPP1_High",
+  C1QC_orig_pr >= 0.23 & SPP1_orig_pr < 0.18 ~ "C1QC_High_SPP1_Low"
+    )) %>% mutate(TAM_groups_Qian=case_when(
+  C1QC_Qian_pr <= 0.19 & SPP1_Qian_pr > 0.26 ~ "C1QC_Low_SPP1_High",
+  C1QC_Qian_pr <= 0.19 & SPP1_Qian_pr <= 0.26 ~ "C1QC_Low_SPP1_Low",
+  C1QC_Qian_pr > 0.19 & SPP1_Qian_pr > 0.26 ~ "C1QC_High_SPP1_High",
+  C1QC_Qian_pr > 0.19 & SPP1_Qian_pr <= 0.26 ~ "C1QC_High_SPP1_Low"
+    )) %>% data.frame
+
+Poplar_TAM_Sig_meta_percentile %<>% mutate(TAM_groups_Qian=factor(TAM_groups_Qian,levels=c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High")))
+
+  ggsurvplot(
+    fit = survfit(Surv(OS_MONTHS,OS_CENSOR) ~ TAM_groups_Qian, data=Poplar_TAM_Sig_meta_percentile %>% filter(ACTARM!="yg")),
+    xlab = "Months", 
+    ylab = "Overall survival probability",
+    pval=TRUE,
+    fontsize=4,
+    facet.by=c("HIST","ACTARM")) +
+    scale_colour_manual(values=c("red","pink","dodgerblue","blue")) +
+    theme_bw()
+```
+Add Macrophage marker and plot Hi vs Low Macrophage content
+
+```{r}
+Poplar_TAM_Sig_meta_percentile
+POPLAR_CD68 <- POPLAR_OAK_mRNA %>% filter(Gene %in% c("CD68"))
+```
+```{r}
+POPLAR_CD68 <- POPLAR_OAK_mRNA %>% filter(Gene %in% c("CD68","LYZ")) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("SampleID")
+
+Poplar_TAM_Sig_meta_percentile %<>% left_join(POPLAR_CD68, by="SampleID") %>% mutate(CD68_bin=ntile(CD68,2), CD68_bin=if_else(CD68_bin==1,"CD68_Low","CD68_High"),LYZ_bin=ntile(LYZ,2), LYZ_bin=if_else(LYZ_bin==1,"LYZ_Low","LYZ_High") ) 
+```
+
+Plot High Low CD68
+```{r}
+  ggsurvplot(
+    fit = survfit(Surv(OS_MONTHS,OS_CENSOR) ~ CD68_bin, data=Poplar_TAM_Sig_meta_percentile %>% filter(ACTARM!="yg")),
+    xlab = "Months", 
+    ylab = "Overall survival probability",
+    pval=TRUE,
+    fontsize=4,
+    facet.by=c("HIST","ACTARM")) +
+    scale_colour_manual(values=c("grey40","dodgerblue","red","grey60")) +
+    theme_bw()
+```
+
+#######################
+##############
+TAM BINS in IMblaze, same analysis as POPLAR-OAK
+#############
+######################
+
+Load the data
+```{r}
+load(file="/scratch/Oncology_Shared/ICI_Datasets/IMblaze370_CRC_Atezo.RData")
+fpkm
+tpm
+patientInfo # rownames is the patient code # ARM is the treatment # OS.TIME OS.DIED
+patientInfo %>% select(ARM) %>% table
+patientInfo %>% select(full_anonymized_patient_ID) %>% unique # 296 patients
+
+TAM_C1QC_original <- c("APOE","C1QA","C1QC","TREM2","C1QB","MRC1","CD163","MERTK")
+SPP1_Qian_2 <- c("PLAUR","SLC11A1","C15orf48","BRI3","IFIT3")
+
+
+C1Q_Sig <- tpm %>% filter(Symbol %in% c(TAM_C1QC_original)) %>% select(-Entrez) %>% tibble::remove_rownames() %>% tibble::column_to_rownames("Symbol") %>% t
+SPP_Sig <- tpm %>% filter(Symbol %in% c(SPP1_Qian_2)) %>% select(-Entrez) %>% tibble::remove_rownames() %>% tibble::column_to_rownames("Symbol")   %>% t
+
+mx_zscore <- function(i) {
+  require(dplyr)
+  denom <- ifelse(sd(i,na.rm=T) >= 0.1,sd(i,na.rm=T),0.1)
+  result <- (i-mean(i,na.rm=T)) / denom
+}
+
+TAM_C1QC_original_z_sig <-  apply(C1Q_Sig,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)# MARGIN=2 is by colunms
+TAM_SPP1_original_z_sig <-  apply(SPP_Sig,MARGIN=2,mx_zscore) %>% t %>% data.frame %>% summarise_all(mean)
+
+TAM_IMblaze <- data.frame(C1QC_TAM_Sig =t(TAM_C1QC_original_z_sig), SPP1_TAM_Sig =t(TAM_SPP1_original_z_sig)) %>% tibble::rownames_to_column("Sample_ID") %>% mutate(Sample_ID=str_replace_all(Sample_ID,"\\.","-")) %>% left_join(patientInfo %>% tibble::rownames_to_column("Sample_ID"),by="Sample_ID")
+
+TAM_IMblaze %<>% mutate(TAM_C1QC_bin=ntile(C1QC_TAM_Sig,2),TAM_SPP1_bin=ntile(SPP1_TAM_Sig,2), TAM_C1QC_bin_ideal=if_else(C1QC_TAM_Sig > -0.1791926,2,1),TAM_SPP1_bin_ideal=if_else(SPP1_TAM_Sig > 0.1166,2,1)) %>% mutate(TAM_groups=case_when(
+  TAM_C1QC_bin == 1 & TAM_SPP1_bin ==2 ~ "C1QC_Low_SPP1_High",
+  TAM_C1QC_bin == 1 & TAM_SPP1_bin ==1 ~ "C1QC_Low_SPP1_Low",
+  TAM_C1QC_bin == 2 & TAM_SPP1_bin ==2 ~ "C1QC_High_SPP1_High",
+  TAM_C1QC_bin == 2 & TAM_SPP1_bin ==1 ~ "C1QC_High_SPP1_Low"
+    ))  %>% mutate(TAM_groups_ideal=case_when(
+  TAM_C1QC_bin_ideal == 1 & TAM_SPP1_bin_ideal ==2 ~ "C1QC_Low_SPP1_High",
+  TAM_C1QC_bin_ideal == 1 & TAM_SPP1_bin_ideal ==1 ~ "C1QC_Low_SPP1_Low",
+  TAM_C1QC_bin_ideal == 2 & TAM_SPP1_bin_ideal ==2 ~ "C1QC_High_SPP1_High",
+  TAM_C1QC_bin_ideal == 2 & TAM_SPP1_bin_ideal ==1 ~ "C1QC_High_SPP1_Low"
+    )) %>% mutate(TAM_groups=factor(TAM_groups,levels=c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High"))) %>% mutate(TAM_groups_ideal=factor(TAM_groups_ideal,levels=c("C1QC_High_SPP1_Low","C1QC_High_SPP1_High","C1QC_Low_SPP1_Low","C1QC_Low_SPP1_High")))
+
+C1QC_TAM_Sig = -0.179
+SPP1_TAM_Sig = 0.11659
+
+rescut <- surv_cutpoint(
+  data=TAM_IMblaze,
+  time = "OS.TIME",
+  event = "OS.DIED",
+  variables= c("C1QC_TAM_Sig","SPP1_TAM_Sig"),
+  minprop = 0.1,
+  progressbar = TRUE)
+```
+
+```{r fig.height=4, fig.width=10}
+    ggsurvplot(
+    fit = survfit(Surv(OS.TIME,OS.DIED) ~ TAM_groups_ideal, data= TAM_IMblaze),
+    xlab = "Months", 
+    ylab = "Overall survival probability",
+    pval=TRUE,
+    facet.by=c("ARM"), 
+    fontsize=4,
+    risk.table=TRUE ) +
+    scale_colour_manual(values=c("red","pink","dodgerblue","blue")) 
+
+```
+

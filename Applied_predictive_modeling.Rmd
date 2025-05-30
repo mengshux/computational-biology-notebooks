@@ -1,0 +1,59 @@
+---
+title: "Applied Predictive Modeling"
+author: "Mengshu"
+date: "1/10/2020"
+output: html_document
+---
+
+```{r}
+install.packages("caret", dependencies = c("Depends", "Suggests"))
+library(caret)
+library(e1071)
+library(corrplot)
+library(AppliedPredictiveModeling)
+```
+Dataset:
+"Case" contains the test/train status
+"Cell" identifies each cell
+"Class" indicates whther the cell was segmented
+```{r}
+data(segmentationOriginal)
+
+segData <- subset(segmentationOriginal,Case=="Train")
+cellID <- segData$Cell
+class <- segData$Class
+case <- segData$Case
+segData <- segData[,-(1:3)]
+
+statusColNum <- grep("Status", names(segData))
+segData <- segData[,-statusColNum]
+
+skewValues <- apply(segData,2,skewness)
+head(skewValues)
+#BoxCoxTrans applies correction to one column
+Ch1AreaTrans <- BoxCoxTrans(segData$AreaCh1)
+Ch1AreaTrans # this is the method that was chosed, not the data itself
+predict(Ch1AreaTrans, head(segData$AreaCh1)) # this applies the transformation to the data
+
+#preProcess applies different actions lile BoxCoxTrans does to a whole ldataset
+trans <- preProcess(segData, method=c("BoxCox","center","scale","pca"))
+transformed <- predict(trans, segData)
+
+```
+Check for collinear predictors
+```{r fig.height=15, fig.width=15}
+correlations <- cor(segData)
+library(corrplot)
+corrplot(correlations,order="hclust")
+#identify cols with high correlations to each other
+highCorr <- findCorrelation(correlations,cutoff=0.75)
+corrplot(correlations[highCorr,highCorr])
+
+filteredSegData <- segData[,-highCorr]
+```
+Create Dummy variables:
+Basically pivot_wider for categorical values
+```{r}
+
+```
+

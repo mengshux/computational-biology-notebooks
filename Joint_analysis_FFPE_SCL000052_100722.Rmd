@@ -1,0 +1,1417 @@
+---
+title: "Magro_TNBC_RNA_FFPE_SCL00052_3_080222"
+author: "Mengshu"
+date: "8/2/2022"
+output: html_document
+---
+
+
+Load packages
+Working on Gilead R Platform, R version 4.0.5
+
+
+```{r}
+library(DESeq2)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+library(tximport)
+library(EnhancedVolcano)
+library(ggchicklet)
+library(limma)
+library(ggpubr) # for stat_compare_means
+library(Hmisc) # for %nin%
+library(ggbeeswarm) # for geom_quasirandom
+library(ggrepel)
+library(pheatmap)
+```
+
+Load data
+Data copied from B324 server STAR RSEM
+cp /B324NGS/Projects/SCL000052_3/STAR_RSEM/.../SAM001930_LIB002227_S1_L001_rsem.isoforms.results
+ /export/home/mxu4/CD47/TNBC_Seq/STAR_RSEM/
+
+
+For TNBC there is no meta data
+
+#Heatmap_order
+
+
+```{r}
+load("/fcrbiouatappn01/export/home/mxu4/CD47/TNBC_Seq/TNBC_TPM.rdata")
+TNBC_data <- read_tsv("/fcrbiouatappn01/export/home/mxu4/CD47/TNBC_Seq/TNBC_Meta_data_and_Signatures_101322.txt")
+TNBC_data <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/TNBC_Seq/TNBC_Meta_data_and_Signatures_101322.txt",header=T)
+#TNBC_data <- read_tsv("/fcrbiouatappn01/export/home/mxu4/CD47/TNBC_Seq/TNBC_Meta_data_and_Signatures.txt")
+TNBC_data %<>% mutate(Indication="TNBC")
+TNBC_data_merge <- TNBC_data
+
+set_cols <- TNBC_data %>% select(1:6,34,9:31,33) %>% colnames
+```
+
+HNSC
+
+#Order_in_Heatmap
+
+```{r}
+#load(file="/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/HNSC_TPM_fil.rdata")
+
+HNSC_data <- read_tsv("/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/HNSC_Meta_data_and_Signatures_101322.txt")
+HNSC_nominations <- read_tsv("/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/HNSC_Meta_data_and_Signatures_Kelli.txt")
+HNSC_data %<>% mutate(Sample_Group=Group) %>% select(-Group) %>% select(Path_name,Sample_name,Sample_Group,everything())
+HNSC_data %<>% mutate(Indication="HNSC")
+HNSC_data %<>% mutate(Path_name=sedit(Path_name,"_00","_"))
+HNSC_data %<>% dplyr::rename(Heatmap_order="Order_in_Heatmap")
+HNSC_data %<>% left_join(HNSC_nominations %>% select(Sample_name,Nominate_for_MultiIF),by="Sample_name")
+```
+
+CRC
+
+#Heatmap_order
+```{r}
+
+#load("/fcrbiouatappn01/export/home/mxu4/CD47/TNBC_Seq/CRC_TPM.rdata")
+CRC_data <- read_tsv("/fcrbiouatappn01/export/home/mxu4/CD47/CRC_Seq/CRC_Meta_data_and_Signatures_101422.txt")
+CRC_data %<>% mutate(Indication="CRC") 
+CRC_data %<>% mutate(Sample_Group=CMS_prediction)
+CRC_data %<>% mutate(Path_name=ID)
+#CRC_data %<>% mutate(Sample_name=Sample_ID)
+```
+
+
+#######################################
+######################################
+
+Mac IHC Panel: CD68, CD163, PD-L1 
+
+May June 2023
+#######################################
+###########################################
+
+Load data
+```{r}
+HNSC_data
+# Total cell number for all categories
+# H2022-00163_HN_cells_All.tsv
+
+Total_cell <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_All.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",TotalCells="V10") %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,TotalCells)
+# sample 4      7,8,9, 10,11,12
+CD163_notCD68 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_CD163_notCD68.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",CD163_notCD68="V7",CD163_notCD68_nonTumor="V8",CD163_notCD68_Tumor="V9",CD163_notCD68_Area="V10",CD163_notCD68_nonTumor_Area="V11",CD163_notCD68_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,CD163_notCD68)
+
+# %>% mutate(Pct_CD163_notCD68=round(CD163_notCD68*100/CD163_notCD68_Area,digits=1)) %>% select(Sample,Pct_CD163_notCD68)
+
+CD68_notCD163 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_CD68_notCD163.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",CD68_notCD163="V7",CD68_notCD163_nonTumor="V8",CD68_notCD163_Tumor="V9",CD68_notCD163_Area="V10",CD68_notCD163_nonTumor_Area="V11",CD68_notCD163_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample, CD68_notCD163)
+  
+# mutate(Pct_CD68_notCD163=round(CD68_notCD163*100/CD68_notCD163_Area,digits=1)) %>% select(Sample,Pct_CD68_notCD163)
+
+CD68_CD163 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_CD68_CD163.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",CD68_CD163="V7",CD68_CD163_nonTumor="V8",CD68_CD163_Tumor="V9",CD68_CD163_Area="V10",CD68_CD163_nonTumor_Area="V11",CD68_CD163_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,CD68_CD163) 
+  
+# mutate(Pct_CD68_CD163=round(CD68_CD163*100/CD68_CD163_Area,digits=1)) %>% select(Sample,Pct_CD68_CD163)
+
+PDL1_CD68_notCD163 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_PDL1_notCD163_CD68.tsv",sep="\t",skip=1) %>%
+  dplyr::rename(Sample="V4",PDL1_CD68_notCD163="V7",PDL1_CD68_notCD163_nonTumor="V8",PDL1_CD68_notCD163_Tumor="V9",PDL1_CD68_notCD163_Area="V10",PDL1_CD68_notCD163_nonTumor_Area="V11",PDL1_CD68_notCD163_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,PDL1_CD68_notCD163)  
+
+PDL1_CD163_notCD68 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_PDL1_CD163_notCD68.tsv",sep="\t",skip=1) %>%
+  dplyr::rename(Sample="V4",PDL1_CD163_notCD68="V7",PDL1_CD163_notCD68_nonTumor="V8",PDL1_CD163_notCD68_Tumor="V9",PDL1_CD163_notCD68_Area="V10",PDL1_CD163_notCD68_nonTumor_Area="V11",PDL1_CD163_notCD68_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,PDL1_CD163_notCD68)
+
+
+PDL1_CD163_CD68 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_PDL1_CD163_CD68.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",PDL1_CD68_CD163="V7",PDL1_CD68_CD163_nonTumor="V8",PDL1_CD68_CD163_Tumor="V9",PDL1_CD68_CD163_Area="V10",PDL1_CD68_CD163_nonTumor_Area="V11",PDL1_CD68_CD163_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,PDL1_CD68_CD163)
+
+PDL1 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_Opal520_PDL1.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",PDL1="V7",PDL1_nonTumor="V8",PDL1_Tumor="V9",PDL1_Area="V10",PDL1_nonTumor_Area="V11",PDL1_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,PDL1)
+
+# Data Merge
+
+Mac_IHC <- Total_cell %>% left_join(CD163_notCD68,by="Sample") %>% left_join(CD68_notCD163, by="Sample") %>% left_join(CD68_CD163, by="Sample") %>% left_join(PDL1_CD68_notCD163,by="Sample") %>% left_join(PDL1_CD163_notCD68,by="Sample") %>% left_join(PDL1_CD163_CD68,by="Sample") %>% left_join(PDL1,by="Sample") %>% gather(Marker_Group,CellNum,-Sample,-TotalCells) %>% mutate(PctCells=round(CellNum*100/TotalCells,digits=1))
+
+MAC_IHC_wide <- Mac_IHC %>% select(-CellNum,-TotalCells) %>% pivot_wider(names_from=Marker_Group,values_from=PctCells) %>% mutate(CD163_Total=CD163_notCD68+CD68_CD163,PDL1_CD163_Total=PDL1_CD163_notCD68+PDL1_CD68_CD163)
+
+save(MAC_IHC_wide,file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/HN_Mac_Data_051123.rdata")
+load("/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/HN_Mac_Data_051123.rdata")
+MAC_IHC_wide_HN <- MAC_IHC_wide
+
+MAC_IHC_wide_HN_TNBC <- rbind(MAC_IHC_wide_HN,MAC_IHC_wide_TNBC)
+```
+
+Load TNBC data
+Load data
+```{r}
+TNBC_data
+# Total cell number for all categories
+# H2022-00172_TNBC_cells_All.tsv
+
+Total_cell <- read.delim(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/H2022-00172_TNBC_cells_All.tsv",sep="\t") %>% dplyr::rename(Sample="Name",TotalCells="TotalNumOfCells_All") %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,TotalCells)
+# sample 4      7,8,9, 10,11,12
+CD163_notCD68 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/H2022-00172_TNBC_CD163_notCD68.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",CD163_notCD68="V7",CD163_notCD68_nonTumor="V8",CD163_notCD68_Tumor="V9",CD163_notCD68_Area="V10",CD163_notCD68_nonTumor_Area="V11",CD163_notCD68_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,CD163_notCD68)
+
+# %>% mutate(Pct_CD163_notCD68=round(CD163_notCD68*100/CD163_notCD68_Area,digits=1)) %>% select(Sample,Pct_CD163_notCD68)
+
+CD68_notCD163 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/H2022-00172_TNBC_CD68_notCD163.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",CD68_notCD163="V7",CD68_notCD163_nonTumor="V8",CD68_notCD163_Tumor="V9",CD68_notCD163_Area="V10",CD68_notCD163_nonTumor_Area="V11",CD68_notCD163_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample, CD68_notCD163)
+  
+# mutate(Pct_CD68_notCD163=round(CD68_notCD163*100/CD68_notCD163_Area,digits=1)) %>% select(Sample,Pct_CD68_notCD163)
+
+CD68_CD163 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/H2022-00172_TNBC_CD68_CD163.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",CD68_CD163="V7",CD68_CD163_nonTumor="V8",CD68_CD163_Tumor="V9",CD68_CD163_Area="V10",CD68_CD163_nonTumor_Area="V11",CD68_CD163_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,CD68_CD163) 
+  
+# mutate(Pct_CD68_CD163=round(CD68_CD163*100/CD68_CD163_Area,digits=1)) %>% select(Sample,Pct_CD68_CD163)
+
+PDL1_CD68_notCD163 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/H2022-00172_TNBC_PDL1_notCD163_CD68.tsv",sep="\t",skip=1) %>%
+  dplyr::rename(Sample="V4",PDL1_CD68_notCD163="V7",PDL1_CD68_notCD163_nonTumor="V8",PDL1_CD68_notCD163_Tumor="V9",PDL1_CD68_notCD163_Area="V10",PDL1_CD68_notCD163_nonTumor_Area="V11",PDL1_CD68_notCD163_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,PDL1_CD68_notCD163)  
+
+PDL1_CD163_notCD68 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/H2022-00172_TNBC_PDL1_CD163_notCD68.tsv",sep="\t",skip=1) %>%
+  dplyr::rename(Sample="V4",PDL1_CD163_notCD68="V7",PDL1_CD163_notCD68_nonTumor="V8",PDL1_CD163_notCD68_Tumor="V9",PDL1_CD163_notCD68_Area="V10",PDL1_CD163_notCD68_nonTumor_Area="V11",PDL1_CD163_notCD68_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,PDL1_CD163_notCD68)
+
+
+PDL1_CD163_CD68 <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/H2022-00172_TNBC_PDL1_CD163_CD68.tsv",sep="\t",skip=1) %>% dplyr::rename(Sample="V4",PDL1_CD68_CD163="V7",PDL1_CD68_CD163_nonTumor="V8",PDL1_CD68_CD163_Tumor="V9",PDL1_CD68_CD163_Area="V10",PDL1_CD68_CD163_nonTumor_Area="V11",PDL1_CD68_CD163_Tumor_Area="V12") %>% select(-starts_with("V")) %>% mutate(Sample = substr(Sample,10,20)) %>% mutate(Sample= sedit(Sample,"-00","-")) %>% select(Sample,PDL1_CD68_CD163)
+
+# Data Merge
+
+Mac_IHC <- Total_cell %>% left_join(CD163_notCD68,by="Sample") %>% left_join(CD68_notCD163, by="Sample") %>% left_join(CD68_CD163, by="Sample") %>% left_join(PDL1_CD68_notCD163,by="Sample") %>% left_join(PDL1_CD163_notCD68,by="Sample") %>% left_join(PDL1_CD163_CD68,by="Sample") %>% gather(Marker_Group,CellNum,-Sample,-TotalCells) %>% mutate(PctCells=round(CellNum*100/TotalCells,digits=1))
+
+MAC_IHC_wide <- Mac_IHC %>% select(-CellNum,-TotalCells) %>% pivot_wider(names_from=Marker_Group,values_from=PctCells) %>% mutate(CD163_Total=CD163_notCD68+CD68_CD163,PDL1_CD163_Total=PDL1_CD163_notCD68+PDL1_CD68_CD163)
+
+save(MAC_IHC_wide,file="/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/TNBC_Mac_Data_051123.rdata")
+load("/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/TNBC/TNBC_Mac_Data_051123.rdata")
+MAC_IHC_wide_TNBC <- MAC_IHC_wide
+```
+Plot Data
+
+```{r fig.height=6, fig.width=7}
+Mac_IHC %>%
+  ggplot(aes(x=Marker_Group, y=PctCells,colour=Marker_Group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=45,size=11,hjust=1),strip.text=element_text(size=11)) +
+  ylab("Percent Positive Cells")
+  
+```
+
+COrrelate CD68 and CD163
+```{r fig.height=6, fig.width=6}
+Total_cell %>% left_join(CD163_notCD68,by="Sample") %>% left_join(CD68_notCD163, by="Sample") %>% left_join(CD68_CD163, by="Sample") %>% left_join(PDL1_CD68_notCD163,by="Sample") %>% left_join(PDL1_CD163_notCD68,by="Sample") %>% left_join(PDL1_CD163_CD68,by="Sample") %>% mutate(CD163_Total=CD163_notCD68+CD68_CD163,PDL1_CD163_Total=PDL1_CD163_notCD68+PDL1_CD68_CD163) %>% mutate(Pct_CD68_CD163=round(CD68_CD163*100/TotalCells,digits=1),Pct_CD163_notCD68=round(CD163_notCD68*100/TotalCells,digits=1)) %>%
+  ggplot(aes(x=Pct_CD68_CD163, y=Pct_CD163_notCD68)) +
+  geom_point() +
+  theme_bw() 
+```
+
+Merge CD163 counts
+```{r fig.height=5, fig.width=5}
+Total_cell %>% left_join(CD163_notCD68,by="Sample") %>% left_join(CD68_notCD163, by="Sample") %>% left_join(CD68_CD163, by="Sample") %>% left_join(PDL1_CD68_notCD163,by="Sample") %>% left_join(PDL1_CD163_notCD68,by="Sample") %>% left_join(PDL1_CD163_CD68,by="Sample") %>% mutate(CD163_Total=CD163_notCD68+CD68_CD163,PDL1_CD163_Total=PDL1_CD163_notCD68+PDL1_CD68_CD163) %>% select(Sample,TotalCells,CD163_Total,PDL1_CD163_Total) %>% gather(Marker_Group,CellNum,-Sample,-TotalCells) %>% mutate(PctCells=round(CellNum*100/TotalCells,digits=1)) %>%
+    ggplot(aes(x=Marker_Group, y=PctCells,colour=Marker_Group)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom() +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=45,size=11,hjust=1),strip.text=element_text(size=11)) +
+  ylab("Percent Positive Cells")
+
+Total_cell %>% left_join(CD163_notCD68,by="Sample") %>% left_join(CD68_notCD163, by="Sample") %>% left_join(CD68_CD163, by="Sample") %>% left_join(PDL1_CD68_notCD163,by="Sample") %>% left_join(PDL1_CD163_notCD68,by="Sample") %>% left_join(PDL1_CD163_CD68,by="Sample") %>% mutate(CD163_Total=CD163_notCD68+CD68_CD163,PDL1_CD163_Total=PDL1_CD163_notCD68+PDL1_CD68_CD163) %>% select(Sample,TotalCells,CD163_Total,PDL1_CD163_Total) %>% mutate(Pct_Total_CD163=round(CD163_Total*100/TotalCells,digits=1),Pct_Total_PDL1_CD163=round(PDL1_CD163_Total*100/TotalCells,digits=1)) %>%
+  ggplot(aes(x=Pct_Total_CD163, y=Pct_Total_PDL1_CD163)) +
+  geom_point() +
+  theme_bw() +
+  xlim(0,18) +
+  ylim(0,18)
+```
+
+Merge Meta data
+```{r}
+merge_meta <- lapply(list(TNBC_data,HNSC_data,CRC_data),function(x) {x %>% select(set_cols) } )
+merged_meta <- do.call(rbind,merge_meta)
+
+merged_meta %<>% mutate(Path_name=sedit(Path_name,"_","-"))
+save(merged_meta,file="/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_101422.rdata")
+load(file="/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_101422.rdata")
+```
+
+Add the SIRPa IHC data from Shiva
+
+```{r}
+SIRPa <- readxl::read_xlsx(path="/fcrbiouatappn01/export/home/mxu4/CD47/SIRPA/H2021-0215_IA_Summary_ALL_for Mengshu.xlsx",sheet="Sheet1",col_names=T) %>% select(ID,`SIRPa H-score in Non-tumor`,`SIRPa H-score in Tumor`,`SIRPa H-score (total)`) %>% dplyr::rename(SIRPa_Hscore_Stroma=`SIRPa H-score in Non-tumor`,SIRPa_Hscore_Tumor=`SIRPa H-score in Tumor`,SIRPa_Hscore_Total=`SIRPa H-score (total)`)
+```
+
+##################################################
+##############################################
+
+Merge FFPE all meta and IHC with SIRPa IHC
+101322
+
+############################################
+###################################################
+
+
+```{r}
+merged_meta_sirpa <- merged_meta %>% left_join(SIRPa,by=c("Path_name"="ID"))
+#merged_meta_sirpa %<>% select(1:2,30,3:29,31:33)
+save(merged_meta_sirpa,file="/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_SIRPa_101422.rdata")
+load("/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_SIRPa_101422.rdata")
+
+merged_meta_sirpa %>% write.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_SIRPa_101422.txt",sep="\t",quote=F,row.names = F)
+merged_meta_sirpa
+merged_meta_sirpa %>% filter(!is.na(CD47))
+```
+
+Plot Heatmap of all indications together
+
+```{r fig.height=7, fig.width=18}
+merged_meta_sirpa_mRNA <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% select(1,4,6:31) %>% arrange(Indication,Heatmap_order) %>% select(-Indication,-Heatmap_order,-CD47_Hscore,-SIRPa_Hscore_Stroma) %>% column_to_rownames("Path_name") %>% t
+merged_meta_sirpa_mRNA[1:5,1:5]
+merged_meta_sirpa_IHC <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% select(1,4,6:31) %>% arrange(Indication,Heatmap_order) %>% select(-Indication,-Heatmap_order) %>% select(Path_name,CD47_Hscore,SIRPa_Hscore_Stroma) %>% column_to_rownames("Path_name") %>% t
+
+merged_meta_sirpa_IHC[1:2,1:5]
+min
+
+pheatmap(merged_meta_sirpa_mRNA, cluster_cols = F, cluster_rows=F, breaks=myBreaks, color=myColor,cellwidth=10,cellheight=15)
+
+pheatmap(merged_meta_sirpa_IHC, cluster_cols = F, cluster_rows=F, breaks=myBreaks_IHC, color=myColor,cellwidth=10,cellheight=15)
+
+paletteLength <- 50
+myColor <- colorRampPalette(c("dodgerblue3","white", "red"))(paletteLength)
+myBreaks <- c(seq(min(merged_meta_sirpa_mRNA,na.rm=T), 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(max(merged_meta_sirpa_mRNA)/paletteLength, max(merged_meta_sirpa_mRNA), length.out=floor(paletteLength/2)))
+
+myBreaks_IHC <- c(seq(min(merged_meta_sirpa_IHC,na.rm=T), 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(max(merged_meta_sirpa_IHC,na.rm=T)/paletteLength, max(merged_meta_sirpa_IHC,na.rm=T), length.out=floor(paletteLength/2)))
+```
+
+
+
+Correlation between signatures and genes
+
+rcorr(x, y, type="pearson")
+x is a vector or a matrix
+y is optional, or a matrix
+I think a vector to matrix correlation requires the X to be the vector
+
+The returned object is a list of matrixes, r, n and p
+n is the input n for each comparison
+r are the correlations
+p are the p values of the correlations
+
+```{r fig.height=9, fig.width=9}
+library(corrplot)
+
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#HNSC 
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="HNSC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#TNBC
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="TNBC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#CRC
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="CRC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+
+magro_corr <- rcorr(corr_input,type="pearson")
+marker_order <- colnames(corr_input)
+
+corrplot(magro_corr$r, 
+         hc.order = TRUE, 
+         method='color',
+         diag= FALSE,
+         p.mat = magro_corr$p,
+         sig.level = 0.05,
+         #insig='blank',
+         type = "upper", 
+         col=colorRampPalette(c("dodgerblue","white","red"))(200),
+         cl.lim=c(-0.4,1))
+```
+
+Correlation Plots
+Pan-indication and within indication
+```{r fig.height=6.5, fig.width=8.5}
+my_r <- magro_corr$r[,c("CD47_Hscore","SIRPa_Hscore_Stroma","ZFP36")]
+my_p <- magro_corr$P[,c("CD47_Hscore","SIRPa_Hscore_Stroma","ZFP36")]
+
+my_r %<>% data.frame %>% rownames_to_column("Marker") %>% gather(Marker2,Correlation,-Marker)
+my_p %<>% data.frame %>% rownames_to_column("Marker") %>% gather(Marker2,p_val,-Marker)
+my_r %>% left_join(my_p,by=c("Marker","Marker2")) %>% mutate(Marker=factor(Marker,levels=rev(marker_order))) %>%
+  ggplot(aes(x=Marker,y=Correlation,fill=p_val < 0.05)) +
+  geom_chicklet() +
+  theme_bw() +
+  ylim(-0.5,1) +
+  geom_hline(yintercept=0) +
+  facet_wrap(~Marker2,ncol=3) +
+  scale_fill_manual(values=c("lightblue","red")) +
+  theme(axis.text.x=element_text(angle=-90,size=12,hjust=1,vjust=0.5),strip.text=element_text(size=11)) +
+  coord_flip()
+    
+```
+
+Put indications side by side
+```{r fig.height=8, fig.width=6}
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#HNSC 
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="HNSC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#TNBC
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="TNBC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#CRC
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="CRC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+
+magro_corr <- rcorr(corr_input,type="pearson")
+
+my_r <- magro_corr$r[,c("CD47_Hscore","SIRPa_Hscore_Stroma","ZFP36")]
+my_p <- magro_corr$P[,c("CD47_Hscore","SIRPa_Hscore_Stroma","ZFP36")]
+
+corr_results <- lapply(list("HNSC"="HNSC","TNBC"="TNBC","CRC"="CRC"), function(x) {
+  corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication==x) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+  magro_corr <- rcorr(corr_input,type="pearson")
+  return(magro_corr$r[,c("CD47_Hscore")]) #,"SIRPa_Hscore_Stroma","ZFP36","CD24"
+})
+
+corr_Pval <- lapply(list("HNSC"="HNSC","TNBC"="TNBC","CRC"="CRC"), function(x) {
+  corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication==x) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+  magro_corr <- rcorr(corr_input,type="pearson")
+  return(magro_corr$P[,c("CD47_Hscore")])
+})
+
+do.call(cbind,corr_results) %>% data.frame 
+
+corrplot(do.call(cbind,corr_results), 
+         method='color',
+         col=colorRampPalette(c("dodgerblue","white","red"))(200),
+         cl.lim=c(0,1))
+
+```
+
+Correlate CD47 mRNA to TAM phago
+```{r fig.height=4, fig.width=5}
+TNBC_data <- read_tsv("/fcrbiouatappn01/export/home/mxu4/CD47/TNBC_Seq/TNBC_Meta_data_and_Signatures_081722.txt")
+
+#CD47 mRNA to TAM_phage_Sig
+TNBC_Magro_markers %>% t %>% data.frame %>%
+  ggplot(aes(x=CD47,y=Tam_Phago_Sig)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  stat_cor(method="pearson")
+#CD47 IHC H score to TAM_Phago_sig
+TNBC_data %>%
+  ggplot(aes(x=CD47_Hscore,y=Tam_Phago_Sig)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  stat_cor(method="pearson")
+
+#CD47 mRNA to TAM_phage_Sig
+TNBC_Magro_markers %>% t %>% data.frame %>%
+  ggplot(aes(x=CD47,y=GZMB)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  stat_cor(method="pearson")
+#CD47 IHC H score to TAM_Phago_sig
+TNBC_data %>%
+  ggplot(aes(x=CD47_Hscore,y=GZMB)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  stat_cor(method="pearson")
+
+#ALL INDICATIONS
+#CD47 IHC H score to TAM_Phago_sig
+merged_meta_sirpa %>%
+ggplot(aes(x=CD47_Hscore,y=Tam_Phago_Sig,color=Indication)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  stat_cor(method="pearson")
+
+merged_meta_sirpa %>%
+ggplot(aes(x=CD47_Hscore,y=Tam_Phago_Sig)) +
+  geom_point(aes(color=Indication)) +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  stat_cor(method="pearson")
+
+merged_meta_sirpa %>%
+ggplot(aes(x=CD47_Hscore,y=SIRPa_Hscore_Total)) +
+  geom_point(aes(color=Indication)) +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  stat_cor(method="pearson")
+
+
+```
+#############################
+#########################
+
+CD47 IHC correlations with Indication IO molecular Groups
+SIRPa IHC correlations with Indication IO molecular Groups
+
+##########################
+#################################
+
+Correlate IHC SIRPa Hscore with my groupings for all indications
+```{r fig.height=3.6, fig.width=8}
+save(merged_meta_sirpa,file="/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_SIRPa_101422.rdata")
+
+load(file="/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_SIRPa_101422.rdata")
+
+merged_meta_sirpa
+#library(ggbeeswarm)
+library(ggpubr)
+merged_meta_sirpa %>% mutate(Sample_Group=if_else(is.na(Sample_Group),"Unclassified",Sample_Group)) %>% mutate(Sample_Group=factor(Sample_Group,levels=c("CMS1","CMS2","CMS3","CMS4","Mixed","Myeloid_rich","Hotter_tumor","Colder_tumor","Hot_Tumor","Medium_LowTLS","Cold_Tumor","Unclassified"))) %>%
+  ggplot(aes(x=Sample_Group,y=SIRPa_Hscore_Stroma)) +
+  geom_boxplot(aes(fill=Sample_Group),width=0.6) +
+  geom_quasirandom(aes(fill=Sample_Group),dodge.width=0.4) +
+  theme_bw() +
+  facet_wrap(~Indication, ncol=3, scales="free") +
+  #scale_fill_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #scale_colour_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  stat_compare_means(comparisons=list(c("CMS1","CMS2"),c("CMS3","CMS2"),c("Myeloid_rich","Colder_tumor"),c("Hot_Tumor","Cold_Tumor"),c("Medium_LowTLS","Cold_Tumor")),method="t.test",vjust=-0.2,na.rm = T) +
+  theme(axis.text.x=element_text(size=12,hjust=1,angle=35,vjust=1)) +
+  NoLegend()
+
+#CD47
+merged_meta_sirpa %>% mutate(Sample_Group=if_else(is.na(Sample_Group),"Unclassified",Sample_Group)) %>% mutate(Sample_Group=factor(Sample_Group,levels=c("CMS1","CMS2","CMS3","CMS4","Mixed","Myeloid_rich","Hotter_tumor","Colder_tumor","Hot_Tumor","Medium_LowTLS","Cold_Tumor","Unclassified"))) %>%
+  ggplot(aes(x=Sample_Group,y=CD47_Hscore)) +
+  geom_boxplot(aes(fill=Sample_Group),width=0.6) +
+  geom_quasirandom(aes(fill=Sample_Group),dodge.width=0.4) +
+  theme_bw() +
+  facet_wrap(~Indication, ncol=3, scales="free") +
+  #scale_fill_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #scale_colour_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  stat_compare_means(comparisons=list(c("CMS1","CMS2"),c("CMS3","CMS2"),c("Myeloid_rich","Colder_tumor"),c("Hot_Tumor","Cold_Tumor"),c("Medium_LowTLS","Cold_Tumor")),method="t.test",vjust=-0.2,na.rm = T) +
+  theme(axis.text.x=element_text(size=12,hjust=1,angle=35,vjust=1)) +
+  NoLegend()
+```
+T.test P value checks
+Wilcoxon Tests
+```{r fig.height=6, fig.width=4}
+SIRPa
+#TNBC
+merged_meta_sirpa %>% mutate(Sample_Group=if_else(is.na(Sample_Group),"Unclassified",Sample_Group)) %>% filter(Indication=="TNBC") %>%
+  ggplot(aes(x=Sample_Group,y=SIRPa_Hscore_Stroma)) +
+  geom_boxplot(aes(fill=Sample_Group),width=0.6) +
+  geom_quasirandom(aes(fill=Sample_Group),dodge.width=0.4) +
+  theme_bw() +
+  facet_wrap(~Indication, ncol=3, scales="free") +
+  #scale_fill_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #scale_colour_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  stat_compare_means(comparisons=list(c("Hot_Tumor","Cold_Tumor"),c("Medium_LowTLS","Cold_Tumor")),method="wilcox.test",vjust=-0.6,na.rm = T,label.y = 30) +
+  theme(axis.text.x=element_text(size=12,hjust=1,angle=45,vjust=1)) +
+  NoLegend()
+
+#CRC
+merged_meta_sirpa %>% mutate(Sample_Group=if_else(is.na(Sample_Group),"Unclassified",Sample_Group)) %>% filter(Indication=="CRC") %>%
+  ggplot(aes(x=Sample_Group,y=SIRPa_Hscore_Stroma)) +
+  geom_boxplot(aes(fill=Sample_Group),width=0.6) +
+  geom_quasirandom(aes(fill=Sample_Group),dodge.width=0.4) +
+  theme_bw() +
+  facet_wrap(~Indication, ncol=3, scales="free") +
+  #scale_fill_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #scale_colour_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  stat_compare_means(comparisons=list(c("CMS1","CMS2"),c("CMS3","CMS2")),method="wilcox.test",vjust=-0.6,na.rm = T,label.y = 28) +
+  theme(axis.text.x=element_text(size=12,hjust=1,angle=45,vjust=1)) +
+  NoLegend()
+
+CD47
+#TNBC
+merged_meta_sirpa %>% mutate(Sample_Group=if_else(is.na(Sample_Group),"Unclassified",Sample_Group)) %>% filter(Indication=="TNBC") %>%
+  ggplot(aes(x=Sample_Group,y=CD47_Hscore)) +
+  geom_boxplot(aes(fill=Sample_Group),width=0.6) +
+  geom_quasirandom(aes(fill=Sample_Group),dodge.width=0.4) +
+  theme_bw() +
+  facet_wrap(~Indication, ncol=3, scales="free") +
+  #scale_fill_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #scale_colour_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  stat_compare_means(comparisons=list(c("Hot_Tumor","Cold_Tumor"),c("Medium_LowTLS","Cold_Tumor")),method="wilcox.test",vjust=-0.6,na.rm = T,label.y = 20) +
+  theme(axis.text.x=element_text(size=12,hjust=1,angle=45,vjust=1)) +
+  NoLegend()
+
+#CRC
+merged_meta_sirpa %>% mutate(Sample_Group=if_else(is.na(Sample_Group),"Unclassified",Sample_Group)) %>% filter(Indication=="CRC") %>%
+  ggplot(aes(x=Sample_Group,y=CD47_Hscore)) +
+  geom_boxplot(aes(fill=Sample_Group),width=0.6) +
+  geom_quasirandom(aes(fill=Sample_Group),dodge.width=0.4) +
+  theme_bw() +
+  facet_wrap(~Indication, ncol=3, scales="free") +
+  #scale_fill_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #scale_colour_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  stat_compare_means(comparisons=list(c("CMS1","CMS2"),c("CMS3","CMS2")),method="wilcox.test",vjust=-0.6,na.rm = T,label.y = 10) +
+  theme(axis.text.x=element_text(size=12,hjust=1,angle=45,vjust=1)) +
+  NoLegend()
+
+#HNSC
+merged_meta_sirpa %>% mutate(Sample_Group=if_else(is.na(Sample_Group),"Unclassified",Sample_Group)) %>% filter(Indication=="HNSC") %>%
+  ggplot(aes(x=Sample_Group,y=CD47_Hscore)) +
+  geom_boxplot(aes(fill=Sample_Group),width=0.6) +
+  geom_quasirandom(aes(fill=Sample_Group),dodge.width=0.4) +
+  theme_bw() +
+  facet_wrap(~Indication, ncol=3, scales="free") +
+  #scale_fill_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #scale_colour_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  stat_compare_means(comparisons=list(c("Myeloid_rich","Colder_tumor"),c("Mixed","Colder_tumor")),method="wilcox.test",vjust=-0.6,na.rm = T) +
+  theme(axis.text.x=element_text(size=12,hjust=1,angle=45,vjust=1)) +
+  NoLegend()
+```
+
+Correlate SIRPa mRNA to Protein
+```{r fig.height=4, fig.width=11}
+merged_meta_sirpa %>% filter(SIRPA > -3) %>%
+  ggplot(aes(x=SIRPA,y=SIRPa_Hscore_Stroma)) +
+  geom_point() +
+  theme_bw() +
+  facet_wrap(~Indication, ncol=3, scales="free") +
+  theme(axis.text.x=element_text(size=12,hjust=1,vjust=1)) +
+  stat_cor() +
+  stat_smooth(method="lm") +
+  NoLegend()
+```
+
+
+#############################
+#########################
+
+mRNA CD47 correlations with other signatures
+
+##########################
+#################################
+
+
+Divide by CD47 mRNA expression bins
+```{r fig.height=6, fig.width=12}
+
+#using z-scores
+Magro_markers %>% t %>% data.frame %>% rownames_to_column("Sample") %>% mutate(CD47_bin=ntile(CD47,n=2)) %>% mutate(CD47mRNA_bin=if_else(CD47_bin==1,"CD47_mRNA_low","CD47_mRNA_high")) %>% select(-CD47_bin) %>% gather(Signature,Score,-Sample,-CD47mRNA_bin) %>%
+  ggplot(aes(x=CD47mRNA_bin,y=Score,color=CD47mRNA_bin)) +
+  facet_wrap(~Signature, ncol=7, scales="free_y") +
+  theme_bw() +
+  geom_boxplot(position=position_dodge(width=1)) +
+  geom_point(position=position_dodge(width=1)) +
+  theme(axis.text.x=element_text(angle=25,size=11,hjust=1),axis.text.y=element_text(size=11))  +
+  stat_compare_means(method="t.test",vjust=1) +
+  scale_color_manual(values=c("red","grey40"))
+
+#using log2TPMs
+TNBC_TPM_norm_log2 %>% tibble::rownames_to_column("Gene") %>% filter(Gene %in% Magro_genes) %>% column_to_rownames("Gene") %>% t %>% data.frame %>% rownames_to_column("Sample") %>% mutate(CD47_bin=ntile(CD47,n=2)) %>% mutate(CD47mRNA_bin=if_else(CD47_bin==1,"CD47_mRNA_low","CD47_mRNA_high")) %>% select(-CD47_bin) %>% gather(Signature,Log2_TPM,-Sample,-CD47mRNA_bin) %>%
+  ggplot(aes(x=CD47mRNA_bin,y=Log2_TPM,color=CD47mRNA_bin)) +
+  facet_wrap(~Signature, ncol=7, scales="free_y") +
+  theme_bw() +
+  geom_boxplot(position=position_dodge(width=1)) +
+  geom_point(position=position_dodge(width=1)) +
+  theme(axis.text.x=element_text(angle=25,size=11,hjust=1),axis.text.y=element_text(size=11))  +
+  stat_compare_means(method="t.test",vjust=1) +
+  scale_color_manual(values=c("red","grey50"))
+
+```
+
+Correlate CD47 mRNA to all other genes
+```{r}
+library(Hmisc)
+HNSC_TPM_norm_log2_m <- HNSC_TPM_norm_log2 %>% rownames_to_column("Gene") %>% filter(!grepl("MIR|SNOR|IGH|\\-",Gene)) %>% column_to_rownames("Gene") %>% as.matrix
+rv <- rowVars(HNSC_TPM_norm_log2_m)
+selected <- order(rv,decreasing=T)[seq_len(min(2000,length(rv)))]
+HNSC_TPM_var <- HNSC_TPM_norm_log2_m[selected,]
+HNSC_TPM_var_cd47 <- subset(HNSC_TPM_norm_log2_m, rownames(HNSC_TPM_norm_log2_m) %in% c("CD47",selected))
+HNSC_TPM_var <- rbind(HNSC_TPM_var,HNSC_TPM_var_cd47)
+CD47_corr <- rcorr(HNSC_TPM_var %>% t) 
+CD47_correlating_genes <- data.frame(CD47_corr= CD47_corr$r[,"CD47"], CD47_p=CD47_corr$P[,"CD47"]) %>% arrange(-CD47_corr)
+CD47_correlating_genes %>% filter(CD47_p <= 0.05)
+```
+
+Hikmat: Does CD163 correlate with Tam_Phago_Sig because it looks like they do on the heatmap
+```{r fig.height=2.5, fig.width=2.5}
+Magro_markers %>% t %>% data.frame %>% rownames_to_column("Sample") %>%
+  ggplot(aes(x=CD163,y=Tam_Phago_Sig_noCD163)) +
+  geom_point(size=2) +
+  theme_bw() +
+  scale_color_distiller(palette=1,direction=1) +
+  stat_cor(method="pearson") +
+  geom_smooth(method="lm")
+
+Magro_markers %>% t %>% data.frame %>% rownames_to_column("Sample") %>%
+  ggplot(aes(x=CD163,y=Tam_Phago_Sig)) +
+  geom_point(size=2) +
+  theme_bw() +
+  scale_color_distiller(palette=1,direction=1) +
+  stat_cor(method="pearson") +
+  geom_smooth(method="lm")
+```
+
+Correlate Hierarchical Cluster classification to markers and signatures
+```{r}
+# create Groups meta
+TNBC_meta <- data.frame("Sample"=file_names,"Sample_num"=seq(1:37)) %>% left_join(tnbc_groups,by="Sample_num") %>% select(-Sample_num) %>% column_to_rownames("Sample") %>% rownames_to_column("Sample")
+
+#using z-scores
+Magro_markers %>% t %>% data.frame %>% rownames_to_column("Sample") %>% left_join(TNBC_meta, by="Sample")
+
+Magro_markers
+```
+
+
+
+RUN GSEA analysis on the ranked list of genes
+```{r}
+CD47_corrs <- CD47_correlating_genes$CD47_corr 
+names(CD47_corrs) <- rownames(CD47_correlating_genes)
+```
+
+Fetch ontologies
+```{r}
+library(msigdbr)
+all_gene_sets <- msigdbr(species = "Homo sapiens") # The output of this function is a df  #, category=c("H","C2","C4","C6","C7","C8"))
+all_gene_sets_sub <- all_gene_sets %>% filter(gs_cat %in% c("H","C2","C5"))
+#all_gene_sets$gs_name %>% unique
+#msigdbr_collections()
+all_gene_sets[grepl("H",all_gene_sets$gs_cat),] # H C2, C5 are the most interesting
+msigdb_list <- split(x=all_gene_sets_sub$gene_symbol, f=all_gene_sets_sub$gs_name) # divide x into groups based on f, here dividing the gene names by ontology name (gs_name)
+# this gives a list of vectors
+```
+
+fgsea
+pathway= a list of gene ontologies
+stats= is a numeric list, with the numbers being the quantity being ranked from lowest to highest (log2FC), and names of numbers being the gene names, gene names match the gene names in "pathway"
+ #so here, the translation from rat to human was not necessary
+```{r fig.height=7, fig.width=16}
+library(fgsea)
+library(data.table) # for fwrite
+library(scales)
+
+CD47_corr_GSEA <- fgsea(pathways = msigdb_list, 
+                  stats = CD47_corrs,
+                  minSize=3,
+                  maxSize=500, #500 gives giant ontologies that aren't very specific
+                  nperm=100000)
+
+
+data.frame(CD47_corr_GSEA) %>% arrange(pval) %>% filter(padj <= 0.1) %>% select(pathway,NES,pval,padj,size,leadingEdge) %>% filter(grepl("GO|REACTOME|RICKMAN|KEGG|HALLMARK",pathway))
+  
+data.frame(CD47_corr_GSEA) %>% arrange(pval) %>% filter(padj <= 0.1, abs(NES) >= 2 )  %>% select(pathway,NES,pval,padj,size,leadingEdge) %>% filter(grepl("GO|REACTOME|RICKMAN|KEGG|HALLMARK",pathway)) %>% fwrite(file="/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/CD47_corr_gsea.txt",sep="\t",sep2=c("", " ", ""))
+
+data.frame(CD47_corr_GSEA) %>% arrange(pval) %>% filter(padj <= 0.1, abs(NES) >= 2 ) %>% select(pathway,NES,pval,padj,size,leadingEdge) %>% filter(grepl("GO|REACTOME|RICKMAN|KEGG|HALLMARK",pathway)) %>% mutate(Neglog10_Pval= -log10(pval)) %>% mutate(pathway=fct_reorder(pathway,Neglog10_Pval)) %>%
+  ggplot(aes(x=pathway, y=NES, fill=Neglog10_Pval)) + 
+  coord_flip() + 
+  theme_classic() +
+  geom_bar(stat="identity") 
+```
+
+IHC CD47 annotations
+
+```{r}
+ihc_data <- readxl::read_xlsx(path="/fcrbiouatappn01/export/home/mxu4/CD47/H2021-0215_IA_CD47_all_summary.xlsx", sheet="TNBC")
+
+ihc_data %<>% select(Sample_ID,ID,`%CD47 (total)`,`CD47 H-score (total)`,`% CD47 Area in Non-tumor`,`%CD47 Area in Tumor`,`CD47 H-score in Non-tumor`,`CD47 H-score in Tumor`, `Total Tissue Area in Tumor`,`TotalTissueArea`) %>% mutate(ID=sedit(ID,"Hu-P-","Hu_P_00")) %>% rename(Pct_CD47=`%CD47 (total)`,CD47_Hscore=`CD47 H-score (total)`,Pct_CD47_area_NonTumor=`% CD47 Area in Non-tumor`,Pct_CD47_area_Tumor=`%CD47 Area in Tumor`,CD47_Hscore_NonTumor=`CD47 H-score in Non-tumor`,CD47_Hscore_Tumor=`CD47 H-score in Tumor`) %>% mutate(Percent_Tumor=round(`Total Tissue Area in Tumor`/`TotalTissueArea`*100,digits=1) )
+
+#important data object here: mRNA, and IHC and Meta
+CD47_mRNA_IHC <- TNBC_TPM_norm_log2 %>% rownames_to_column("Gene") %>% filter(Gene=="CD47") %>% select(-Gene) %>% gather(Sample,CD47) %>% arrange(-CD47) %>% left_join(ihc_data, by=c("Sample"="Sample_ID"))
+
+ihc_tumor <- ihc_data %>% select(Sample_ID,Percent_Tumor) %>% filter(Sample_ID %in% tnbc_samples_ordered_colname) # the ihc data is missing some seq samples and the seq samples are missing some IHC data
+
+ihc_tumor_df <- ihc_data %>% select(ID, `Total Tissue Area in Tumor`,`TotalTissueArea`) %>% mutate(Percent_Tumor=round(`Total Tissue Area in Tumor`/`TotalTissueArea`*100,digits=1) ) %>% select(ID,Percent_Tumor) %>% arrange(-Percent_Tumor) 
+```
+
+TumorArea
+```{r}
+tnbc_tumor_area <- readxl::read_xlsx(path="/fcrbiouatappn01/export/home/mxu4/CD47/TumorArea.xlsx", sheet="TNBC")
+```
+
+
+
+
+
+
+
+Plot pHeatmap
+```{r fig.height=10, fig.width=13}
+
+Pct_tumor_m <- data.frame(Sample_ID=tnbc_samples_ordered_colname) %>% left_join(ihc_tumor,by="Sample_ID") %>% column_to_rownames("Sample_ID") %>% as.matrix
+pheatmap(Pct_tumor_m, cluster_cols = F, cluster_rows=F, color=myColor,cellwidth=15,cellheight=15,)
+
+rownames(annotation) <- colnames(test)
+
+paletteLength <- 50
+myColor <- colorRampPalette(c("white", "red"))(paletteLength)
+myBreaks <- c(seq(0, 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(100/paletteLength, 100, length.out=floor(paletteLength/2)))
+```
+
+
+
+Correlate
+
+Weak correlation between tumor CD47 and CD47 mRNA, anti-correaltion with nonTumor CD47
+```{r fig.height=5, fig.width=5}
+CD47_mRNA_IHC_m <- CD47_mRNA_IHC %>% select(-Sample,-ID,-`Total Tissue Area in Tumor`,-`TotalTissueArea`,-`Percent_Tumor`) %>% filter(!is.na(Pct_CD47_area_NonTumor)) %>% as.matrix
+cd47_cor <- cor(CD47_mRNA_IHC_m,method = "pearson")
+
+
+CD47_mRNA_IHC_m <- CD47_mRNA_IHC %>% select(-Sample,-ID) %>% filter(!is.na(Pct_CD47_area_NonTumor)) %>% as.matrix
+cd47_cor <- cor(CD47_mRNA_IHC_m,method = "pearson")
+
+library(corrplot)
+corrplot(cd47_cor, type = "upper", order = "hclust", 
+         tl.col = "black", tl.srt = 45,col=colorRampPalette(c("blue","white","red"))(200))
+```
+Plot 2D scatter correlations
+```{r fig.height=4, fig.width=7}
+#mRNA to IHC measures
+CD47_mRNA_IHC %>% select(-ID,-`Total Tissue Area in Tumor`,-`TotalTissueArea`,-`Percent_Tumor`) %>% gather(IHC,IHC_Metric,-Sample,-CD47) %>% rename(CD47_mRNA="CD47") %>%
+  ggplot(aes(x=CD47_mRNA,y=IHC_Metric)) +
+  geom_point(size=2) +
+  facet_wrap(~IHC, scales="free_y") +
+  theme_bw() +
+  scale_color_manual(values=c("dodgerblue","pink","yellow","grey","orange","green4","red")) +
+  stat_cor(method="pearson")
+
+```
+Study number Cohort Name ID Sample_ID Tissue
+
+Merge IHC data for all 3 indications
+```{r}
+ihc_tnbc <- readxl::read_xlsx(path="/fcrbiouatappn01/export/home/mxu4/CD47/H2021-0215_IA_CD47_all_summary.xlsx", sheet="TNBC") %>% select(`Study number`,Sample_ID, everything())
+ihc_hnsc <- readxl::read_xlsx(path="/fcrbiouatappn01/export/home/mxu4/CD47/H2021-0215_IA_CD47_all_summary.xlsx", sheet="HNSCC")
+ihc_crc <- readxl::read_xlsx(path="/fcrbiouatappn01/export/home/mxu4/CD47/H2021-0215_IA_CD47_all_summary.xlsx", sheet="CRC")
+
+ihc_3_indications <- rbind(ihc_tnbc,ihc_hnsc,ihc_crc)  %>% select(Cohort,Sample_ID,ID,`%CD47 (total)`,`CD47 H-score (total)`,`% CD47 Area in Non-tumor`,`%CD47 Area in Tumor`,`CD47 H-score in Non-tumor`,`CD47 H-score in Tumor`, `Total Tissue Area in Tumor`,`TotalTissueArea`) %>% rename(Pct_CD47=`%CD47 (total)`,CD47_Hscore=`CD47 H-score (total)`,Pct_CD47_area_NonTumor=`% CD47 Area in Non-tumor`,Pct_CD47_area_Tumor=`%CD47 Area in Tumor`,CD47_Hscore_NonTumor=`CD47 H-score in Non-tumor`,CD47_Hscore_Tumor=`CD47 H-score in Tumor`) %>% mutate(Percent_Tumor=round(`Total Tissue Area in Tumor`/`TotalTissueArea`*100,digits=1) ) %>% select(-`Total Tissue Area in Tumor`)
+```
+
+Merge expression data
+Merge all the Gene-level TPM files that are pre-normalization, pre-log2
+
+```{r}
+TNBC_TPM # 39146 x 37
+CRC_TPM # 39146 x 36
+HNSC_TPM_fil # 39146 x 36
+Cohort <- c(rep("HNSC",36),rep("TNBC",36),rep("CRC",37))
+Magro_TPM <- HNSC_TPM_fil %>% left_join(TNBC_TPM, by="Gene") %>% left_join(CRC_TPM, by="Gene")
+
+Magro_TPM_m <- Magro_TPM %>% column_to_rownames("Gene") %>% as.matrix
+
+#Batch normalize
+library(sva)
+Magro_TPM_batch <- ComBat(dat=Magro_TPM_m,batch=Cohort)
+
+Magro_TPM_batch_norm <- limma::normalizeBetweenArrays(Magro_TPM_batch) 
+
+mx_log2 <- function(i) {
+  require(dplyr)
+  num <- ifelse(i > 0,i,0.01)
+  result <- log2(num)
+}
+  
+Magro_TPM_norm_log2 <- Magro_TPM_norm %>% data.frame %>% mutate_all(mx_log2)
+Magro_TPM_norm_log2_m <- Magro_TPM_norm_log2 %>% as.matrix
+
+save(Magro_TPM,file="/fcrbiouatappn01/export/home/mxu4/CD47/Magro_TPM.rdata")
+save(Magro_TPM_norm_log2,file="/fcrbiouatappn01/export/home/mxu4/CD47/Magro_TPM_norm_log2.rdata")
+```
+
+Pull CD47 mRNA and merge with IHC data
+```{r}
+CD47_mRNA_IHC <- Magro_TPM_norm_log2["CD47",] %>% t %>% data.frame %>% rownames_to_column("Sample_ID") %>% left_join(ihc_3_indications,by="Sample_ID") %>% rename(CD47_mRNA="CD47")
+```
+
+
+Plot CD47 mRNA by IHC, colour by indication
+```{r fig.height=3, fig.width=4}
+CD47_mRNA_IHC %>% filter(!is.na(Cohort)) %>%
+  ggplot(aes(x=CD47_mRNA,y=CD47_Hscore,color=Cohort)) +
+  geom_point(size=2) +
+  #facet_wrap(~Cohort) +
+  theme_bw() +
+  scale_color_manual(values=c("green4","dodgerblue","orange","red")) +
+  stat_cor(method="pearson") +
+  geom_smooth(method="lm",se=F, linetype="dashed")
+
+CD47_Hscore_Tumor
+
+CD47_mRNA_IHC %>% filter(!is.na(Cohort)) %>%
+  ggplot(aes(x=CD47_mRNA,y=CD47_Hscore_Tumor,color=Cohort)) +
+  geom_point(size=2) +
+  #facet_wrap(~Cohort) +
+  theme_bw() +
+  scale_color_manual(values=c("green4","dodgerblue","orange","red")) +
+  stat_cor(method="pearson") +
+  geom_smooth(method="lm",se=F, linetype="dashed")
+```
+
+Box and whisker plots
+```{r fig.height=2, fig.width=2.5}
+CD47_mRNA_IHC %>% filter(!is.na(Cohort)) %>%
+  ggplot(aes(x=Cohort, y=CD47_mRNA,color=Cohort)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom(size=1) +
+  theme_bw() +
+  scale_color_manual(values=c("green4","dodgerblue","orange","red")) +
+  stat_compare_means(method="t.test",comparisons = list(c("CRC","HN"),c("HN","TNBC"),c("CRC","TNBC")),size=3)
+
+CD47_mRNA_IHC %>% filter(!is.na(Cohort)) %>%
+  ggplot(aes(x=Cohort, y=CD47_Hscore,color=Cohort)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom(size=1) +
+  theme_bw() +
+  scale_color_manual(values=c("green4","dodgerblue","orange","red")) +
+  stat_compare_means(method="t.test",comparisons = list(c("CRC","HN"),c("HN","TNBC"),c("CRC","TNBC")),size=3)
+
+CD47_mRNA_IHC %>% filter(!is.na(Cohort)) %>%
+  ggplot(aes(x=Cohort, y=Pct_CD47,color=Cohort)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom(size=1) +
+  theme_bw() +
+  scale_color_manual(values=c("green4","dodgerblue","orange","red")) +
+  stat_compare_means(method="t.test",comparisons = list(c("CRC","HN"),c("HN","TNBC"),c("CRC","TNBC")),size=3)
+```
+
+###############
+############
+
+Correlate CRC CMS caller data with MSIsensor2 calls for MSI high samples
+April 2023
+Xiaoyong ran the RNAseq samples for CRC with MSISensor2
+
+###########
+##################
+```{r}
+#load dataset meta data
+load("/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_SIRPa_101422.rdata")
+#load MSI data and sample key
+msi <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/CRC_Seq/MSISensor2_XF_CRC.txt",header=TRUE) %>% separate(Sample,into=c("Sample",NA), sep="_")
+wes_key <- read.table(file="/fcrbiouatappn01/export/home/mxu4/CD47/WES/CRC_WES_Meta.txt",header=TRUE) %>% select(Sample_ID,patient_id)
+msi %<>% left_join(wes_key,by=c("Sample"="Sample_ID"))
+msi %<>% mutate(Path_name=sedit(patient_id,"-00","-"))
+
+merged_meta_sirpa %>% filter(Indication=="CRC") %>% left_join(msi,by="Path_name") #48 samples
+```
+
+Plot
+```{r}
+crc_MSI <- merged_meta_sirpa %>% filter(Indication=="CRC") %>% left_join(msi,by="Path_name")
+crc_MSI %>%  
+  ggplot(aes(x=Sample_Group,y=MSI.score,colour=MSI)) +
+  geom_point() +
+  geom_hline(yintercept = 20,linetype="dashed") +
+  geom_text(data=subset(crc_MSI,MSI.score>=20),aes(label=Path_name),nudge_y=1.3) +
+  theme_bw()
+```
+
+
+Plot MTAP and CDKN2A from NSCLC cases
+```{r fig.height=6, fig.width=16}
+tumor_percent <- read.table(file="/fcrbiouatappn01/home/mxu4/CD47/NSCLC_Seq/luad_gilead_2020_clinical_data.tsv",header=TRUE,sep="\t") %>% select(Sample.ID,Total.Tumor.Percent)
+
+read.table(file="/fcrbiouatappn01/home/mxu4/PRMT5/NSCLC FFPE MTAP CDKN2A mRNA expression (RNA-seq, log2TPM).txt",header=TRUE) %>% left_join(tumor_percent,by=c("SAMPLE_ID"="Sample.ID"))  %>% gather(Gene,Log2_TPM,-STUDY_ID,-SAMPLE_ID)  %>% mutate(SAMPLE_ID=fct_reorder(SAMPLE_ID,Log2_TPM)) %>%
+  ggplot(aes(x=SAMPLE_ID,y=Log2_TPM,fill=Gene)) +
+  geom_bar(stat="identity") +
+  facet_wrap(~Gene, ncol=1,scales="free_y") +
+  theme_bw() +
+  #geom_hline(yintercept=2,linetype="dashed",colour="red") +
+  #geom_hline(yintercept=3,linetype="dashed",colour="blue") +
+  theme(axis.text.x=element_text(size=10,hjust=1,angle=90,vjust=0.5)) 
+# Export data for spread sheet
+read.table(file="/fcrbiouatappn01/home/mxu4/PRMT5/NSCLC FFPE MTAP CDKN2A mRNA expression (RNA-seq, log2TPM).txt",header=TRUE) %>% left_join(tumor_percent,by=c("SAMPLE_ID"="Sample.ID")) %>%
+  write.table(file="/fcrbiouatappn01/home/mxu4/CD47/NSCLC_Seq/NSCLC_LUAD_MTAP_CDKN2A_TUMOR_PURITY.txt",quote=F,row.names=F)
+```
+Filtered samples
+```{r fig.height=6, fig.width=10}
+read.table(file="/fcrbiouatappn01/home/mxu4/PRMT5/NSCLC FFPE MTAP CDKN2A mRNA expression (RNA-seq, log2TPM).txt",header=TRUE) %>% filter(CDKN2A <= 2, MTAP <= 3) %>% left_join(tumor_percent,by=c("SAMPLE_ID"="Sample.ID"))  %>% gather(Gene,Log2_TPM,-STUDY_ID,-SAMPLE_ID)  %>% mutate(SAMPLE_ID=fct_reorder(SAMPLE_ID,Log2_TPM)) %>%
+  ggplot(aes(x=SAMPLE_ID,y=Log2_TPM,fill=Gene)) +
+  geom_bar(stat="identity") +
+  facet_wrap(~Gene, ncol=1,scales="free_y") +
+  theme_bw() +
+  #geom_hline(yintercept=2,linetype="dashed",colour="red") +
+  #geom_hline(yintercept=3,linetype="dashed",colour="blue") +
+  theme(axis.text.x=element_text(size=10,hjust=1,angle=90,vjust=0.5))   
+```
+
+Merge IHC with Meta Data
+```{r fig.height=4, fig.width=5.5}
+load("/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_SIRPa_101422.rdata") # MAC_IHC_wide
+
+
+data_Mac_ihc_hnsc <- merged_meta_sirpa %>% left_join(MAC_IHC_wide,by=c("Path_name"="Sample")) %>% filter(Indication=="HNSC")
+#CD163 mRNA
+data_Mac_ihc_hnsc %>%
+  ggplot(aes(x=CD163_Total,y=CD163)) +
+  geom_point(aes(colour=Sample_Group)) +
+  theme_bw() +
+  ylab("CD163 mRNA Signal") +
+  xlab("CD163p IHC (Percent positive)") +
+  stat_cor(method="pearson") +
+  geom_smooth(method="lm") 
+
+#CD68
+data_Mac_ihc_hnsc %>%
+  ggplot(aes(x=CD68_CD163,y=CD68)) +
+  geom_point(aes(colour=Sample_Group)) +
+  theme_bw() +
+  ylab("CD68 mRNA Signal") +
+  xlab("CD68+ CD163+ IHC (Percent positive)") +
+  stat_cor(method="pearson") +
+  geom_smooth(method="lm") 
+
+#CD163 MAC signature
+data_Mac_ihc_hnsc %>%
+  ggplot(aes(x=CD163_Total,y=Tam_Phago_Sig)) +
+  geom_point(aes(colour=Sample_Group)) +
+  theme_bw() +
+  ylab("TAM Phagocytic Signature") +
+  xlab("CD163p IHC (Percent positive)") +
+  stat_cor(method="pearson") +
+  geom_smooth(method="lm") 
+
+#TIS_18
+data_Mac_ihc_hnsc %>%
+  ggplot(aes(x=CD163_Total,y=TIS_18)) +
+  geom_point(aes(colour=Sample_Group)) +
+  theme_bw() +
+  ylab("TIS_18 Signature") +
+  xlab("CD163p IHC (Percent positive)") +
+  stat_cor(method="pearson") +
+  geom_smooth(method="lm") 
+```
+Correlations
+```{r fig.height=9, fig.width=9}
+library(corrplot)
+mac_corr <- data_Mac_ihc_hnsc %>% filter(!is.na(CD47)) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+
+mac_corr <- rcorr(mac_corr,type="pearson")
+mac_corr_sub <- mac_corr$r %>% data.frame %>% rownames_to_column("Marker") %>% filter(grepl("CD163|CD68",Marker),!grepl("Phago",Marker)) %>% column_to_rownames("Marker") %>% as.matrix
+
+corrplot(mac_corr_sub, 
+         method='color',
+         col=colorRampPalette(c("dodgerblue","white","red"))(200),
+         cl.lim=c(0,1))
+```
+Box Plots
+```{r fig.height=3.5, fig.width=4}
+hist(data_Mac_ihc_hnsc$CD47_Hscore)
+#Split CD47 at a score of 20, median
+data_Mac_ihc_hnsc %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2),CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% filter(!is.na(CD47_IHC_bin)) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=CD163_notCD68, colour=CD47_IHC_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+data_Mac_ihc_hnsc %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2),CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% filter(!is.na(CD47_IHC_bin)) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=CD68_CD163, colour=CD47_IHC_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+# TAM phago
+data_Mac_ihc_hnsc %>% mutate(Tam_Phago_Sig_bin=ntile(Tam_Phago_Sig,2),Tam_Phago_Sig_bin=if_else(Tam_Phago_Sig_bin==1,"Low","High")) %>% filter(!is.na(Tam_Phago_Sig_bin)) %>%
+  ggplot(aes(x=Tam_Phago_Sig_bin,y=CD163_notCD68, colour=Tam_Phago_Sig_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+data_Mac_ihc_hnsc %>% mutate(Tam_Phago_Sig_bin=ntile(Tam_Phago_Sig,2),Tam_Phago_Sig_bin=if_else(Tam_Phago_Sig_bin==1,"Low","High")) %>% filter(!is.na(Tam_Phago_Sig_bin)) %>%
+  ggplot(aes(x=Tam_Phago_Sig_bin,y=CD68_CD163, colour=Tam_Phago_Sig_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+
+# TIS18
+data_Mac_ihc_hnsc %>% mutate(TIS_18_bin=ntile(TIS_18,2),TIS_18_bin=if_else(TIS_18_bin==1,"Low","High")) %>% filter(!is.na(TIS_18_bin)) %>%
+  ggplot(aes(x=TIS_18_bin,y=CD163_notCD68, colour=TIS_18_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+#PDL1_CD163_notCD68
+data_Mac_ihc_hnsc %>% mutate(TIS_18_bin=ntile(TIS_18,2),TIS_18_bin=if_else(TIS_18_bin==1,"Low","High")) %>% filter(!is.na(TIS_18_bin)) %>%
+  ggplot(aes(x=TIS_18_bin,y=PDL1_CD163_notCD68, colour=TIS_18_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+data_Mac_ihc_hnsc %>% mutate(TIS_18_bin=ntile(TIS_18,2),TIS_18_bin=if_else(TIS_18_bin==1,"Low","High")) %>% filter(!is.na(TIS_18_bin)) %>%
+  ggplot(aes(x=TIS_18_bin,y=CD68_CD163, colour=TIS_18_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+
+# TLS
+data_Mac_ihc_hnsc %>% mutate(TLS_Sig_bin=ntile(TLS_Sig,2),TLS_Sig_bin=if_else(TLS_Sig_bin==1,"Low","High")) %>% filter(!is.na(TLS_Sig_bin)) %>%
+  ggplot(aes(x=TLS_Sig_bin,y=CD163_notCD68, colour=TLS_Sig_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+data_Mac_ihc_hnsc %>% mutate(TLS_Sig_bin=ntile(TLS_Sig,2),TLS_Sig_bin=if_else(TLS_Sig_bin==1,"Low","High")) %>% filter(!is.na(TLS_Sig_bin)) %>%
+  ggplot(aes(x=TLS_Sig_bin,y=CD68_CD163, colour=TLS_Sig_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+
+# SIRPA
+#CD163
+data_Mac_ihc_hnsc %>% mutate(SIRPa_Hscore_Total_bin=ntile(SIRPa_Hscore_Total,2),SIRPa_Hscore_Total_bin=if_else(SIRPa_Hscore_Total_bin==1,"Low","High")) %>% filter(!is.na(SIRPa_Hscore_Total_bin)) %>%
+  ggplot(aes(x=SIRPa_Hscore_Total_bin,y=CD163_notCD68, colour=SIRPa_Hscore_Total_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+#CD68 CD163
+data_Mac_ihc_hnsc %>% mutate(SIRPa_Hscore_Total_bin=ntile(SIRPa_Hscore_Total,2),SIRPa_Hscore_Total_bin=if_else(SIRPa_Hscore_Total_bin==1,"Low","High")) %>% filter(!is.na(SIRPa_Hscore_Total_bin)) %>%
+  ggplot(aes(x=SIRPa_Hscore_Total_bin,y=CD68_CD163, colour=SIRPa_Hscore_Total_bin)) +
+  geom_boxplot(width=0.4) +
+  geom_quasirandom(width=0.2) +
+  stat_compare_means(method="t.test") +
+  theme_bw()
+```
+
+Put indications side by side
+```{r fig.height=8, fig.width=6}
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#HNSC 
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="HNSC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#TNBC
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="TNBC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+#CRC
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication=="CRC") %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+
+magro_corr <- rcorr(corr_input,type="pearson")
+
+my_r <- magro_corr$r[,c("CD47_Hscore","SIRPa_Hscore_Stroma","ZFP36")]
+my_p <- magro_corr$P[,c("CD47_Hscore","SIRPa_Hscore_Stroma","ZFP36")]
+
+corr_results <- lapply(list("HNSC"="HNSC","TNBC"="TNBC","CRC"="CRC"), function(x) {
+  corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication==x) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+  magro_corr <- rcorr(corr_input,type="pearson")
+  return(magro_corr$r[,c("CD47_Hscore")]) #,"SIRPa_Hscore_Stroma","ZFP36","CD24"
+})
+
+corr_Pval <- lapply(list("HNSC"="HNSC","TNBC"="TNBC","CRC"="CRC"), function(x) {
+  corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47),Indication==x) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+  magro_corr <- rcorr(corr_input,type="pearson")
+  return(magro_corr$P[,c("CD47_Hscore")])
+})
+
+do.call(cbind,corr_results) %>% data.frame 
+
+corrplot(do.call(cbind,corr_results), 
+         method='color',
+         col=colorRampPalette(c("dodgerblue","white","red"))(200),
+         cl.lim=c(0,1))
+
+```
+
+Plot CD163 IHC signal by Sample Grouping
+```{r fig.height=4, fig.width=4}
+CD163_notCD68
+CD68_notCD163
+CD68_CD163
+data_Mac_ihc_hnsc %>%
+ggplot(aes(x=Sample_Group,y=CD163_notCD68)) +
+  geom_boxplot(aes(fill=Sample_Group),width=0.6) +
+  geom_quasirandom(aes(fill=Sample_Group),dodge.width=0.4) +
+  theme_bw() +
+  #scale_fill_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #scale_colour_manual(values=c("red","pink","lightblue","palegreen3","grey50")) +
+  #stat_compare_means(comparisons=list(c("Colder_tumor","Myeloid_rich"),c("Hotter_tumor","Myeloid_rich")),method="wilcox.test",vjust=-0.6,na.rm = T) +
+  theme(axis.text.x=element_text(size=12,hjust=1,angle=45,vjust=1)) +
+  NoLegend() 
+```
+
+
+
+Plot Heatmap of HNSC with Mac IHC data
+
+```{r fig.height=7, fig.width=18}
+merged_meta_sirpa_mRNA <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% select(1,4,6:31) %>% arrange(Indication,Heatmap_order) %>% select(-Indication,-Heatmap_order,-CD47_Hscore,-SIRPa_Hscore_Stroma) %>% column_to_rownames("Path_name") %>% t
+merged_meta_sirpa_mRNA[1:5,1:5]
+merged_meta_sirpa_IHC <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% select(1,4,6:31) %>% arrange(Indication,Heatmap_order) %>% select(-Indication,-Heatmap_order) %>% select(Path_name,CD47_Hscore,SIRPa_Hscore_Stroma) %>% column_to_rownames("Path_name") %>% t
+
+merged_meta_sirpa_IHC[1:2,1:5]
+min
+
+pheatmap(merged_meta_sirpa_mRNA, cluster_cols = F, cluster_rows=F, breaks=myBreaks, color=myColor,cellwidth=10,cellheight=15)
+
+pheatmap(merged_meta_sirpa_IHC, cluster_cols = F, cluster_rows=F, breaks=myBreaks_IHC, color=myColor,cellwidth=10,cellheight=15)
+
+paletteLength <- 50
+myColor <- colorRampPalette(c("dodgerblue3","white", "red"))(paletteLength)
+myBreaks <- c(seq(min(merged_meta_sirpa_mRNA,na.rm=T), 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(max(merged_meta_sirpa_mRNA)/paletteLength, max(merged_meta_sirpa_mRNA), length.out=floor(paletteLength/2)))
+
+myBreaks_IHC <- c(seq(min(merged_meta_sirpa_IHC,na.rm=T), 0, length.out=ceiling(paletteLength/2) + 1), 
+       
+```
+
+June 18 2023
+
+```{r fig.height=7, fig.width=7}
+load("/fcrbiouatappn01/export/home/mxu4/CD47/Merge_FFPE_Meta_Signatures_TPM_SIRPa_101422.rdata")
+corr_input <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% as.matrix
+
+corr_input_filtered <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(CD47_Hscore,Pct_TumorArea,Tam_Phago_Sig,LAG3,TIS_18,TLS_Sig,SIRPa_Hscore_Total) %>% rename(SIRPa_Hscore="SIRPa_Hscore_Total") %>% as.matrix
+
+corr_input_filtered2 <- merged_meta_sirpa %>% filter(!is.na(CD47)) %>% column_to_rownames("Path_name") %>% select_if(is.numeric) %>% select(-CD47,-CD24,-SIRPA,-Mast_Sig,-ITGAE,-ZFP36,-SIRPa_Hscore_Stroma,-SIRPa_Hscore_Tumor,-Heatmap_order) %>% rename(SIRPa_Hscore="SIRPa_Hscore_Total", TAM_Phago_Sig="Tam_Phago_Sig",TAM_Phago_Sig_noCD163="Tam_Phago_Sig_noCD163") %>% as.matrix
+
+magro_corr <- rcorr(corr_input_filtered2,type="pearson")
+
+library(corrplot)
+corrplot(magro_corr$r, 
+         hc.order = TRUE, 
+         method='color',
+         diag= F,
+         p.mat = magro_corr$p,
+         sig.level = 0.05,
+         #insig='blank',
+         type = "upper", 
+         col=colorRampPalette(c("dodgerblue","white","red"))(200),
+         cl.lim=c(-0.4,1))
+```
+Correlation Plots: Bar sideways
+Pan-indication and within indication
+```{r fig.height=4.5, fig.width=5}
+my_r <- magro_corr$r[,c("CD47_Hscore")]
+my_p <- magro_corr$P[,c("CD47_Hscore")]
+
+my_r %<>% data.frame %>% rownames_to_column("Marker") %>% rename(Correlation=".")
+my_p %<>% data.frame %>% rownames_to_column("Marker") %>% rename(p_val=".")
+
+marker_order <- colnames(corr_input_filtered2)
+
+my_r %>% left_join(my_p,by=c("Marker")) %>% mutate(Marker=factor(Marker,levels=rev(marker_order)))  %>% filter(!is.na(p_val)) %>%
+  ggplot(aes(x=Marker,y=Correlation,fill=p_val <= 0.05)) +
+  geom_chicklet() +
+  theme_bw() +
+  ylim(-0.2,0.75) +
+  geom_hline(yintercept=0) +
+  #scale_fill_gradient(low="red",high="pink") +
+  scale_fill_manual(values=c("grey40","red")) +
+  theme(axis.text.x=element_text(angle=-90,size=10,hjust=1,vjust=0.5),strip.text=element_text(size=10)) +
+  coord_flip()
+```
+SPlit by CD47_Hscore in to ntiles
+```{r fig.height=8, fig.width=14}
+merged_meta_sirpa
+#HNSC
+merged_meta_sirpa %>% filter(Indication=="TNBC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=Score, colour=CD47_IHC_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,label = "p.signif",symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40"))
+
+#,label = "p.signif"
+
+#Split by CD47 Percent Positive
+merged_meta_sirpa %>% filter(Indication=="HNSC") %>% mutate(CD47_Pct_bin=ntile(Pct_CD47,2)) %>% filter(!is.na(CD47_Pct_bin)) %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% mutate(CD47_Pct_bin=if_else(CD47_Pct_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_Pct_bin) %>%
+  ggplot(aes(x=CD47_Pct_bin,y=Score, colour=CD47_Pct_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,label = "p.signif",symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40"))
+
+```
+
+```{r fig.height=11, fig.width=10}
+
+merged_meta_sirpa %>% filter(Indication=="TNBC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select(CD47_IHC_bin,CD3E,CD47,CD68,CD8A,ITGAE,Pct_TumorArea,SIRPa_Hscore_Stroma,SIRPa_Hscore_Tumor,SIRPa_Hscore_Total,TIGIT) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=Score, colour=CD47_IHC_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40")) +
+  NoLegend()
+
+merged_meta_sirpa %>% filter(Indication=="CRC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select(
+Path_name,CD47_IHC_bin,CD274,CD47,GZMB,Pct_TumorArea,SIRPa_Hscore_Stroma,SIRPa_Hscore_Tumor,SIRPa_Hscore_Total,TIS_18,TLS_Sig,Tam_Phago_Sig,Tam_Phago_Sig_noCD163,LAG3) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=Score, colour=CD47_IHC_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40")) +
+  NoLegend()
+
+# export CRC for Nick
+merged_meta_sirpa %>% filter(Indication=="CRC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select(
+Path_name,Indication,CD47_IHC_bin,CD274,CD47,GZMB,Pct_TumorArea,SIRPa_Hscore_Stroma,SIRPa_Hscore_Tumor,SIRPa_Hscore_Total,TIS_18,TLS_Sig,Tam_Phago_Sig,Tam_Phago_Sig_noCD163,LAG3) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% write.table("/fcrbiouatappn01/home/mxu4/CD47/CRC_CD47_Bin_data.txt",quote=F,row.names = F,sep="\t")
+# export HNSC for Nick
+merged_meta_sirpa %>% filter(Indication=="HNSC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select(
+Path_name,Indication,CD47_IHC_bin,CD274,CD47,GZMB,Pct_TumorArea,SIRPa_Hscore_Stroma,SIRPa_Hscore_Tumor,SIRPa_Hscore_Total,TIS_18,TLS_Sig,Tam_Phago_Sig,Tam_Phago_Sig_noCD163,LAG3) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% write.table("/fcrbiouatappn01/home/mxu4/CD47/HNSC_CD47_Bin_data.txt",quote=F,row.names = F,sep="\t")
+# export TNBC for Nick July 17, 2023, eventhough it's not significant
+merged_meta_sirpa %>% filter(Indication=="TNBC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select(
+Path_name,Indication,CD47_IHC_bin,CD274,CD47,GZMB,Pct_TumorArea,SIRPa_Hscore_Stroma,SIRPa_Hscore_Tumor,SIRPa_Hscore_Total,TIS_18,TLS_Sig,Tam_Phago_Sig,Tam_Phago_Sig_noCD163,LAG3) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% write.table("/fcrbiouatappn01/home/mxu4/CD47/TNBC_CD47_Bin_data.txt",quote=F,row.names = F,sep="\t")
+
+
+merged_meta_sirpa %>% filter(Indication=="HNSC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select(CD47_IHC_bin,CD274,CD47, Tam_Phago_Sig,Tam_Phago_Sig_noCD163,LAG3) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=Score, colour=CD47_IHC_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40")) +
+  ylim(-2,2.5) +
+  NoLegend()
+```
+Plot Mac IHC data
+ # Object from line 131
+```{r fig.height=7, fig.width=9}
+merged_meta_sirpa %>% select(Path_name,CD47_Hscore,Indication) %>% left_join(MAC_IHC_wide_HN_TNBC,by=c("Path_name"="Sample")) %>% filter(Indication=="TNBC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select_if(is.numeric) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=Score, colour=CD47_IHC_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40"))
+
+merged_meta_sirpa %>% select(Path_name,CD47_Hscore,Indication) %>% left_join(MAC_IHC_wide_HN_TNBC,by=c("Path_name"="Sample")) %>% filter(Indication=="HNSC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select_if(is.numeric) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=Score, colour=CD47_IHC_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40"))
+
+merged_meta_sirpa %>% select(Path_name,CD47_Hscore,Indication) %>% left_join(CRC_MAC_IHC_wide,by=c("Path_name"="Sample")) %>% filter(Indication=="CRC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select_if(is.numeric) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>%
+  ggplot(aes(x=CD47_IHC_bin,y=Score, colour=CD47_IHC_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40"))
+
+```
+
+```{r fig.height=2.5, fig.width=3}
+merged_meta_sirpa %>% select(Path_name,CD47_Hscore,Indication) %>% left_join(MAC_IHC_wide_HN_TNBC,by=c("Path_name"="Sample")) %>% filter(Indication=="TNBC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select_if(is.numeric) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>% filter(Signature=="PDL1_CD163_notCD68") %>%
+  ggplot(aes(x=CD47_IHC_bin,y=Score, colour=CD47_IHC_bin)) + 
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.3) +
+  facet_wrap(~Signature, scales="free_y") +
+  theme_bw() + 
+  stat_compare_means(method="wilcox",vjust=1,symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))) +
+  scale_color_manual(values=c("red","grey40")) +
+  NoLegend()
+```
+Produce just the Wilcoxon tests without the plots 
+```{r fig.height=7, fig.width=6}
+res <- df %>% group_by(id1) %>% 
+       do(w = wilcox.test(x~id2, data=., paired=FALSE)) %>% 
+       summarise(id1, Wilcox = w$p.value)
+data.frame(x=abs(rnorm(50)),id1=rep(1:5,10), id2=rep(1:2,25))
+
+my_sigs <- merged_meta_sirpa %>% left_join(MAC_IHC_wide_HN_TNBC,by=c("Path_name"="Sample")) %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% colnames
+
+my_sigs <- merged_meta_sirpa %>% left_join(CRC_MAC_IHC_wide,by=c("Path_name"="Sample")) %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% select_if(is.numeric) %>% select(-Heatmap_order) %>% colnames
+
+#HNSC
+merged_meta_sirpa %>% left_join(HN_MAC_IHC_wide,by=c("Path_name"="Sample")) %>% filter(Indication=="HNSC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>% filter(Signature %in% my_sigs) %>% mutate(Score=as.numeric(Score)) %>% group_by(Signature) %>% do(w = wilcox.test(Score~CD47_IHC_bin, data=., paired=FALSE)) %>% 
+       summarise(Signature, Wilcox = w$p.value) %>% mutate(Neg_Log10_Pval=-log10(Wilcox)) %>%
+  ggplot(aes(x=Signature,y=Neg_Log10_Pval, fill=Wilcox < 0.05)) +
+  geom_bar(stat="identity") +
+  theme_bw() +
+  scale_fill_manual(values=c("grey40","red")) +
+  coord_flip()
+
+
+#TNBC
+merged_meta_sirpa %>% left_join(TN_MAC_IHC_wide,by=c("Path_name"="Sample")) %>% filter(Indication=="TNBC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>% filter(Signature %in% my_sigs) %>% mutate(Score=as.numeric(Score)) %>% group_by(Signature) %>% do(w = wilcox.test(Score~CD47_IHC_bin, data=., paired=FALSE)) %>% 
+       summarise(Signature, Wilcox = w$p.value) %>% mutate(Neg_Log10_Pval=-log10(Wilcox)) %>%
+  ggplot(aes(x=Signature,y=Neg_Log10_Pval, fill=Wilcox < 0.05)) +
+  geom_bar(stat="identity") +
+  theme_bw() +
+  scale_fill_manual(values=c("grey40","red")) +
+  coord_flip()
+
+#CRC
+merged_meta_sirpa %>% left_join(CRC_MAC_IHC_wide,by=c("Path_name"="Sample")) %>% filter(Indication=="CRC") %>% mutate(CD47_IHC_bin=ntile(CD47_Hscore,2)) %>% filter(!is.na(CD47_IHC_bin)) %>% mutate(CD47_IHC_bin=if_else(CD47_IHC_bin==1,"Low","High")) %>% gather(Signature,Score,-CD47_IHC_bin) %>% filter(Signature %in% my_sigs) %>% mutate(Score=as.numeric(Score)) %>% group_by(Signature) %>% do(w = wilcox.test(Score~CD47_IHC_bin, data=., paired=FALSE)) %>% 
+       summarise(Signature, Wilcox = w$p.value) %>% mutate(Neg_Log10_Pval=-log10(Wilcox)) %>%
+  ggplot(aes(x=Signature,y=Neg_Log10_Pval, fill=Wilcox < 0.05)) +
+  geom_bar(stat="identity") +
+  theme_bw() +
+  scale_fill_manual(values=c("grey40","red")) +
+  coord_flip()
+```
+
+Add HPV information back in to the HNSC data
+```{r}
+# read in data that has the HPV prediction score to assess that too
+HNSC <- read.table("/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/HNSC_Meta_data_and_Signatures_Kelli.txt",header=T, sep="\t")
+
+hpv <- read.table("/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/HPV_HNSC_results.txt",header=T, sep="\t") %>% mutate(Barcode=sedit(Barcode,"-","_"))
+
+HNSC %<>% left_join(hpv,by=c("Path_name"="Barcode")) %>% mutate(HPV_status=(if_else(is.na(Result),"Negative",Result)))
+```
+
+Plot
+```{r fig.height=4, fig.width=4}
+HNSC %>% filter(HPV_status %in% c("Positive","Negative")) %>% mutate(HPV_status=factor(HPV_status,levels=c("Positive","Negative"))) %>%
+  ggplot(aes(x=HPV_status,y=HPV_Sig, colour=HPV_status)) +
+  geom_boxplot(width=0.5) +
+  geom_quasirandom(width=0.2) +
+  theme_bw() +
+  ylab("Bioinformatic HPV Signature Score") +
+  xlab("Molecular HPV Test Result")
+```
+
+Plot the CISH HPV status as a strip
+```{r fig.height=0.8, fig.width=14}
+HNSC %>% select(Order_in_Heatmap,HPV_status) %>% mutate(HPV_status=fct_reorder(HPV_status,Order_in_Heatmap)) %>%
+  ggplot(aes(x=Order_in_Heatmap,y=1, fill=HPV_status)) +
+  geom_tile(aes(),colour = "grey70",size=0.3) +
+  scale_fill_manual(values=c("red1","dodgerblue2","grey70","grey70")) +
+  NoLegend()
+
+hpv_status_m <- HNSC %>% select(Order_in_Heatmap,HPV_status) %>% arrange(Order_in_Heatmap) %>% tibble::column_to_rownames("Order_in_Heatmap") %>% as.matrix
+
+pheatmap(hpv_status_m)
+HNSC %>% select(Path_name,HPV_status)
+```
+
+Export data for Meghna, HNSCC
+
+Add TIGIT, TROP2/TACSTD2, CCR8
+
+Load mRNA data
+```{r}
+#load(file="/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/HNSC_TPM_fil.rdata")
+load("/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/HNSC_TPM_z.rdata")
+
+more_markers <- HNSC_z %>% filter(Gene %in% c("TACSTD2","CCR8")) %>% tibble::column_to_rownames("Gene") %>% t %>% data.frame %>% tibble::rownames_to_column("Sample_name")
+```
+Load PD_L1 IHC data
+```{r}
+read.table("/fcrbiouatappn01/export/home/mxu4/CD47/Mac_IHC/HNSC/H2022-00163_HN_cells_Opal520_PDL1.tsv",sep="\t",header=T)
+MAC_IHC_wide
+```
+
+
+```{r}
+HNSCC_082523 <- merged_meta_sirpa %>% filter(Indication=="HNSC") %>% left_join(HNSC %>% mutate(Path_name=sedit(Path_name,"_","-")) %>% mutate(Path_name=sedit(Path_name,"-00","-")) %>% select(Path_name,HPV_status) ,by="Path_name") %>% left_join(more_markers, by="Sample_name") %>% left_join(MAC_IHC_wide, by=c("Path_name"="Sample")) 
+
+HNSCC_082523 %>% write.table("/fcrbiouatappn01/export/home/mxu4/CD47/HNSC_Seq/HNSC_FFPE_Meta_IHC.txt",sep="\t",quote=F,row.names = F)
+
+data.frame(colnames(HNSCC_082523)  )
+```
+Plot all metrics against HPV status
+
+```{r fig.height=10, fig.width=16}
+HNSCC_082523 %>% filter(Indication=="HNSC",HPV_status %nin% c("QC_Fail","Removed")) %>% select(4,5,6,10:47) %>% gather(Marker, Signal,-HPV_status) %>%
+  ggplot(aes(x=HPV_status,y=Signal,colour=HPV_status)) +
+  geom_boxplot() +
+  geom_quasirandom() +
+  facet_wrap(~Marker,scales="free_y") +
+  stat_compare_means(method="wilcox",vjust=0.6,na.rm = T) +
+  scale_color_manual(values=c("grey40","red")) +
+  theme_bw()
+```
+
+
+```{r fig.height=3, fig.width=9}
+HNSCC_082523 %>% filter(Indication=="HNSC",HPV_status %nin% c("QC_Fail","Removed")) %>% select(4,5,15,39,36) %>% gather(Marker, Signal,-HPV_status) %>%
+  ggplot(aes(x=HPV_status,y=Signal,colour=HPV_status)) +
+  geom_boxplot() +
+  geom_quasirandom() +
+  facet_wrap(~Marker,scales="free_y",ncol=4) +
+  stat_compare_means(method="wilcox",vjust=0.6,na.rm = T) +
+  scale_color_manual(values=c("grey40","red")) +
+  theme_bw()
+```

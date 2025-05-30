@@ -1,0 +1,34 @@
+---
+title: "TCGA_4_CIBERSORT"
+author: "Mengshu"
+date: "3/18/2019"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(magrittr)
+```
+
+```{r}
+load("mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized.rdata")
+load("mergedGeneData.TCGA_TARGET_NPTumors.sampleInfo.edata")
+xcell <- read.table("xCell_TCGA_RSEM.txt", sep="\t", header=FALSE)
+rownames(xcell)
+xcell[,1]
+#mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized[1:10,500:510]
+#dim(mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized)
+#44201 11348
+#tail(colnames(mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized))
+#str(mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized) #matrix?
+merge <- data.frame(mergedGeneData.TCGA_TARGET_NPTumors.quantileNormalized)
+tcga <- dplyr::select(merge, contains("TCGA"))
+#head(rownames(tcga))
+tcga %<>% tibble::rownames_to_column()
+#44201 genes 10536 samples
+tcga[1:10,1:10]
+#colnames(tcga)[1] <- "!genes"
+#spot check normalization
+boxplot(log(tcga[,290:300]))
+write.table(tcga[,1:1000], file="TCGA_QuantNorm_CIBERSORT_log2_1.txt", quote =FALSE, row.names=FALSE, sep="\t")
+write.table(tcga[,1:5000], file="TCGA_QuantNorm_CIBERSORT_log2_1.txt", quote =FALSE, row.names=FALSE, sep="\t")
+```

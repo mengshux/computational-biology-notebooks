@@ -1,0 +1,34 @@
+---
+title: "Hematology_979_60mpk.Rmd"
+author: "MX"
+date: "5/20/2021"
+output: html_document
+---
+
+Compound 979 tolerability study in mice
+n=5 on Vehicle and 979 60 mpk (QD/BID?) for 1 month
+Assay was run at CRO and a single measurement was made 1 month-post dosing regimen start
+
+Load
+```{r}
+
+library(data.table)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+library(ggbeeswarm)
+```
+
+```{r fig.height=6, fig.width=10}
+read.table("clipboard", sep="\t", header = T) # this doesn't work
+data <- read.table(stdin(), sep="\t", header = T) # this works if you run in the console directly
+data %>% gather(Cell,Signal,-Number,-Group) %>% mutate(Cell=if_else(grepl("\\.",Cell), paste0(Cell,"Percent"),Cell)) %>% ggplot(aes(x=Group,y=Signal,colour=Group)) + facet_wrap(~Cell, scale="free_y") + geom_boxplot() + geom_beeswarm(groupOnX = T, cex=8) + theme_bw()
+```
+Stats
+```{r fig.height=9, fig.width=12}
+library(ggpubr)
+data %>% gather(Cell,Signal,-Number,-Group) %>% mutate(Cell=if_else(grepl("\\.",Cell), paste0(Cell,"Percent"),Cell)) %>% ggplot(aes(x=Group,y=Signal,colour=Group)) + facet_wrap(~Cell, scale="free_y",strip.position = "top") + geom_boxplot() + geom_beeswarm(groupOnX = T, cex=8) + theme_bw() + stat_compare_means(method="t.test",paired=F,label= "p.format") + theme(strip.text=element_text(size=12)) + scale_y_continuous(expand = expansion(mult = c(0.15, 0.15))) # aes(label = ..p.format..),
+```
+

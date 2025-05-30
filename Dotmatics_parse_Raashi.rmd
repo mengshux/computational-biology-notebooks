@@ -1,0 +1,33 @@
+---
+title: "DotmaticsParse_Raashi.Rmd"
+author: "MX"
+date: "6/4/2021"
+output: html_document
+---
+
+Load packages
+```{r}
+library(dplyr)
+library(tidyverse)
+library(stringr)
+source("/Volumes/Picard/FLX/Files_from_Gene/R_functions.r")
+library(readxl)
+```
+
+
+
+```{r}
+dot <-  readxl::read_xlsx("/Volumes/Picard/FLX/HPK1/Dotmatics2Vortex/HPK1 controls.xlsx", sheet="browser export", skip=0,trim_ws = TRUE) %>% dselect(-STRUCTURE, -'ID...3') %>% rename(ID= 'ID...2') %>% dfilter(!is.na('Protocol Name'))
+```
+Pivot wider
+
+```{r}
+
+dot %>% dselect(-Username,-Validated,-'Created Date',-'Result Numeric') %>% table %>% write.table(file="HPK1_controls_summary.txt", sep="\t",quote=F, row.names = T)
+numbers <- dot %>% dselect(-Username,-Validated,-'Created Date') %>% mutate(Run=c(1:908)) %>% pivot_wider(names_from=c('Protocol Name'), values_from = c('Result Numeric') ) %>% dselect(-'NA')
+meta  <- dot %>% dselect(Username,Validated,'Created Date','Protocol Name') %>% mutate(Run=c(1:908))
+
+meta %>% left_join(numbers,by="Run") %>% arrange(`Protocol Name`) %>% dselect(Run, everything()) %>% write.table(file="HPK1_controls_wide.txt", sep="\t",quote=F, row.names = F, na="")
+dot_wide[is.na(dot_wide)] <- 0
+```
+

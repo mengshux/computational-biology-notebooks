@@ -1,0 +1,18 @@
+---
+title: "Untitled"
+author: "MX"
+date: "4/29/2020"
+output: html_document
+---
+```{r}
+gMDSC_sig_n <- c("DYSF", "C5AR1", "TREM1", "CSF3R", "CXCR2", "PLBD1", "CMTM2", "CXCR1", "TNFRSF10C","F13A1","VNN3", "PADI4", "GLT1D1", "CLEC4D", "LCN2", "BPI", "CAMP", "PGLYRP1", "CEACAM1", "S100P", "CYP4F3", "CLC", "S100A12", "MCEMP1", "BST1", "ARG1", "CDA", "ADGRG3", "CSF2RB", "IL1R2", "IL1RAP", "KCNJ15", "LIMK2", "DOCK5", "STX3", "FFAR2", "MEFV", "SIRPB1")
+# removed DEFA1, LTF, BBPB, CD24 because these are neutophil markers
+
+mMDSC_sig <- c("CSF3R", "SLC6A6", "TREM1", "CLEC4E", "PLBD1")
+
+
+#Mouse
+gMDSC_sig_m <- c("Dysf", "C5ar1", "Trem1", "Csf3r", "Cxcr2", "Plbd1", "Cmtm2", "Cxcr1", "Tnfrsf10c", "F13a1", "Vnn3", "Padi4", "Glt1d1", "Clec4d", "Lcn2", "Bpi", "Camp", "Pglyrp1", "Ceacam1", "S100p", "Cyp4f3", "Clc", "S100a12", "Mcemp1", "Bst1", "Arg1", "Cda", "Adgrg3", "Csf2rb", "Il1r2", "Il1rap", "Kcnj15", "Limk2", "Dock5", "Stx3", "Ffar2", "Mefv", "Sirpb1")
+mMDSC_sig_m <- c("Csf3r", "Slc6a6", "Trem1", "Clec4e", "Plbd1")
+```
+

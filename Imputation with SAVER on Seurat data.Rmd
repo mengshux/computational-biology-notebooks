@@ -1,0 +1,50 @@
+---
+title: "SAVER imputation with Seurat data"
+author: "Mengshu"
+date: "11/15/2018"
+output: html_document
+---
+
+#####################
+#####################
+  
+    IMPUTE data using SAVER: This rescues signals in medium to expressing genes, like HPK1 and GCN2
+
+#####################
+#####################
+```{r}
+install.packages("SAVER")
+library(SAVER)
+packageVersion("SAVER")
+```
+Use the data.table export of raw data from a Seurat object, or any matrix file can be used.
+
+#Run time for SAVER for this dataset was 2h
+$estimate stores the predicted UMIs
+$se stores the standard error of the estimates
+$info stores the run information
+to only generate $estimate, run with command estimates.only=TRUE
+```{r}
+#export raw seq reads table from Seurat object pbmc
+pbmc_matrix <- as.matrix(pbmc@raw.data)
+# dim(pbmc_matrix)
+#[1] 18408  8492
+pbmc.saver <- saver(pbmc_matrix,ncores=12) #the mac desktop has 12 (virtual) cores
+save(pbmc.saver,file="8kPBMC_saver.rdata")
+#pbmc_matrix[1:10,1:10]
+#pbmc.saver$estimate[1:10,1:10]
+```
+
+Put SAVER estimates back into the Seurat pbmc object: This has to be put into the @raw.data slot, and then run NormalizeData(), and the imputed, normalized data will be saved in pbmc@data. FeaturePlot plots from the @data slot
+```{r}
+#pbmc_mito@data <- pbmc.saver$estimate
+pbmc@raw.data <- pbmc.saver$estimate
+# Run NormalizeData
+#Load imputed data
+rm(pbmc)
+pbmc<- readRDS("10X_8K_PBMC_Seurat_Imputed_original.rds")
+FeaturePlot(object=pbmc, features.plot = c("MAP4K1"), cols.use=c("grey90","blue"), no.legend=FALSE) 
+VlnPlot(object=pbmc, features.plot = c("EIF2AK4"),x.lab.rot=TRUE, point.size.use = 0.3) 
+VlnPlot(object=pbmc, features.plot = c("MAP4K1"),x.lab.rot=TRUE, point.size.use = 0.3) 
+ggsave("HPK1_Imputed.jpg", width= 10, height=8, dpi=600, plot= last_plot(), units = "in")
+```

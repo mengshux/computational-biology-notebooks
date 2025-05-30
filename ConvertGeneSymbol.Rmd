@@ -1,0 +1,36 @@
+---
+title: "Gene name converter"
+author: "Mengshu"
+date: "11/7/2018"
+output: html_document
+---
+
+Install MyGene
+http://bioconductor.org/packages/release/bioc/html/mygene.html
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("mygene", version = "3.8")
+
+library(mygene)
+```
+
+Convert HUGO symbol to ENSEMBL or ENSEMBL to HUGO symbol
+
+```{r}
+gene_list <- c('CCDC83',  'MAST3', 'RPL11', 'ZDHHC20',  'LUC7L3',  'SNORD49A',  'CTSH', 'ACOT8')
+ensmbl_list <- c("ENSG00000150676","ENSG00000099308","ENSG00000142676","ENSG00000180776","ENSG00000108848","ENSG00000277370","ENSG00000103811","ENSG00000101473")
+
+glist <- queryMany(gene_list, scopes="symbol", fields=c("ensembl.gene"), return.as=c("DataFrame"), species="human")
+print(glist)
+
+e_glist <- queryMany(ensmbl_list, scopes="ensembl.gene", fields=c("symbol"), return.as=c("DataFrame"), species="human")
+print(e_glist)
+```
+Available conversion terms:
+run command with "fields" set to "all" to see all possible fields:
+```{r}
+queryMany("CD8A", scopes="symbol", fields="all", return.as=c("DataFrame"), species="human")
+```
+
